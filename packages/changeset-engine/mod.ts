@@ -1,0 +1,5 @@
+export { gateChangesCell, type GateReport, GateRequest } from './src/gate-changes.ts'
+export { newIntentCell, NewIntentInput } from './src/new-intent.ts'
+export { fakeChangeEvidencePort } from './src/testing/FakeChangeEvidencePort.ts'
+export { fakeChangesetStore } from './src/testing/FakeChangesetStore.ts'
+export { fakeWorkspaceStore } from './src/testing/FakeWorkspaceStore.ts'

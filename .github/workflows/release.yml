@@ -1,0 +1,165 @@
+# The publish phase is never triggered by the release PR merging: closing it
+# destroys refs/pull/<n>/merge and cancels the queued run with zero jobs, so a
+# release triggered that way can vanish silently. Phase comes from repository
+# state instead, which also lets a half-finished release resume on the next push.
+name: Release
+
+on:
+  workflow_call:
+    inputs:
+      tools-ref:
+        description: ref of systemfsoftware/pnpm-release-management to run
+        required: false
+        type: string
+        default: main
+      artifacts-dir:
+        description: directory the captured cycle is written to
+        required: false
+        type: string
+        default: .release
+      node-version:
+        description: node version used for pnpm
+        required: false
+        type: string
+        default: "24"
+      deno-version:
+        description: deno version used for the tools
+        required: false
+        type: string
+        default: v2.x
+
+permissions: {}
+
+jobs:
+  plan:
+    name: plan · derive phase
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      phase: ${{ steps.plan.outputs.phase }}
+      pending_intents: ${{ steps.plan.outputs.pending_intents }}
+      this_cycle: ${{ steps.plan.outputs.this_cycle }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: systemfsoftware/pnpm-release-management
+          ref: ${{ inputs.tools-ref }}
+          path: .release-tools
+
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2
+        with:
+          deno-version: ${{ inputs.deno-version }}
+
+      - id: plan
+        name: Decide release phase from repository state
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./release-tools/apps/github-release-management/main.ts plan --output "$GITHUB_OUTPUT"
+
+  version:
+    name: version · open release PR
+    needs: plan
+    if: needs.plan.outputs.phase == 'version'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: systemfsoftware/pnpm-release-management
+          ref: ${{ inputs.tools-ref }}
+          path: .release-tools
+
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2
+        with:
+          deno-version: ${{ inputs.deno-version }}
+
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Bump every version surface and consume the intents
+        run: ./release-tools/apps/version-management/main.ts bump
+
+      - name: Open or update the release PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./release-tools/apps/github-release-management/main.ts pr
+
+  publish:
+    name: publish · oidc · tag · release
+    needs: plan
+    if: needs.plan.outputs.phase == 'publish'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: true
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: systemfsoftware/pnpm-release-management
+          ref: ${{ inputs.tools-ref }}
+          path: .release-tools
+
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2
+        with:
+          deno-version: ${{ inputs.deno-version }}
+
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          registry-url: https://registry.npmjs.org
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Capture this cycle
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "${{ inputs.artifacts-dir }}"
+          ./release-tools/apps/github-release-management/main.ts tag \
+            --output "${{ inputs.artifacts-dir }}/captured.json"
+
+      - name: Build
+        run: pnpm build --if-present
+
+      - name: Publish unpublished versions via OIDC
+        run: |
+          ./release-tools/apps/npm-publish-management/main.ts publish \
+            --captured "${{ inputs.artifacts-dir }}/captured.json" --unpublished
+
+      - name: Tag released versions
+        run: |
+          ./release-tools/apps/github-release-management/main.ts tag \
+            --captured "${{ inputs.artifacts-dir }}/captured.json"
+
+      - name: GitHub Releases from the authored changelogs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          ./release-tools/apps/github-release-management/main.ts release \
+            --captured "${{ inputs.artifacts-dir }}/captured.json"
+
+      - name: Report registry state
+        run: ./release-tools/apps/npm-publish-management/main.ts status

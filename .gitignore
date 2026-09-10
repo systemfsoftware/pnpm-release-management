@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+reports/
+*.tsbuildinfo
+
+.mcp.json
+.direnv/
+result
+
+e2e/.artifacts/

@@ -1,0 +1,60 @@
+name: Changeset Check
+
+on:
+  workflow_call:
+    inputs:
+      tools-ref:
+        description: ref of systemfsoftware/pnpm-release-management to run
+        required: false
+        type: string
+        default: main
+      base-sha:
+        description: commit the pull request is compared against
+        required: false
+        type: string
+        default: ""
+      deno-version:
+        description: deno version used for the tools
+        required: false
+        type: string
+        default: v2.x
+      node-version:
+        description: node version used for pnpm
+        required: false
+        type: string
+        default: "24"
+
+permissions: {}
+
+jobs:
+  require-intent:
+    name: a publishable-package change needs an intent
+    if: github.head_ref != 'changeset-release/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: systemfsoftware/pnpm-release-management
+          ref: ${{ inputs.tools-ref }}
+          path: .release-tools
+
+      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2
+        with:
+          deno-version: ${{ inputs.deno-version }}
+
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Require an intent for every publishable-package change
+        run: |
+          ./release-tools/apps/changeset-management/main.ts check \
+            "${{ inputs.base-sha || github.event.pull_request.base.sha }}"

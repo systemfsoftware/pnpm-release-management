@@ -1,0 +1,43 @@
+version: "0.5"
+
+processes:
+  verdaccio:
+    command: verdaccio --config /e2e/verdaccio.yaml --listen 0.0.0.0:4873
+    readiness_probe:
+      http_get:
+        host: 127.0.0.1
+        port: 4873
+        path: /-/ping
+      initial_delay_seconds: 2
+      period_seconds: 2
+      timeout_seconds: 2
+      failure_threshold: 60
+
+  github:
+    command: emulate start --service github --port 4000
+    readiness_probe:
+      http_get:
+        host: 127.0.0.1
+        port: 4000
+        path: /meta
+      initial_delay_seconds: 2
+      period_seconds: 2
+      timeout_seconds: 2
+      failure_threshold: 60
+
+  front:
+    command: deno run --allow-read=/e2e --allow-net /e2e/tls-proxy.ts
+    depends_on:
+      verdaccio:
+        condition: process_healthy
+      github:
+        condition: process_healthy
+    readiness_probe:
+      exec:
+        command: >-
+          curl -fsS https://api.github.com/meta > /dev/null &&
+          curl -fsS https://registry.npmjs.org/-/ping > /dev/null
+      initial_delay_seconds: 1
+      period_seconds: 2
+      timeout_seconds: 3
+      failure_threshold: 60

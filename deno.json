@@ -1,0 +1,48 @@
+{
+  "workspace": ["./packages/*"],
+  "imports": {
+    "@effect/platform-deno": "npm:@effect/platform-deno@4.0.0-rc.112",
+    "@std/assert": "jsr:@std/assert@^1.0.0",
+    "@std/async": "jsr:@std/async@^1.0.0",
+    "@std/front-matter": "jsr:@std/front-matter@^1.0.0",
+    "@std/fs": "jsr:@std/fs@^1.0.0",
+    "@std/jsonc": "jsr:@std/jsonc@^1.0.0",
+    "@std/path": "jsr:@std/path@^1.0.0",
+    "@std/semver": "jsr:@std/semver@^1.0.0",
+    "@std/testing": "jsr:@std/testing@^1.0.0",
+    "@std/toml": "jsr:@std/toml@^1.0.0",
+    "@systemfsoftware/effect-cell-types": "npm:@systemfsoftware/effect-cell-types@6.0.1",
+    "effect": "npm:effect@4.0.0-rc.112",
+    "effect/Effect": "npm:effect@4.0.0-rc.112/Effect",
+    "effect/Layer": "npm:effect@4.0.0-rc.112/Layer",
+    "effect/Match": "npm:effect@4.0.0-rc.112/Match",
+    "effect/Option": "npm:effect@4.0.0-rc.112/Option",
+    "effect/Result": "npm:effect@4.0.0-rc.112/Result",
+    "effect/Schema": "npm:effect@4.0.0-rc.112/Schema",
+    "effect/unstable/cli": "npm:effect@4.0.0-rc.112/unstable/cli",
+    "fast-check": "npm:fast-check@^4.0.0",
+    "octokit": "npm:octokit@5.0.5",
+    "testcontainers": "npm:testcontainers@12.1.0"
+  },
+  "tasks": {
+    "check": "deno check 'apps/**/*.ts' 'packages/**/*.ts' 'e2e/*.ts'",
+    "lint": "deno lint",
+    "lint:core": "sh -c 'deno run --allow-all npm:oxlint apps/*/*.schema.ts apps/*/*.workflow.ts packages/*/src/*.schema.ts packages/*/src/*.workflow.ts --config oxlint.config.ts'",
+    "lint:tsgo": "deno run --allow-all npm:@effect/tsgo diagnostics --project tsconfig.json",
+    "format": "./bin/dprint fmt",
+    "format:check": "./bin/dprint check",
+    "test": "deno test --allow-all",
+    "e2e": "deno test --allow-all e2e/",
+    "precommit": "deno run --allow-read --allow-write --allow-run=git,deno,dprint --allow-env apps/git-hooks/main.ts pre-commit",
+    "hooks:install": "git config core.hooksPath .githooks",
+    "ci": "deno task format:check && deno task lint && deno task check && deno task lint:core && deno task lint:tsgo && deno task test"
+  },
+  "lint": {
+    "rules": {
+      "exclude": ["no-slow-types"]
+    }
+  },
+  "test": {
+    "include": ["apps/", "packages/", "e2e/"]
+  }
+}
