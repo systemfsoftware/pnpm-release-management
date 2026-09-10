@@ -25,6 +25,9 @@ jobs:
         with:
           deno-version: v2.x
 
+      - name: Install the npm graph
+        run: deno install --frozen-lockfile
+
       - uses: cachix/install-nix-action@v31
 
       - name: dprint from the flake

@@ -25,6 +25,9 @@ jobs:
         with:
           deno-version: v2.x
 
+      - name: Install the npm graph
+        run: deno install --frozen-lockfile
+
       - uses: docker/setup-buildx-action@v3
 
       - name: Cache the e2e image
