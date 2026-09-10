@@ -107,15 +107,15 @@ export const pullRequest = Workflow.make(
     BodyFileUnreadable | HeadRefInvalid
   > =>
     Match.value(classify(command)).pipe(
-      Match.tag('PRBodyBad', (bad) => Result.fail(new BodyFileUnreadable({ path: bad.path }))),
-      Match.tag('PRHeadBad', (bad) => Result.fail(new HeadRefInvalid({ branch: bad.branch }))),
-      Match.tag('PRDirtyFound', (dirty) => Result.succeed(new PullRequestReleaseRefreshed({ number: dirty.number }))),
-      Match.tag('PRDirtyAbsent', () => Result.succeed(new PullRequestReleaseVacant({ branch: command.branch }))),
+      Match.tag('PRBodyBad', (bad) => Result.fail(BodyFileUnreadable.make({ path: bad.path }))),
+      Match.tag('PRHeadBad', (bad) => Result.fail(HeadRefInvalid.make({ branch: bad.branch }))),
+      Match.tag('PRDirtyFound', (dirty) => Result.succeed(PullRequestReleaseRefreshed.make({ number: dirty.number }))),
+      Match.tag('PRDirtyAbsent', () => Result.succeed(PullRequestReleaseVacant.make({ branch: command.branch }))),
       Match.tag('PRCleanFound', (clean) =>
         Result.succeed(
-          new PullRequestReleaseClosed({ number: clean.number, branch: command.branch }),
+          PullRequestReleaseClosed.make({ number: clean.number, branch: command.branch }),
         )),
-      Match.tag('PRCleanAbsent', () => Result.succeed(new PullRequestReleaseVacant({ branch: command.branch }))),
+      Match.tag('PRCleanAbsent', () => Result.succeed(PullRequestReleaseVacant.make({ branch: command.branch }))),
       Match.exhaustive,
     ),
 )

@@ -92,18 +92,18 @@ export const tagPackages = Workflow.make(
     CapturedListMalformed | ExcludedListMalformed
   > =>
     Match.value(classify(command)).pipe(
-      Match.tag('TagCapturedBad', (bad) => Result.fail(new CapturedListMalformed({ path: bad.path }))),
-      Match.tag('TagExcludedBad', (bad) => Result.fail(new ExcludedListMalformed({ path: bad.path }))),
+      Match.tag('TagCapturedBad', (bad) => Result.fail(CapturedListMalformed.make({ path: bad.path }))),
+      Match.tag('TagExcludedBad', (bad) => Result.fail(ExcludedListMalformed.make({ path: bad.path }))),
       Match.tag(
         'TagPreviewing',
-        () => Result.succeed(new TagPackagesPreviewed({ tags: tagsOf(command.cycle) })),
+        () => Result.succeed(TagPackagesPreviewed.make({ tags: tagsOf(command.cycle) })),
       ),
-      Match.tag('TagVacant', () => Result.succeed(new TagPackagesUpToDate({ tags: 0 }))),
+      Match.tag('TagVacant', () => Result.succeed(TagPackagesUpToDate.make({ tags: 0 }))),
       Match.tag(
         'TagReady',
         () =>
           Result.succeed(
-            new TagPackagesPushed({
+            TagPackagesPushed.make({
               tags: nonEmpty(tagsOf(command.cycle)),
             }),
           ),

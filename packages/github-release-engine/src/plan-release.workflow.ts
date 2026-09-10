@@ -53,7 +53,7 @@ const nonEmpty = <A>(list: ReadonlyArray<A>): [A, ...Array<A>] => {
 }
 
 const deferredPackagesUnknown = (packages: ReadonlyArray<PackageName>) =>
-  new DeferredPackagesUnknown({ packages: nonEmpty(packages) })
+  DeferredPackagesUnknown.make({ packages: nonEmpty(packages) })
 
 export class PlanCommand extends S.TaggedClass<PlanCommand>()('PlanCommand', {
   pending: Count,
@@ -87,20 +87,20 @@ export const planRelease = Workflow.make(
       Match.tag('PlanDeferredBad', (bad) => Result.fail(deferredPackagesUnknown(bad.unknown))),
       Match.tag(
         'PlanOwed',
-        () => Result.succeed(new PlanReleasePublish({ cycle: [...command.cycle] })),
+        () => Result.succeed(PlanReleasePublish.make({ cycle: [...command.cycle] })),
       ),
       Match.tag(
         'PlanPending',
         () =>
           Result.succeed(
-            new PlanReleaseVersion({ pending: command.pending, cycle: [...command.cycle] }),
+            PlanReleaseVersion.make({ pending: command.pending, cycle: [...command.cycle] }),
           ),
       ),
       Match.tag(
         'PlanClear',
         () =>
           Result.succeed(
-            new PlanReleaseSettled({ pending: command.pending, cycleCount: command.cycle.length }),
+            PlanReleaseSettled.make({ pending: command.pending, cycleCount: command.cycle.length }),
           ),
       ),
       Match.exhaustive,

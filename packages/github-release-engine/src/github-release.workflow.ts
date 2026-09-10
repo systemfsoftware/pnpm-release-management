@@ -146,7 +146,7 @@ export const githubRelease = Workflow.make(
     Match.value(classify(command)).pipe(
       Match.tag('ReleaseBodyAbsent', (bad) =>
         Result.fail(
-          new ChangelogFileMissing({
+          ChangelogFileMissing.make({
             package: bad.entry.name,
             version: bad.entry.version,
             changelog: bad.entry.changelog,
@@ -154,28 +154,28 @@ export const githubRelease = Workflow.make(
         )),
       Match.tag('ReleaseBodyBlank', (bad) =>
         Result.fail(
-          new ChangelogFileEmpty({
+          ChangelogFileEmpty.make({
             package: bad.entry.name,
             version: bad.entry.version,
             changelog: bad.entry.changelog,
           }),
         )),
-      Match.tag('ReleaseVacant', () => Result.succeed(new GithubReleasesEmpty({ cycle: 0 }))),
+      Match.tag('ReleaseVacant', () => Result.succeed(GithubReleasesEmpty.make({ cycle: 0 }))),
       Match.tag(
         'ReleaseAsserting',
-        () => Result.succeed(new GithubReleasesAsserted({ count: command.items.length })),
+        () => Result.succeed(GithubReleasesAsserted.make({ count: command.items.length })),
       ),
       Match.tag('ReleasePreviewing', () => {
         const tags = nonEmpty(tagsOf(command.items))
-        return Result.succeed(new GithubReleasesPreviewed({ tags }))
+        return Result.succeed(GithubReleasesPreviewed.make({ tags }))
       }),
       Match.tag('ReleaseTaken', (taken) => {
         const tags = nonEmpty([...taken.tags])
-        return Result.succeed(new GithubReleasesSkipped({ tags }))
+        return Result.succeed(GithubReleasesSkipped.make({ tags }))
       }),
       Match.tag('ReleaseReady', (ready) => {
         const tags = nonEmpty([...ready.tags])
-        return Result.succeed(new GithubReleasesPreviewed({ tags }))
+        return Result.succeed(GithubReleasesPreviewed.make({ tags }))
       }),
       Match.exhaustive,
     ),

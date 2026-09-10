@@ -26,16 +26,14 @@
   },
   "tasks": {
     "check": "deno check 'apps/**/*.ts' 'packages/**/*.ts' 'e2e/*.ts'",
-    "lint": "deno lint",
-    "lint:core": "sh -c 'deno run --allow-all npm:oxlint apps/*/*.schema.ts apps/*/*.workflow.ts packages/*/src/*.schema.ts packages/*/src/*.workflow.ts --config oxlint.config.ts'",
-    "lint:tsgo": "deno run --allow-all npm:@effect/tsgo diagnostics --project tsconfig.json",
+    "lint": "sh -c 'deno lint && deno run --allow-all npm:oxlint . --config oxlint.config.ts && deno run --allow-all npm:@effect/tsgo diagnostics --project tsconfig.json'",
     "format": "./bin/dprint fmt",
     "format:check": "./bin/dprint check",
     "test": "deno test --allow-all",
     "e2e": "deno test --allow-all e2e/",
     "precommit": "deno run --allow-read --allow-write --allow-run=git,deno,dprint --allow-env apps/git-hooks/main.ts pre-commit",
     "hooks:install": "git config core.hooksPath .githooks",
-    "ci": "deno task format:check && deno task lint && deno task check && deno task lint:core && deno task lint:tsgo && deno task test"
+    "ci": "deno task format:check && deno task lint && deno task check && deno task test"
   },
   "lint": {
     "rules": {
