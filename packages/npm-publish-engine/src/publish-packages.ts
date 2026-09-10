@@ -70,8 +70,7 @@ const read = (
     return new PublishRaw(request, captured, published, filterLines, command, packages)
   })
 
-const provenanceArgsOf = (provenance: boolean): ReadonlyArray<string> =>
-  provenance ? ['--provenance'] : []
+const provenanceArgsOf = (provenance: boolean): ReadonlyArray<string> => provenance ? ['--provenance'] : []
 
 const argsOf = (parts: {
   readonly provenance: boolean
