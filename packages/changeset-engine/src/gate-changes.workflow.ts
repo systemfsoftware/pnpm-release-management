@@ -83,10 +83,7 @@ const firstOf = <T>(values: ReadonlyArray<T>): Option.Option<T> => Option.fromNu
 const nonEmptyOf = <T>(
   values: ReadonlyArray<T>,
 ): Option.Option<readonly [T, ...T[]]> =>
-  Option.filter(
-    Option.map(firstOf(values), (head) => [head, ...values.slice(1)] as const),
-    (tuple) => tuple.length > 0,
-  )
+  Option.map(firstOf(values), (head) => [head, ...values.slice(1)] as const)
 
 const classify = (command: S.Schema.Type<typeof GateCommand>): GateCase => {
   const unknown = firstOf(foreign(command))

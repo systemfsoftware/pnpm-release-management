@@ -115,12 +115,10 @@ type TrustCase = S.Schema.Type<typeof TrustCase>
 
 const matchedOf = (
   command: TrustCommand,
-): ReadonlyArray<TrustCandidateState> =>
-  Match.value(command.only.length === 0).pipe(
-    Match.when(true, () => command.candidates),
-    Match.when(false, () => command.candidates.filter((candidate) => command.only.includes(candidate.name))),
-    Match.exhaustive,
-  )
+): ReadonlyArray<TrustCandidateState> => {
+  if (command.only.length === 0) return command.candidates
+  return command.candidates.filter((candidate) => command.only.includes(candidate.name))
+}
 
 const owedOf = (
   matched: ReadonlyArray<TrustCandidateState>,

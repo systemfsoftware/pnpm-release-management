@@ -71,11 +71,7 @@ const read = (
   })
 
 const provenanceArgsOf = (provenance: boolean): ReadonlyArray<string> =>
-  Match.value(provenance).pipe(
-    Match.when(true, () => ['--provenance']),
-    Match.when(false, () => []),
-    Match.exhaustive,
-  )
+  provenance ? ['--provenance'] : []
 
 const argsOf = (parts: {
   readonly provenance: boolean

@@ -1,7 +1,6 @@
 import { Workflow } from '@systemfsoftware/effect-cell-types'
 import { PackageVersion, PinName, RepoRoot } from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
-import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import { PinRootManifestCommand } from './pin-root-manifest.schema.ts'
@@ -35,12 +34,10 @@ export class WorkspaceVersionAlreadyCurrent extends S.TaggedClass<
   readonly [PinDecisionTypeId] = PinDecisionTypeId
 }
 
-const terminated = (text: string, trailingNewline: boolean): string =>
-  Option.getOrElse(
-    Option.map(Option.liftPredicate(text, () => trailingNewline), (body) => `${body}\n`),
-    () => text,
-  )
-
+const terminated = (text: string, trailingNewline: boolean): string => {
+  if (trailingNewline) return `${text}\n`
+  return text
+}
 const rewritten = (
   command: PinRootManifestCommand,
   version: string,

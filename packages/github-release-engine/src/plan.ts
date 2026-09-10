@@ -139,28 +139,28 @@ const write = (
   output: Result.Result<EncodedPlan, PlanRefusal>,
   raw: RawPlan,
 ): Effect.Effect<PlanReport, PlanRefusal, never> => {
-  const owed = dropExcluded(computeCycle(raw.members, raw.tags, raw.changelogDir), raw.deferred)
-  const phaseFrom = (): PlanPhase => {
-    if (owed.length > 0) {
-      return 'publish'
-    }
-    if (raw.pending > 0) {
-      return 'version'
-    }
-    return 'none'
-  }
-  const decisionFrom = (): PlanDecision => {
-    if (owed.length > 0) {
-      return PlanPublish.make({ cycle: owed })
-    }
-    if (raw.pending > 0) {
-      return PlanVersion.make({ pending: raw.pending, cycle: owed })
-    }
-    return PlanSettled.make({ pending: raw.pending, cycle: Count.make(0) })
-  }
   if (Result.isFailure(output)) {
     if (output.failure._tag !== 'PlanDeferredUnknown') {
       return Effect.fail(output.failure)
+    }
+    const owed = dropExcluded(computeCycle(raw.members, raw.tags, raw.changelogDir), raw.deferred)
+    const phaseFrom = (): PlanPhase => {
+      if (owed.length > 0) {
+        return 'publish'
+      }
+      if (raw.pending > 0) {
+        return 'version'
+      }
+      return 'none'
+    }
+    const decisionFrom = (): PlanDecision => {
+      if (owed.length > 0) {
+        return PlanPublish.make({ cycle: owed })
+      }
+      if (raw.pending > 0) {
+        return PlanVersion.make({ pending: raw.pending, cycle: owed })
+      }
+      return PlanSettled.make({ pending: raw.pending, cycle: Count.make(0) })
     }
     const decision = decisionFrom()
     return Effect.succeed(
