@@ -41,3 +41,9 @@ jobs:
 
       - name: Check
         run: deno task check
+
+      - name: Type-aware lint (schema, workflow and cell cores)
+        run: deno task lint:core
+
+      - name: Effect diagnostics
+        run: deno task lint:tsgo
