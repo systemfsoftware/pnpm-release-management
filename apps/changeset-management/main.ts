@@ -4,13 +4,37 @@ import { dirname, join } from '@std/path'
 import { gateChangesCell, newIntentCell } from '@systemfsoftware/changeset-engine'
 import { program, Reporter } from '@systemfsoftware/cli-adapter'
 import { Cell } from '@systemfsoftware/effect-cell-types'
+import { GitLive } from '@systemfsoftware/git-adapter'
+import { ChangeEvidenceLive } from '@systemfsoftware/process-adapter'
 import { GitRef, ReleaseConfigStore, RepoRoot, TaskName } from '@systemfsoftware/release-language'
-import type { ConfigRefusal, MemberRefusal, NewIntentRefusal } from '@systemfsoftware/release-language'
-import { Effect, Option } from 'effect'
+import type { ChangesetStore, ConfigRefusal, MemberRefusal, NewIntentRefusal, RelativePath, WorkspaceStore } from '@systemfsoftware/release-language'
+import { ChangesetStoreLive, ReleaseConfigStoreLive, WorkspaceStoreLive } from '@systemfsoftware/workspace-adapter'
+import { Effect, Layer, Option } from 'effect'
 import * as Match from 'effect/Match'
 import * as S from 'effect/Schema'
 import { Argument, Command, Flag } from 'effect/unstable/cli'
-import { MainLive, provideStores } from './MainLive.ts'
+
+const MainLive = Layer.mergeAll(
+  ReleaseConfigStoreLive,
+  Layer.provide(ChangeEvidenceLive, GitLive),
+)
+
+interface StoreOptions {
+  readonly root: RepoRoot
+  readonly changesetDir: RelativePath
+}
+
+const provideStores = <I, A, E, R>(
+  cell: Cell.Cell<I, A, E, R>,
+  options: StoreOptions,
+): Cell.Cell<I, A, E, Exclude<R, WorkspaceStore | ChangesetStore>> =>
+  Cell.provide(
+    cell,
+    Layer.mergeAll(
+      WorkspaceStoreLive(options.root),
+      ChangesetStoreLive({ root: options.root, changesetDir: options.changesetDir }),
+    ),
+  )
 
 const CONFIG_FILE = 'release.jsonc'
 

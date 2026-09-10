@@ -1,8 +1,10 @@
 #!/usr/bin/env -S deno run --allow-read --allow-write --allow-run=git,pnpm --allow-net=api.github.com --allow-env
 import { DenoRuntime } from '@effect/platform-deno'
-import { dirname, relative, resolve } from '@std/path'
+import { parse as parseJsonc } from '@std/jsonc'
+import { dirname, join, relative, resolve } from '@std/path'
 import { program, Reporter } from '@systemfsoftware/cli-adapter'
 import { Cell } from '@systemfsoftware/effect-cell-types'
+import { GitLive } from '@systemfsoftware/git-adapter'
 import {
   githubReleaseCell,
   GithubReleaseRequest,
@@ -13,9 +15,13 @@ import {
   tagCell,
   TagRequest,
 } from '@systemfsoftware/github-release-engine'
+import { ForgeConfig, ForgeLive } from '@systemfsoftware/github-adapter'
+import { ProcessLive } from '@systemfsoftware/process-adapter'
 import {
   ChangelogStore,
   ChangesetStore,
+  CycleStore,
+  ForgePort,
   GitPort,
   GitRef,
   JsonSurface,
@@ -31,11 +37,18 @@ import {
   WorkspaceStore,
 } from '@systemfsoftware/release-language'
 import { bumpCell, type BumpInput } from '@systemfsoftware/version-engine'
-import { Effect, Option } from 'effect'
+import {
+  ChangelogStoreLive,
+  ChangesetStoreLive,
+  CycleStoreLive,
+  ReleaseConfigStoreLive,
+  SurfaceStoreLive,
+  WorkspaceStoreLive,
+} from '@systemfsoftware/workspace-adapter'
+import { Effect, Layer, Option } from 'effect'
 import * as Match from 'effect/Match'
 import * as S from 'effect/Schema'
 import { Command, Flag } from 'effect/unstable/cli'
-import { MainLive } from './MainLive.ts'
 
 const RepoConfig = S.Struct({
   base: GitRef,
@@ -488,6 +501,56 @@ const pr = Command.make('pr', {
 const release = Command.make('release').pipe(
   Command.withDescription('Plan release phases, open release PRs, tag and publish GitHub releases'),
   Command.withSubcommands([plan, pr, tag, releaseCommand]),
+)
+
+const Wiring = S.Struct({ changesetDir: RelativePath })
+
+const FALLBACK_CHANGESET_DIR = '.changeset'
+
+const wired = Effect.gen(function*() {
+  const root = yield* S.decodeUnknownEffect(RepoRoot)(Deno.cwd()).pipe(Effect.orDie)
+  const text = yield* Effect.promise(() => Deno.readTextFile(join(root, 'release.jsonc')).catch(() => null))
+  if (text === null) {
+    const changesetDir = yield* S.decodeUnknownEffect(RelativePath)(FALLBACK_CHANGESET_DIR).pipe(
+      Effect.orDie,
+    )
+    return { root, changesetDir }
+  }
+  const decoded = yield* S.decodeUnknownEffect(Wiring)(parseJsonc(text)).pipe(Effect.orDie)
+  return { root, changesetDir: decoded.changesetDir }
+})
+
+const MainLive: Layer.Layer<
+  | ChangesetStore
+  | ChangelogStore
+  | CycleStore
+  | ForgePort
+  | GitPort
+  | ProcessPort
+  | ReleaseConfigStore
+  | SurfaceStore
+  | WorkspaceStore
+> = Layer.unwrap(
+  Effect.map(wired, ({ root, changesetDir }) => {
+    const forge = Layer.provide(
+      ForgeLive,
+      Layer.succeed(ForgeConfig, {
+        token: Deno.env.get('GITHUB_TOKEN'),
+        baseUrl: Deno.env.get('GITHUB_API_URL'),
+      }),
+    )
+    return Layer.mergeAll(
+      forge,
+      GitLive,
+      ProcessLive,
+      CycleStoreLive,
+      ReleaseConfigStoreLive,
+      WorkspaceStoreLive(root),
+      ChangesetStoreLive({ root, changesetDir }),
+      SurfaceStoreLive(root),
+      ChangelogStoreLive(root),
+    )
+  }),
 )
 
 DenoRuntime.runMain(Effect.provide(program(release, '0.0.0'), MainLive))

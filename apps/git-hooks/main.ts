@@ -2,11 +2,13 @@
 import { DenoRuntime } from '@effect/platform-deno'
 import { program, Reporter } from '@systemfsoftware/cli-adapter'
 import { Cell } from '@systemfsoftware/effect-cell-types'
-import { commitMessageCell, CommitRejected, stagedChecksCell } from '@systemfsoftware/git-hooks-engine'
-import { Effect, Option } from 'effect'
+import { GitLive } from '@systemfsoftware/git-adapter'
+import { CommitRejected, commitMessageCell, stagedChecksCell } from '@systemfsoftware/git-hooks-engine'
+import { ProcessLive } from '@systemfsoftware/process-adapter'
+import type { GitPort, ProcessPort } from '@systemfsoftware/release-language'
+import { Effect, Layer, Option } from 'effect'
 import * as Match from 'effect/Match'
 import { Argument, Command } from 'effect/unstable/cli'
-import { MainLive } from './MainLive.ts'
 
 const TYPE_NAMES =
   'ai / api / build / chore / ci / deps / docs / e2e / feat / fix / improvement / perf / refactor / revert / security / style / test'
@@ -148,5 +150,7 @@ const hooks = Command.make('hooks').pipe(
   Command.withDescription('Run the repo git hooks (format, lint, commit-message gate)'),
   Command.withSubcommands([preCommit, commitMsg]),
 )
+
+const MainLive: Layer.Layer<GitPort | ProcessPort> = Layer.mergeAll(GitLive, ProcessLive)
 
 DenoRuntime.runMain(Effect.provide(program(hooks, '0.0.0'), MainLive))

@@ -12,12 +12,41 @@ import {
   StatusRequest,
   TrustRequest,
 } from '@systemfsoftware/npm-publish-engine'
+import { ProcessLive } from '@systemfsoftware/process-adapter'
+import { RegistryConfig, RegistryLive } from '@systemfsoftware/registry-adapter'
 import * as Lang from '@systemfsoftware/release-language'
-import { Effect, Option } from 'effect'
+import type {
+  CycleStore,
+  ProcessPort,
+  RegistryPort,
+  RepoRoot,
+  WorkspaceStore,
+} from '@systemfsoftware/release-language'
+import { CycleStoreLive, WorkspaceStoreLive } from '@systemfsoftware/workspace-adapter'
+import { Effect, Layer, Option } from 'effect'
 import * as Match from 'effect/Match'
 import * as S from 'effect/Schema'
 import { Command, Flag } from 'effect/unstable/cli'
-import { makeMainLive } from './MainLive.ts'
+interface MainLiveOptions {
+  readonly root: RepoRoot
+  readonly baseUrl: string
+}
+
+const makeMainLive = (
+  options: MainLiveOptions,
+): Layer.Layer<RegistryPort | ProcessPort | WorkspaceStore | CycleStore, never, never> =>
+  Layer.mergeAll(
+    WorkspaceStoreLive(options.root),
+    CycleStoreLive,
+    ProcessLive,
+    Layer.provide(
+      RegistryLive,
+      Layer.mergeAll(
+        Layer.succeed(RegistryConfig, { baseUrl: options.baseUrl, root: options.root }),
+        ProcessLive,
+      ),
+    ),
+  )
 
 const DEFAULT_REGISTRY = 'https://registry.npmjs.org'
 
