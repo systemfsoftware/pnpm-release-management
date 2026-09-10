@@ -15,13 +15,7 @@ import {
 import { ProcessLive } from '@systemfsoftware/process-adapter'
 import { RegistryConfig, RegistryLive } from '@systemfsoftware/registry-adapter'
 import * as Lang from '@systemfsoftware/release-language'
-import type {
-  CycleStore,
-  ProcessPort,
-  RegistryPort,
-  RepoRoot,
-  WorkspaceStore,
-} from '@systemfsoftware/release-language'
+import type { CycleStore, ProcessPort, RegistryPort, RepoRoot, WorkspaceStore } from '@systemfsoftware/release-language'
 import { CycleStoreLive, WorkspaceStoreLive } from '@systemfsoftware/workspace-adapter'
 import { Effect, Layer, Option } from 'effect'
 import * as Match from 'effect/Match'

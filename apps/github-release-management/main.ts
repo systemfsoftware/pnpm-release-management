@@ -5,6 +5,7 @@ import { dirname, join, relative, resolve } from '@std/path'
 import { program, Reporter } from '@systemfsoftware/cli-adapter'
 import { Cell } from '@systemfsoftware/effect-cell-types'
 import { GitLive } from '@systemfsoftware/git-adapter'
+import { ForgeConfig, ForgeLive } from '@systemfsoftware/github-adapter'
 import {
   githubReleaseCell,
   GithubReleaseRequest,
@@ -15,7 +16,6 @@ import {
   tagCell,
   TagRequest,
 } from '@systemfsoftware/github-release-engine'
-import { ForgeConfig, ForgeLive } from '@systemfsoftware/github-adapter'
 import { ProcessLive } from '@systemfsoftware/process-adapter'
 import {
   ChangelogStore,
