@@ -1,3 +1,5 @@
 export { program } from './program.js'
 export { Reporter } from './Reporter.js'
 export { ReporterLive } from './ReporterLive.js'
+export { resolveWorkspaceRoot } from './WorkspaceRoot.js'
+export { WorkspaceRootNotAbsolute } from './WorkspaceRoot.schema.js'
