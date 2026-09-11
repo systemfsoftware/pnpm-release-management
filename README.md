@@ -209,7 +209,8 @@ so the release PR diff _is_ the set of notes that shipped.
 | `hooks commit-msg`  | Enforces the conventional-commit header and strips AI co-author trailers          |
 
 Every subcommand takes `--config <path>` and otherwise loads `release.jsonc` from
-the repository root, which it finds through git.
+the directory it is run in. The flag may name either the workspace root or a file
+inside it: a directory is taken as the root, a file path means its directory is.
 
 Flags worth knowing:
 
