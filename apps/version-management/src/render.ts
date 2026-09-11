@@ -1,3 +1,4 @@
+import type { WorkspaceRootNotAbsolute } from '@systemfsoftware/cli-adapter'
 import {
   type ChangelogRefusal,
   type ConfigRefusal,
@@ -19,9 +20,9 @@ import {
 import * as Match from 'effect/Match'
 import * as S from 'effect/Schema'
 import type { Directive } from './directive.schema.js'
-import type { ManifestPathRefused, SyncActionMissing, WorkspaceRootRefused } from './refusal.schema.js'
+import type { ManifestPathRefused, SyncActionMissing } from './refusal.schema.js'
 
-type EdgeRefusal = WorkspaceRootRefused | ManifestPathRefused | SyncActionMissing
+type EdgeRefusal = WorkspaceRootNotAbsolute | ManifestPathRefused | SyncActionMissing
 
 type DeliveryRefusal =
   | PublishRefusal
@@ -125,14 +126,12 @@ export const renderSyncRefusal = (
 
 export const renderRefusal = (refusal: AppRefusal): ReadonlyArray<Directive> =>
   Match.value(refusal).pipe(
-    Match.tag('WorkspaceRootRefused', (refusedRoot) =>
-      refused(`cannot read workspace root ${refusedRoot.given}: ${refusedRoot.reason}`)),
+    Match.tag('WorkspaceRootNotAbsolute', (notAbsolute) => refused(`cannot read workspace root ${notAbsolute.given}`)),
     Match.tag('ManifestPathRefused', (refusedPath) =>
       refused(
         `sync-root-manifest: --manifest must name a file inside the repository (got ${refusedPath.given})`,
       )),
-    Match.tag('SyncActionMissing', () =>
-      refused('usage: sync-versions.ts <check|bump> [version]')),
+    Match.tag('SyncActionMissing', () => refused('usage: sync-versions.ts <check|bump> [version]')),
     Match.tag('ConfigUnreadable', (unreadable) => refused(fields('ConfigUnreadable', [['path', unreadable.path]]))),
     Match.tag('ConfigMalformed', (malformed) =>
       refused(fields('ConfigMalformed', [['path', malformed.path], ['reason', malformed.reason]]))),

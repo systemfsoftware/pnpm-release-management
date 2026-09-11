@@ -1,5 +1,5 @@
 import { NodeRuntime, NodeServices } from '@effect/platform-node'
-import { program, Reporter, ReporterLive } from '@systemfsoftware/cli-adapter'
+import { program, Reporter, ReporterLive, resolveWorkspaceRoot } from '@systemfsoftware/cli-adapter'
 import { Cell } from '@systemfsoftware/effect-cell-types'
 import { ProcessLive } from '@systemfsoftware/process-adapter'
 import { RelativePath, ReleaseConfigStore, RepoRoot } from '@systemfsoftware/release-language'
@@ -19,15 +19,13 @@ import {
   WorkspaceStoreLive,
 } from '@systemfsoftware/workspace-adapter'
 import { Effect, Layer } from 'effect'
-import { FileSystem } from 'effect/FileSystem'
 import * as Match from 'effect/Match'
 import * as Option from 'effect/Option'
-import { Path } from 'effect/Path'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import { Argument, Command, Flag } from 'effect/unstable/cli'
 import type { Directive } from './directive.schema.js'
-import { ManifestPathRefused, SyncActionMissing, WorkspaceRootRefused } from './refusal.schema.js'
+import { ManifestPathRefused, SyncActionMissing } from './refusal.schema.js'
 import {
   renderPinDecision,
   renderRefusal,
@@ -47,31 +45,6 @@ const storesLive = (root: RepoRoot, changesetDir: RelativePath) =>
     ChangesetStoreLive({ root, changesetDir }),
   )
 
-const rootOf = (
-  given: Option.Option<string>,
-): Effect.Effect<RepoRoot, WorkspaceRootRefused, FileSystem | Path> =>
-  Effect.gen(function*() {
-    const fs = yield* FileSystem
-    const path = yield* Path
-    const target = path.resolve(Option.getOrUndefined(given) ?? '.')
-    const info = yield* fs.stat(target).pipe(
-      Effect.mapError((error): WorkspaceRootRefused => ({
-        _tag: 'WorkspaceRootRefused',
-        given: target,
-        reason: error.message,
-      })),
-    )
-    let root = path.dirname(target)
-    if (info.type === 'Directory') root = target
-    return yield* S.decodeUnknownEffect(RepoRoot)(root).pipe(
-      Effect.mapError((error): WorkspaceRootRefused => ({
-        _tag: 'WorkspaceRootRefused',
-        given: root,
-        reason: error.message,
-      })),
-    )
-  })
-
 const deliver = (directives: ReadonlyArray<Directive>): Effect.Effect<void, never, Reporter> =>
   Effect.flatMap(Reporter, (reporter) =>
     Effect.forEach(
@@ -89,7 +62,7 @@ const deliver = (directives: ReadonlyArray<Directive>): Effect.Effect<void, neve
 
 const runBump = (configPath: Option.Option<string>) =>
   Effect.gen(function*() {
-    const root = yield* rootOf(configPath)
+    const root = yield* resolveWorkspaceRoot(configPath)
     const configs = yield* ReleaseConfigStore
     const config = yield* configs.loadConfig(root)
     const request = yield* S.decodeUnknownEffect(BumpInput)(bumpRequestOf(config))
@@ -102,7 +75,7 @@ const runSync = (flags: {
   readonly config: Option.Option<string>
 }) =>
   Effect.gen(function*() {
-    const root = yield* rootOf(flags.config)
+    const root = yield* resolveWorkspaceRoot(flags.config)
     const action = Option.getOrUndefined(flags.subcommand)
     if (action === undefined) {
       return yield* Effect.fail<SyncActionMissing>({ _tag: 'SyncActionMissing' })
@@ -126,7 +99,7 @@ const runPin = (flags: {
   readonly config: Option.Option<string>
 }) =>
   Effect.gen(function*() {
-    const root = yield* rootOf(flags.config)
+    const root = yield* resolveWorkspaceRoot(flags.config)
     const configs = yield* ReleaseConfigStore
     const config = yield* configs.loadConfig(root)
     const requestedPath = Option.getOrUndefined(flags.manifest)

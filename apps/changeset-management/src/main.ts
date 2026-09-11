@@ -1,6 +1,12 @@
 import { NodeRuntime, NodeServices } from '@effect/platform-node'
 import { gateChangesCell, type GateReport, newIntentCell } from '@systemfsoftware/changeset-engine'
-import { program, Reporter, ReporterLive } from '@systemfsoftware/cli-adapter'
+import {
+  program,
+  Reporter,
+  ReporterLive,
+  resolveWorkspaceRoot,
+  type WorkspaceRootNotAbsolute,
+} from '@systemfsoftware/cli-adapter'
 import { Cell } from '@systemfsoftware/effect-cell-types'
 import { GitLive } from '@systemfsoftware/git-adapter'
 import { ChangeEvidenceLive } from '@systemfsoftware/process-adapter'
@@ -19,11 +25,11 @@ import {
   type TaskName,
 } from '@systemfsoftware/release-language'
 import { ChangesetStoreLive, ReleaseConfigStoreLive, WorkspaceStoreLive } from '@systemfsoftware/workspace-adapter'
-import { Effect, FileSystem, Layer, Option, Path } from 'effect'
+import { Effect, type FileSystem, Layer, Option, Path } from 'effect'
 import * as Match from 'effect/Match'
 import * as S from 'effect/Schema'
 import { Argument, Command, Flag } from 'effect/unstable/cli'
-import { type BaseRefInvalid, type BaseRefMissing, type RootNotAbsolute } from './Invocation.schema.js'
+import { type BaseRefInvalid, type BaseRefMissing } from './Invocation.schema.js'
 
 const VERSION = '0.0.0'
 
@@ -48,7 +54,7 @@ type AppRefusal =
   | NewIntentRefusal
   | GateRefusal
   | IntentRefusal
-  | RootNotAbsolute
+  | WorkspaceRootNotAbsolute
   | BaseRefMissing
   | BaseRefInvalid
 
@@ -88,7 +94,7 @@ const describeRefusal = (refusal: AppRefusal): string =>
     ),
     Match.tag('GateIntentMissing', (missing) => `no intent names: ${missing.packages.join(', ')}`),
     Match.tag(
-      'RootNotAbsolute',
+      'WorkspaceRootNotAbsolute',
       (notAbsolute) => `repository root "${notAbsolute.given}" is not an absolute path`,
     ),
     Match.tag('BaseRefMissing', () => 'usage: changeset-management check <base-sha-or-ref>'),
@@ -115,32 +121,15 @@ const announceStaged = (staged: StagedIntent): Effect.Effect<void, never, Path.P
     (path) => Effect.flatMap(Reporter, (reporter) => reporter.emit(path.join(staged.root, staged.decision.path))),
   )
 
-const workspaceRootOf = (
-  config: Option.Option<string>,
-): Effect.Effect<RepoRoot, RootNotAbsolute, FileSystem.FileSystem | Path.Path> =>
-  Effect.gen(function*() {
-    const path = yield* Path.Path
-    const fs = yield* FileSystem.FileSystem
-    const named = path.resolve(Option.getOrUndefined(config) ?? process.cwd())
-    const located = yield* fs.stat(named).pipe(Effect.option)
-    const root = Option.match(Option.filter(located, (info) => info.type === 'File'), {
-      onNone: () => named,
-      onSome: () => path.dirname(named),
-    })
-    return yield* S.decodeUnknownEffect(RepoRoot)(root).pipe(
-      Effect.mapError((): RootNotAbsolute => ({ _tag: 'RootNotAbsolute', given: root })),
-    )
-  })
-
 const releaseWorkspaceOf = (
   config: Option.Option<string>,
 ): Effect.Effect<
   WorkspaceContext,
-  ConfigRefusal | RootNotAbsolute,
+  ConfigRefusal | WorkspaceRootNotAbsolute,
   ReleaseConfigStore | FileSystem.FileSystem | Path.Path
 > =>
   Effect.gen(function*() {
-    const root = yield* workspaceRootOf(config)
+    const root = yield* resolveWorkspaceRoot(config)
     const store = yield* ReleaseConfigStore
     const release = yield* store.loadConfig(root)
     return { root, release }

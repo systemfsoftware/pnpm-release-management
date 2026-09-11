@@ -1,3 +1,4 @@
+import { resolveWorkspaceRoot, type WorkspaceRootNotAbsolute } from '@systemfsoftware/cli-adapter'
 import {
   type ConfigRefusal,
   RelativePath,
@@ -7,9 +8,8 @@ import {
   type VersionSurface,
 } from '@systemfsoftware/release-language'
 import type { BumpInput } from '@systemfsoftware/version-engine'
-import { Effect, FileSystem, Option, Path } from 'effect'
+import { Effect, type FileSystem, Option, type Path } from 'effect'
 import * as Match from 'effect/Match'
-import * as S from 'effect/Schema'
 
 export const CHANGESET_FALLBACK: RelativePath = RelativePath.make('.changeset')
 
@@ -18,42 +18,16 @@ export interface Workspace {
   readonly config: ReleaseConfig
 }
 
-const decodeRoot = (value: string): Effect.Effect<RepoRoot> => S.decodeUnknownEffect(RepoRoot)(value).pipe(Effect.orDie)
-
-const rootUnder = (
-  path: Path.Path,
-  fs: FileSystem.FileSystem,
-  cwd: string,
-  flag: string,
-): Effect.Effect<RepoRoot> =>
-  Effect.gen(function*() {
-    const resolved = path.resolve(cwd, flag)
-    const directory = yield* fs.stat(resolved).pipe(
-      Effect.map((info) => info.type === 'Directory'),
-      Effect.orElseSucceed(() => false),
-    )
-    if (directory) {
-      return yield* decodeRoot(resolved)
-    }
-    return yield* decodeRoot(path.dirname(resolved))
-  })
-
 export const workspaceOf = (
-  flag: string | undefined,
+  flag: Option.Option<string>,
 ): Effect.Effect<
   Workspace,
-  ConfigRefusal,
+  ConfigRefusal | WorkspaceRootNotAbsolute,
   FileSystem.FileSystem | Path.Path | ReleaseConfigStore
 > =>
   Effect.gen(function*() {
-    const path = yield* Path.Path
-    const fs = yield* FileSystem.FileSystem
+    const root = yield* resolveWorkspaceRoot(flag)
     const configs = yield* ReleaseConfigStore
-    const cwd = yield* Effect.sync(() => process.cwd())
-    const root = yield* Option.match(Option.fromNullishOr(flag), {
-      onNone: () => decodeRoot(cwd),
-      onSome: (config) => rootUnder(path, fs, cwd, config),
-    })
     const config = yield* configs.loadConfig(root)
     return { root, config }
   })

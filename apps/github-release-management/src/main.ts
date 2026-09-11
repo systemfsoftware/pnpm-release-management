@@ -150,7 +150,7 @@ const plan = Command.make('plan', {
 }, ({ deferred, output, remote, config }) =>
   reporting(
     Effect.gen(function*() {
-      const workspace = yield* workspaceOf(Option.getOrUndefined(config))
+      const workspace = yield* workspaceOf(config)
       const request = yield* decodeFlags(
         S.decodeUnknownEffect(PlanRequest)({
           deferred: Option.getOrUndefined(deferred),
@@ -176,7 +176,7 @@ const tag = Command.make('tag', {
 }, ({ dryRun, json, captured, capturedFile, exclude, output, remote, config }) =>
   reporting(
     Effect.gen(function*() {
-      const workspace = yield* workspaceOf(Option.getOrUndefined(config))
+      const workspace = yield* workspaceOf(config)
       const outputPath = Option.getOrUndefined(output)
       const request = yield* decodeFlags(
         S.decodeUnknownEffect(TagRequest)({
@@ -205,7 +205,7 @@ const releaseCommand = Command.make('release', {
 }, ({ dryRun, assert, captured, capturedFile, config }) =>
   reporting(
     Effect.gen(function*() {
-      const workspace = yield* workspaceOf(Option.getOrUndefined(config))
+      const workspace = yield* workspaceOf(config)
       const request = yield* decodeFlags(
         S.decodeUnknownEffect(GithubReleaseRequest)({
           captured: Option.getOrUndefined(captured),
@@ -232,7 +232,7 @@ const pr = Command.make('pr', {
   reporting(
     Effect.gen(function*() {
       const path = yield* Path.Path
-      const workspace = yield* workspaceOf(Option.getOrUndefined(config))
+      const workspace = yield* workspaceOf(config)
       const cwd = yield* Effect.sync(() => process.cwd())
       const bodyFile = Option.match(bodyFileFlag, {
         onNone: (): string | undefined => undefined,

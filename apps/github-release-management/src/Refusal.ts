@@ -1,3 +1,4 @@
+import type { WorkspaceRootNotAbsolute } from '@systemfsoftware/cli-adapter'
 import type {
   ConfigRefusal,
   FsPath,
@@ -50,7 +51,9 @@ const boundaryRefusalText = (refusal: BoundaryRefusal): string =>
     Match.exhaustive,
   )
 
-const platformRefusalText = (refusal: ConfigRefusal | BoundaryRefusal): string =>
+const platformRefusalText = (
+  refusal: ConfigRefusal | BoundaryRefusal | WorkspaceRootNotAbsolute,
+): string =>
   Match.value(refusal).pipe(
     Match.tag('ConfigUnreadable', (unreadable) => configRefusalText(unreadable)),
     Match.tag('ConfigMalformed', (malformed) => configRefusalText(malformed)),
@@ -59,6 +62,8 @@ const platformRefusalText = (refusal: ConfigRefusal | BoundaryRefusal): string =
     Match.tag('InvalidFlags', (invalid) => boundaryRefusalText(invalid)),
     Match.tag('OutputUnwritable', (unwritable) => boundaryRefusalText(unwritable)),
     Match.tag('OutputUnreadable', (unreadable) => boundaryRefusalText(unreadable)),
+    Match.tag('WorkspaceRootNotAbsolute', (notAbsolute) =>
+      `refused: workspace-root-not-absolute, path: ${notAbsolute.given}`),
     Match.exhaustive,
   )
 
@@ -66,6 +71,7 @@ export const planFailureText = (
   refusal:
     | ConfigRefusal
     | BoundaryRefusal
+    | WorkspaceRootNotAbsolute
     | IntentRefusal
     | MemberRefusal
     | PlanRefusal
@@ -85,7 +91,13 @@ export const planFailureText = (
   )
 
 export const tagFailureText = (
-  refusal: ConfigRefusal | BoundaryRefusal | MemberRefusal | PlanDeferredUnknown | TagRefusal,
+  refusal:
+    | ConfigRefusal
+    | BoundaryRefusal
+    | WorkspaceRootNotAbsolute
+    | MemberRefusal
+    | PlanDeferredUnknown
+    | TagRefusal,
 ): string =>
   Match.value(refusal).pipe(
     Match.tag('TagCapturedMalformed', (malformed) => `cannot read captured file: ${malformed.path}`),
@@ -100,6 +112,7 @@ export const releaseFailureText = (
   refusal:
     | ConfigRefusal
     | BoundaryRefusal
+    | WorkspaceRootNotAbsolute
     | GithubReleaseRefusal
     | MemberRefusal
     | PlanRefusal
@@ -124,6 +137,7 @@ export const prFailureText = (
   refusal:
     | ConfigRefusal
     | BoundaryRefusal
+    | WorkspaceRootNotAbsolute
     | IntentRefusal
     | PullRequestRefusal
     | TagRefusal
