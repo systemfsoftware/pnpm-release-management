@@ -73,9 +73,7 @@
         "^build",
         "build"
       ],
-      "outputs": [
-        "coverage/**"
-      ],
+      "outputs": [],
       "env": [
         "NODE_ENV",
         "CI",
