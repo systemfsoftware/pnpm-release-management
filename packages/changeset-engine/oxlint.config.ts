@@ -12,6 +12,10 @@ export default defineConfig({
 
   overrides: [
     {
+      files: ['src/**/*.workflow.ts'],
+      rules: { complexity: ['error', { max: 1 }] },
+    },
+    {
       files: ['**/*.test.ts', '**/*.spec.ts'],
       rules: { 'vitest/no-standalone-expect': 'off' },
     },

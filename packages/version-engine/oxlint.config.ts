@@ -13,6 +13,10 @@ export default defineConfig({
 
   overrides: [
     {
+      files: ['src/**/*.workflow.ts'],
+      rules: { complexity: ['error', { max: 1 }] },
+    },
+    {
       // Gherkin step bodies call expect outside test/it.
       files: ['**/*.test.ts', '**/*.spec.ts'],
       rules: { 'vitest/no-standalone-expect': 'off' },
