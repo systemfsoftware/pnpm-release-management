@@ -15,10 +15,10 @@
       "id": "UNIT-P2",
       "state": "proven",
       "last_proof": {
-        "command": "pnpm --filter @systemfsoftware/npm-publish-engine lint",
+        "command": "bash .endgame/gates/decision-complexity-gate.sh version-engine",
         "exit": 1,
-        "output_hash": "b965d7097e39e12ff0edfd4edef8dd5f3dcd9a7a298ac77755a76bb040f1fed1",
-        "ts": "2026-09-11T01:32:07.976Z"
+        "output_hash": "daee48ccff3654b4f49e1ba2dab61edf5c6e614b53172ee7cbc1ead6c54c85e6",
+        "ts": "2026-09-11T05:53:09.437Z"
       }
     },
     {
@@ -375,7 +375,16 @@
       "intercept": "packages/git-hooks-engine/src/commit-message.workflow.ts",
       "kind": "branded-twin",
       "shape": "decide",
-      "state": "proposed"
+      "state": "eliminated",
+      "rule": "UNIT-P2",
+      "paste_back": {
+        "command": "bash /tmp/gate-git-hooks-engine.sh",
+        "diagnostic": "  x eslint(complexity): function has a complexity of 2. Maximum allowed is 1.\nFound 0 warnings and 2 errors.\n",
+        "exit_code": 1,
+        "path": "/tmp/endgame-strangler/9d2980ed4079/pasteback/branded-twin_packages_git-hooks-engine_src_commit-message.workflow.ts/packages/git-hooks-engine/src/probe-decision.workflow.ts",
+        "snippet": "import * as Result from 'effect/Result'\nimport * as S from 'effect/Schema'\n\nconst ProbeCommand = S.Struct({ n: S.Number })\n\nexport const probeDecision = (command: S.Schema.Type<typeof ProbeCommand>): Result.Result<number, never> => {\n  if (command.n > 0) {\n    return Result.succeed(1)\n  }\n  return Result.succeed(0)\n}\n",
+        "ts": "2026-09-11T05:52:36.460Z"
+      }
     },
     {
       "id": "observed-interaction:packages/git-hooks-engine/src/staged-checks.ts",
@@ -515,7 +524,16 @@
       "intercept": "packages/version-engine/src/bump-versions.workflow.ts",
       "kind": "branded-twin",
       "shape": "decide",
-      "state": "proposed"
+      "state": "eliminated",
+      "rule": "UNIT-P2",
+      "paste_back": {
+        "command": "bash .endgame/gates/decision-complexity-gate.sh version-engine",
+        "diagnostic": "src/probe-decision.workflow.ts:6:30: error eslint(complexity): function has a complexity of 2. Maximum allowed is 1.\n",
+        "exit_code": 1,
+        "path": "/tmp/endgame-strangler/9d2980ed4079/pasteback/branded-twin_packages_version-engine_src_bump-versions.workflow.ts/packages/version-engine/src/probe-decision.workflow.ts",
+        "snippet": "import * as Result from 'effect/Result'\nimport * as S from 'effect/Schema'\n\nconst ProbeCommand = S.Struct({ n: S.Number })\n\nexport const probeDecision = (command: S.Schema.Type<typeof ProbeCommand>): Result.Result<number, never> => {\n  if (command.n > 0) {\n    return Result.succeed(1)\n  }\n  return Result.succeed(0)\n}\n",
+        "ts": "2026-09-11T05:53:09.429Z"
+      }
     },
     {
       "id": "observed-interaction:packages/version-engine/src/bump.ts",
