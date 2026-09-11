@@ -1,7 +1,7 @@
 import { Context, type Effect } from 'effect'
-import type { Intent, IntentRefusal } from './Intent.schema.ts'
-import type { NewIntentDecision, NewIntentRefusal, NewIntentRequest } from './NewIntent.schema.ts'
-import type { Count, RelativePath, RootFile } from './Workspace.schema.ts'
+import type { Intent, IntentRefusal } from './Intent.schema.js'
+import type { NewIntentDecision, NewIntentRefusal, NewIntentRequest } from './NewIntent.schema.js'
+import type { Count, RelativePath, RootFile } from './Workspace.schema.js'
 
 export interface ChangesetStore {
   readonly listIntents: () => Effect.Effect<

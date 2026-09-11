@@ -1,5 +1,6 @@
-import { basename, join } from '@std/path'
-import { type CommandRecord, IMAGE, startWorld, type World } from './harness.ts'
+import { NodeFileSystem } from '@effect/platform-node'
+import { Effect, FileSystem } from 'effect'
+import { type CommandRecord, IMAGE, startWorld, type World } from './harness.js'
 
 export interface PhaseResult {
   name: string
@@ -11,7 +12,7 @@ export interface PhaseResult {
 export interface SessionOptions {
   repoRoot: string
   artifacts: string
-  filter?: string
+  filter?: string | undefined
   keep: boolean
 }
 
@@ -20,8 +21,14 @@ const firstLine = (value: string): string => value.split('\n').find((line) => li
 const drawable = (command: string): string => {
   const line = firstLine(command)
   const script = /'([^']*\/tools\/[^']*\.ts)'/.exec(line)
-  if (script !== null) return line.replace(script[0], basename(script[1]))
-  return line.length > 100 ? `${line.slice(0, 97)}...` : line
+  if (script !== null) {
+    const captured = script[1] ?? script[0]
+    const segments = captured.split('/')
+    const last = segments[segments.length - 1] ?? captured
+    return line.replace(script[0], last)
+  }
+  if (line.length > 100) return `${line.slice(0, 97)}...`
+  return line
 }
 
 const rule = (label: string): string => {
@@ -30,21 +37,19 @@ const rule = (label: string): string => {
 }
 
 class Writer {
-  private readonly encoder = new TextEncoder()
-
-  constructor(
-    private readonly transcript: Deno.FsFile,
-    private readonly commands: Deno.FsFile,
-  ) {}
+  private transcript = ''
+  private commands: string[] = []
 
   say(text: string): void {
-    this.transcript.writeSync(this.encoder.encode(`${text}\n`))
+    this.transcript += `${text}\n`
   }
 
   command(record: CommandRecord): void {
-    const head = `${record.code === 0 ? '→' : '✗'} ${drawable(record.command)}  exit ${record.code}  ` +
-      `${record.durationMs}ms  cwd ${record.cwd}`
-    const lines = [head]
+    let mark = '✗'
+    if (record.code === 0) mark = '→'
+    const lines = [
+      `${mark} ${drawable(record.command)}  exit ${record.code}  ${record.durationMs}ms  cwd ${record.cwd}`,
+    ]
     if (record.stdout.trim().length > 0) {
       lines.push(...record.stdout.trimEnd().split('\n').map((line) => `    | ${line}`))
     }
@@ -52,12 +57,21 @@ class Writer {
       lines.push(...record.stderr.trimEnd().split('\n').map((line) => `    ! ${line}`))
     }
     this.say(lines.join('\n'))
-    this.commands.writeSync(this.encoder.encode(`${JSON.stringify(record)}\n`))
+    this.commands.push(`${JSON.stringify(record)}\n`)
   }
 
-  close(): void {
-    this.transcript.close()
-    this.commands.close()
+  writeAll(artifacts: string, extra: ReadonlyArray<readonly [string, string]>): Promise<void> {
+    const files: Array<[string, string]> = [
+      [`${artifacts}/transcript.log`, this.transcript],
+      [`${artifacts}/commands.jsonl`, this.commands.join('')],
+    ]
+    for (const [name, content] of extra) files.push([name, content])
+    const program = Effect.gen(function*() {
+      const fs = yield* FileSystem.FileSystem
+      yield* fs.makeDirectory(artifacts, { recursive: true })
+      for (const [name, content] of files) yield* fs.writeFileString(name, content)
+    })
+    return Effect.runPromise(Effect.provide(program, NodeFileSystem.layer))
   }
 }
 
@@ -73,22 +87,18 @@ export class Session {
   ) {}
 
   static async open(options: SessionOptions): Promise<Session> {
-    const writer = new Writer(
-      Deno.openSync(join(options.artifacts, 'transcript.log'), { create: true, append: true, write: true }),
-      Deno.openSync(join(options.artifacts, 'commands.jsonl'), { create: true, append: true, write: true }),
-    )
+    const writer = new Writer()
     const world = await startWorld(options.repoRoot, { command: (record) => writer.command(record) })
     const session = new Session(options, world, writer)
     world.currentPhase = 'startup'
-    writer.say(
-      [
-        `container ${world.containerId} up (image ${IMAGE})`,
-        `transcript: ${join(options.artifacts, 'transcript.log')}`,
-        options.filter === undefined
-          ? ''
-          : `filter: only phases containing "${options.filter}" run, the rest are skipped`,
-      ].filter((line) => line.length > 0).join('\n'),
-    )
+    const header = [
+      `container ${world.containerId} up (image ${IMAGE})`,
+      `transcript: ${options.artifacts}/transcript.log`,
+    ]
+    if (options.filter !== undefined) {
+      header.push(`filter: only phases containing "${options.filter}" run, the rest are skipped`)
+    }
+    writer.say(header.join('\n'))
     return session
   }
 
@@ -115,7 +125,8 @@ export class Session {
       this.writer.say(`   ✓ ${durationMs}ms`)
     } catch (error) {
       const durationMs = Math.round(performance.now() - started)
-      const message = error instanceof Error ? error.message : String(error)
+      let message = 'unknown error'
+      if (error instanceof Error) message = error.message
       const failure: PhaseResult = { name, status: 'failed', durationMs, error: message }
       this.results.push(failure)
       this.failure = failure
@@ -129,75 +140,74 @@ export class Session {
     this.closed = true
 
     const failed = this.failure !== null
-    const keep = this.options.keep || (failed && Deno.env.get('CI') === undefined)
+    const keep = this.options.keep || (failed && process.env['CI'] === undefined)
 
+    const extra: Array<[string, string]> = []
     if (keep) {
       this.world.keepAlive()
       try {
         const snapshot = await this.world.snapshot()
-        await Deno.writeTextFile(
-          join(this.options.artifacts, 'state.json'),
-          `${JSON.stringify(snapshot, null, 2)}\n`,
-        )
-        await Deno.writeTextFile(
-          join(this.options.artifacts, 'fixture.tar.gz.b64'),
-          `${await this.world.archive()}\n`,
-        )
+        extra.push([`${this.options.artifacts}/state.json`, `${JSON.stringify(snapshot, null, 2)}\n`])
+        extra.push([`${this.options.artifacts}/fixture.tar.gz.b64`, `${await this.world.archive()}\n`])
       } catch (error) {
-        this.writer.say(`state capture failed: ${error instanceof Error ? error.message : String(error)}`)
+        if (error instanceof Error) this.writer.say(`state capture failed: ${error.message}`)
+        else this.writer.say('state capture failed: unknown error')
       }
     }
 
-    await Deno.writeTextFile(
-      join(this.options.artifacts, 'summary.json'),
+    let failedName: string | null = null
+    if (this.failure !== null) failedName = this.failure.name
+    extra.push([
+      `${this.options.artifacts}/summary.json`,
       `${
         JSON.stringify(
-          {
-            image: IMAGE,
-            container: this.world.containerId,
-            kept: keep,
-            phases: this.results,
-            failed: this.failure?.name ?? null,
-          },
+          { image: IMAGE, container: this.world.containerId, kept: keep, phases: this.results, failed: failedName },
           null,
           2,
         )
       }\n`,
-    )
+    ])
+    await this.writer.writeAll(this.options.artifacts, extra)
 
     const passed = this.results.filter((result) => result.status === 'passed').length
     const skipped = this.results.filter((result) => result.status === 'skipped').length
 
-    this.writer.say(
-      [
-        '',
-        rule(failed ? `failed: ${this.failure?.name}` : 'passed'),
-        ...this.results.map((result) =>
-          `   ${result.status === 'passed' ? '✓' : result.status === 'skipped' ? '–' : '✗'} ` +
-          `${result.name} (${result.durationMs}ms)`
-        ),
-        `   ${passed} passed, ${this.results.length - passed - skipped} failed, ${skipped} skipped`,
-        '',
-        `artifacts: ${this.options.artifacts}`,
-        '  transcript.log   every command with its exit code, output and stream position',
-        '  commands.jsonl   the same, machine readable',
-        '  summary.json     phases, statuses and timings',
-        ...(keep
-          ? [
-            '  state.json       git log, versions, changesets, registry and emulated GitHub at the end',
-            '  fixture.tar.gz.b64  the fixture that produced this result',
-          ]
-          : []),
-        '',
-        `container: ${this.world.containerId}${keep ? ' (kept alive)' : ''}`,
-        keep ? `  reattach: docker exec -it ${this.world.containerId} sh  (this host routes docker to podman)` : '',
-        `  one phase: E2E_FILTER='${this.failure?.name ?? '<substring>'}' deno task e2e`,
-        '  keep a passing world: E2E_KEEP=1 deno task e2e',
-      ].filter((line) => line.length > 0).join('\n'),
+    let title = 'passed'
+    if (failed) title = `failed: ${this.failure?.name ?? 'unknown phase'}`
+    const lines = ['', rule(title)]
+    for (const result of this.results) {
+      if (result.status === 'passed') lines.push(`   ✓ ${result.name} (${result.durationMs}ms)`)
+      else if (result.status === 'skipped') lines.push(`   – ${result.name} (${result.durationMs}ms)`)
+      else lines.push(`   ✗ ${result.name} (${result.durationMs}ms)`)
+    }
+    lines.push(
+      `   ${passed} passed, ${this.results.length - passed - skipped} failed, ${skipped} skipped`,
+      '',
+      `artifacts: ${this.options.artifacts}`,
+      '  transcript.log   every command with its exit code, output and stream position',
+      '  commands.jsonl   the same, machine readable',
+      '  summary.json     phases, statuses and timings',
     )
+    if (keep) {
+      lines.push(
+        '  state.json       git log, versions, changesets, registry and emulated GitHub at the end',
+        '  fixture.tar.gz.b64  the fixture that produced this result',
+      )
+    }
+    lines.push('')
+    let containerLine = `container: ${this.world.containerId}`
+    if (keep) containerLine += ' (kept alive)'
+    lines.push(containerLine)
+    if (keep) {
+      lines.push(`  reattach: docker exec -it ${this.world.containerId} sh  (this host routes docker to podman)`)
+    }
+    lines.push(
+      `  one phase: E2E_FILTER='${failedName ?? '<substring>'}' pnpm --filter @systemfsoftware/e2e test`,
+      '  keep a passing world: E2E_KEEP=1 pnpm --filter @systemfsoftware/e2e test',
+    )
+    this.writer.say(lines.join('\n'))
 
     this.writer.say('   (end of transcript)')
-    this.writer.close()
     await this.world.stop()
   }
 

@@ -1,5 +1,5 @@
 import { Context, type Effect } from 'effect'
-import type { ProcessCompleted, PublishRefusal, WorkspaceCommand } from './Publish.schema.ts'
+import type { ProcessCompleted, PublishRefusal, WorkspaceCommand } from './Publish.schema.js'
 
 export interface ProcessPort {
   readonly runCommand: (

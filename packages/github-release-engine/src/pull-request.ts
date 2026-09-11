@@ -41,7 +41,7 @@ import {
   type PullRequestReleaseOpened,
   type PullRequestReleaseRefreshed,
   type PullRequestReleaseVacant,
-} from './pull-request.workflow.ts'
+} from './pull-request.workflow.js'
 
 export const PullRequestRequest = Wire.wire({
   title: Wire.mint(PrTitle),
@@ -206,9 +206,9 @@ const write = (
           yield* forge.updatePullRequest(raw.slug, updated.number, raw.title, raw.body, raw.labels)
           return updated
         })),
-      Match.tag('PullRequestVacant', (vacant) =>
-        raw.pending > 0
-          ? Effect.gen(function*() {
+      Match.tag('PullRequestVacant', (vacant) => {
+        if (raw.pending > 0) {
+          return Effect.gen(function*() {
             yield* git.commitAll(raw.title)
             yield* git.pushBranch(raw.branch, raw.remote)
             const number = yield* forge.createPullRequest(
@@ -221,7 +221,9 @@ const write = (
             )
             return PullRequestCreated.make({ number })
           })
-          : Effect.succeed(vacant)),
+        }
+        return Effect.succeed(vacant)
+      }),
       Match.tag('PullRequestCreated', (created) => Effect.succeed(created)),
       Match.exhaustive,
     )

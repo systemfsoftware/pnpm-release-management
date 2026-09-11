@@ -3,7 +3,7 @@ import { Count, PackageVersion, RelativePath, SyncDrift } from '@systemfsoftware
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import { SyncCommand } from './sync.schema.ts'
+import { SyncCommand } from './sync.schema.js'
 
 const SyncDecisionTypeId: unique symbol = Symbol.for(
   '@systemfsoftware/pnpm-release-management/SyncDecision',

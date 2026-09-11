@@ -14,14 +14,10 @@
     "**/node_modules",
     "**/dist",
     "**/*-lock.json",
-    "deno.lock",
     "pnpm-lock.yaml",
     "coverage/**",
     "reports/**",
-    "**/snapshots/*.md",
-    "e2e/fixtures/**",
-    ".direnv/**",
-    "result"
+    "**/snapshots/*.md"
   ],
   "plugins": [
     "https://plugins.dprint.dev/typescript-0.96.1.wasm",

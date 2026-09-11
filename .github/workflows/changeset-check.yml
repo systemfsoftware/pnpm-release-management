@@ -14,7 +14,7 @@ on:
         type: string
         default: ""
       deno-version:
-        description: deno version used for the tools
+        description: reserved, unused; kept so existing callers keep working
         required: false
         type: string
         default: v2.x
@@ -35,26 +35,27 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7
         with:
           repository: systemfsoftware/pnpm-release-management
           ref: ${{ inputs.tools-ref }}
           path: .release-tools
-
-      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2
-        with:
-          deno-version: ${{ inputs.deno-version }}
 
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
 
+      - name: Build the release tools
+        run: |
+          pnpm --dir .release-tools install --frozen-lockfile
+          pnpm --dir .release-tools build
+
       - name: Require an intent for every publishable-package change
         run: |
-          ./release-tools/apps/changeset-management/main.ts check \
+          node .release-tools/apps/changeset-management/dist/main.js check \
             "${{ inputs.base-sha || github.event.pull_request.base.sha }}"

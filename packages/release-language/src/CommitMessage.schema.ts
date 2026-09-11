@@ -1,5 +1,5 @@
 import * as S from 'effect/Schema'
-import { Count } from './Workspace.schema.ts'
+import { Count } from './Workspace.schema.js'
 
 export const CommitType = S.Literals([
   'ai',

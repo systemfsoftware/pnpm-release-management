@@ -32,23 +32,25 @@ export const makeFakeWorkspaceStore = (
     readManifest: (dir: RelativePath) =>
       Effect.suspend(() => {
         const found = liveMembers.find((member) => member.dir === dir)
-        return found === undefined
-          ? Effect.flatMap(
+        if (found === undefined) {
+          return Effect.flatMap(
             mustBrand(FsPath, dir),
             (path): Effect.Effect<PackageManifest, MemberRefusal> => Effect.fail({ _tag: 'ManifestUnreadable', path }),
           )
-          : Effect.succeed(found.manifest)
+        }
+        return Effect.succeed(found.manifest)
       }),
     readFileFromRoot: (path: RelativePath) =>
       Effect.suspend(() => {
         const text = liveFiles.get(path)
-        return text === undefined
-          ? Effect.flatMap(
+        if (text === undefined) {
+          return Effect.flatMap(
             mustBrand(FsPath, path),
             (fsPath): Effect.Effect<RootFile, MemberRefusal> =>
               Effect.fail({ _tag: 'ManifestUnreadable', path: fsPath }),
           )
-          : Effect.succeed({ path, text })
+        }
+        return Effect.succeed({ path, text })
       }),
   })
   return { layer, state: { members: liveMembers, files: liveFiles } }

@@ -3,7 +3,7 @@ import { PackageVersion, PinName, RepoRoot } from '@systemfsoftware/release-lang
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import { PinRootManifestCommand } from './pin-root-manifest.schema.ts'
+import { PinRootManifestCommand } from './pin-root-manifest.schema.js'
 
 const PinDecisionTypeId: unique symbol = Symbol.for(
   '@systemfsoftware/pnpm-release-management/PinDecision',

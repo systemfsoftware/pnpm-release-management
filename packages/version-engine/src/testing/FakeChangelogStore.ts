@@ -26,9 +26,10 @@ export const makeFakeChangelogStore = (
     readRootChangelog: (path: RelativePath) =>
       Effect.suspend(() => {
         const text = rootChangelogs.get(path)
-        return text === undefined
-          ? Effect.fail({ _tag: 'ChangelogUnreadable', path } as const)
-          : Effect.succeed({ path, text })
+        if (text === undefined) {
+          return Effect.fail({ _tag: 'ChangelogUnreadable', path } as const)
+        }
+        return Effect.succeed({ path, text })
       }),
     appendReleaseSummary: (append: RootChangelogAppend) =>
       Effect.sync(() => {

@@ -1,7 +1,7 @@
 import { Effect } from 'effect'
 import * as S from 'effect/Schema'
 import * as SchemaGetter from 'effect/SchemaGetter'
-import { FsPath, GitRef, HttpUrl, RelativePath } from './Workspace.schema.ts'
+import { FsPath, GitRef, HttpUrl, RelativePath } from './Workspace.schema.js'
 
 export const TaskName = S.NonEmptyString.pipe(S.brand('TaskName'))
 export type TaskName = S.Schema.Type<typeof TaskName>
@@ -170,7 +170,7 @@ export const ReleaseConfig = ReleaseConfigWire.pipe(
           `${wire.changesetDir}/changelogs`,
       }),
     ),
-    encode: SchemaGetter.transformOrFail((full) => S.decodeUnknownEffect(ReleaseConfigWire)(full).pipe(Effect.orDie)),
+    encode: SchemaGetter.transformOrFail((full) => S.decodeEffect(ReleaseConfigWire)(full).pipe(Effect.orDie)),
   }),
 )
 export type ReleaseConfig = S.Schema.Type<typeof ReleaseConfig>

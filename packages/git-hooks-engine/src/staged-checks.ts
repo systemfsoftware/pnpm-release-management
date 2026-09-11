@@ -5,8 +5,10 @@ import { Effect } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import type { StagedChecksIdle, StagedChecksRan, StagedChecksSkipped } from './staged-checks.workflow.ts'
-import { stagedChecks, StagedChecksCommand } from './staged-checks.workflow.ts'
+import { MergeChecksSkippedWire, StagedChecksPassedWire, StagedVacantWire } from './staged-checks.schema.js'
+import type { DecisionWire } from './staged-checks.schema.js'
+import type { StagedChecksIdle, StagedChecksRan, StagedChecksSkipped } from './staged-checks.workflow.js'
+import { stagedChecks, StagedChecksCommand } from './staged-checks.workflow.js'
 
 const FORMATTABLE = /\.(ts|mjs|cjs|js|json|jsonc|md|ya?ml|toml)$/
 
@@ -46,26 +48,18 @@ const decode = (
     scripts: [...raw.scripts],
   })
 
-type DecisionWire =
-  | {
-    readonly _tag: 'StagedChecksPassed'
-    readonly staged: number
-    readonly checks: ReadonlyArray<CheckKind>
-  }
-  | { readonly _tag: 'StagedVacant'; readonly staged: number }
-  | { readonly _tag: 'MergeChecksSkipped'; readonly staged: number }
-
 const decisionWire = (
   decision: StagedChecksRan | StagedChecksIdle | StagedChecksSkipped,
-): DecisionWire => {
-  if (decision._tag === 'StagedChecksRan') {
-    return { _tag: 'StagedChecksPassed', staged: decision.staged, checks: decision.checks }
-  }
-  if (decision._tag === 'StagedChecksIdle') {
-    return { _tag: 'StagedVacant', staged: decision.staged }
-  }
-  return { _tag: 'MergeChecksSkipped', staged: decision.staged }
-}
+): DecisionWire =>
+  Match.value(decision).pipe(
+    Match.tag(
+      'StagedChecksRan',
+      (ran) => StagedChecksPassedWire.make({ staged: ran.staged, checks: [...ran.checks] }),
+    ),
+    Match.tag('StagedChecksIdle', (idle) => StagedVacantWire.make({ staged: idle.staged })),
+    Match.tag('StagedChecksSkipped', (skipped) => MergeChecksSkippedWire.make({ staged: skipped.staged })),
+    Match.exhaustive,
+  )
 
 const encode = (
   outcome: Result.Result<StagedChecksRan | StagedChecksIdle | StagedChecksSkipped, StagedChecksRefusal>,
@@ -120,22 +114,26 @@ const write = (
   if (Result.isFailure(output)) return Effect.fail(output.failure)
   return Effect.flatMap(
     S.decodeUnknownEffect(StagedChecksDecision)(output.success),
-    (decision): Effect.Effect<StagedChecksDecision, S.SchemaError | StagedChecksRefusal, ProcessPort> => {
-      if (decision._tag !== 'StagedChecksPassed') return Effect.succeed(decision)
-      return Effect.gen(function*() {
-        const process = yield* ProcessPort
-        yield* Effect.forEach(decision.checks, (kind) =>
-          Effect.flatMap(
-            workspaceCommand(kind, raw),
-            (command) =>
-              Effect.mapError(
-                process.runCommand(command),
-                (refusal) => refusedAs(kind, command, publishReason(refusal)),
-              ),
-          ))
-        return decision
-      })
-    },
+    (decision): Effect.Effect<StagedChecksDecision, S.SchemaError | StagedChecksRefusal, ProcessPort> =>
+      Match.value(decision).pipe(
+        Match.tag('StagedVacant', (vacant) => Effect.succeed(vacant)),
+        Match.tag('MergeChecksSkipped', (skipped) => Effect.succeed(skipped)),
+        Match.tag('StagedChecksPassed', (passed) =>
+          Effect.gen(function*() {
+            const process = yield* ProcessPort
+            yield* Effect.forEach(passed.checks, (kind) =>
+              Effect.flatMap(
+                workspaceCommand(kind, raw),
+                (command) =>
+                  Effect.mapError(
+                    process.runCommand(command),
+                    (refusal) => refusedAs(kind, command, publishReason(refusal)),
+                  ),
+              ))
+            return passed
+          })),
+        Match.exhaustive,
+      ),
   )
 }
 

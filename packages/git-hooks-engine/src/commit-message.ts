@@ -4,21 +4,17 @@ import { Effect } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import { commitMessage, CommitMessageCommand } from './commit-message.workflow.ts'
-import type { CommitAllowed, CommitRefusal, CommitWaived } from './commit-message.workflow.ts'
+import { CommitAcceptedWire, CommitIgnoredWire, CommitRejected } from './commit-message.schema.js'
+import type { DecisionWire } from './commit-message.schema.js'
+import { commitMessage, CommitMessageCommand } from './commit-message.workflow.js'
+import type { CommitAllowed, CommitRefusal, CommitWaived } from './commit-message.workflow.js'
+
+export { CommitRejected }
 
 export const CommitMessageInput = Wire.wire({
   raw: Wire.mint(S.String),
   staged: Wire.mint(S.Array(S.String)),
 })
-
-export class CommitRejected extends S.TaggedClass<CommitRejected>()(
-  'CommitRejected',
-  {
-    refusal: CommitMessageRefusal,
-    problem: S.String,
-  },
-) {}
 
 const TYPE_NAMES = [
   'ai',
@@ -100,25 +96,17 @@ const decode = (
     staged: raw.input.staged,
   })
 
-type DecisionWire =
-  | {
-    readonly _tag: 'CommitAccepted'
-    readonly type: string
-    readonly scope?: string | undefined
-    readonly subject: string
-  }
-  | { readonly _tag: 'CommitIgnored'; readonly kind: string }
-
-const decisionWire = (decision: CommitAllowed | CommitWaived): DecisionWire => {
-  if (decision._tag === 'CommitWaived') {
-    return { _tag: 'CommitIgnored', kind: decision.kind }
-  }
-  if (decision.scope === undefined) {
-    return { _tag: 'CommitAccepted', type: decision.type, subject: decision.subject }
-  }
-  return { _tag: 'CommitAccepted', type: decision.type, scope: decision.scope, subject: decision.subject }
-}
-
+const decisionWire = (decision: CommitAllowed | CommitWaived): DecisionWire =>
+  Match.value(decision).pipe(
+    Match.tag('CommitWaived', (waived) => CommitIgnoredWire.make({ kind: waived.kind })),
+    Match.tag('CommitAllowed', (allowed) => {
+      if (allowed.scope === undefined) {
+        return CommitAcceptedWire.make({ type: allowed.type, subject: allowed.subject })
+      }
+      return CommitAcceptedWire.make({ type: allowed.type, scope: allowed.scope, subject: allowed.subject })
+    }),
+    Match.exhaustive,
+  )
 const encode = (
   outcome: Result.Result<CommitAllowed | CommitWaived, CommitRefusal>,
 ): Result.Result<DecisionWire, CommitRefusal> => Result.map(outcome, decisionWire)

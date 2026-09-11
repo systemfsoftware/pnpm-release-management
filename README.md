@@ -22,22 +22,25 @@ apps/
   npm-publish-management/     npm publish | status | trust
   github-release-management/  release plan | pr | tag | release
   git-hooks/                  hooks pre-commit | commit-msg
-packages/release-shared/      the shared library every app imports by name
-e2e/                          the containerised pipeline test
+packages/*/                   the libraries every app imports by name
+apps/*/dist/main.js           the tsdown bundles the workflows and the e2e image run
+e2e/                          the containerised pipeline test (vitest)
 ```
 
-Apps are Deno executables with the permissions they need in their shebang, so a
-workflow runs one directly:
+Apps are Node programs built with tsdown into self-contained ESM bundles, so a
+workflow builds the tools once and runs one directly:
 
 ```bash
-./release-tools/apps/github-release-management/main.ts plan --output "$GITHUB_OUTPUT"
+pnpm --dir .release-tools install --frozen-lockfile
+pnpm --dir .release-tools build
+node .release-tools/apps/github-release-management/dist/main.js plan --output "$GITHUB_OUTPUT"
 ```
 
 Subcommands are declared with `Flag`/`Argument`, handlers return an
-`Effect` whose failure channel is `ToolError`, and `main.ts` holds the one
-`DenoRuntime.runMain` edge. A `ToolError` surfaces as a `::error::` workflow
-annotation and a non-zero exit; a refusal that has already explained itself on
-stderr just exits non-zero.
+`Effect` whose failure channel is `ToolError`, and the entry module holds the
+one `NodeRuntime.runMain` edge. A `ToolError` surfaces as a `::error::`
+workflow annotation and a non-zero exit; a refusal that has already explained
+itself on stderr just exits non-zero.
 
 ## What it does
 
@@ -178,7 +181,7 @@ Alpha grows a public export.
 Author one with `changeset new` rather than by hand:
 
 ```bash
-apps/changeset-management/main.ts new @scope/alpha --bump minor \
+node apps/changeset-management/dist/main.js new @scope/alpha --bump minor \
   --summary "Alpha grows a public export"
 ```
 
@@ -228,55 +231,80 @@ step so all three agree on what this cycle owns.
 
 ## CI
 
-| Workflow              | Inputs                                                       | Caller must grant                                            |
-| --------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
-| `release.yml`         | `tools-ref`, `artifacts-dir`, `node-version`, `deno-version` | `contents: write`, `pull-requests: write`, `id-token: write` |
-| `changeset-check.yml` | `tools-ref`, `base-sha`, `deno-version`, `node-version`      | `contents: read`, `pull-requests: read`                      |
+| Workflow              | Inputs                                       | Caller must grant                                            |
+| --------------------- | -------------------------------------------- | ------------------------------------------------------------ |
+| `release.yml`         | `tools-ref`, `artifacts-dir`, `node-version` | `contents: write`, `pull-requests: write`, `id-token: write` |
+| `changeset-check.yml` | `tools-ref`, `base-sha`, `node-version`      | `contents: read`, `pull-requests: read`                      |
 
 `tools-ref` pins the revision of this repository that a release runs from;
 `@main` tracks the tip. Both workflows check this repository out into
-`.release-tools` and run its apps against the caller's workspace.
+`.release-tools`, build it with pnpm, and run its `dist/main.js` bundles
+against the caller's workspace. (`deno-version` is still accepted as an input
+so existing callers keep working, but nothing installs Deno to run the tools.)
 
 The publish job needs an npm trusted publisher configured for the repository, as
 `pnpm publish --provenance` is keyless OIDC. A package that has never been
 published cannot be debuted by OIDC: run `npm trust` once, register its trusted
 publisher, and the next push publishes it.
 
-## Local gates
+## Install, build, test, package
 
-| Command            | What it runs                                                |
-| ------------------ | ----------------------------------------------------------- |
-| `deno task check`  | `deno check` over every app, the shared package and the e2e |
-| `deno task lint`   | `deno lint` over the whole tree                             |
-| `deno task format` | `dprint fmt`                                                |
-| `deno task ci`     | all of the above plus the test suite                        |
-| `deno task e2e`    | the containerised pipeline (see below)                      |
+Enter the dev shell (`direnv allow`, or `nix develop`) for node, pnpm and
+deno, then:
 
-The repository is Deno-only: no `package.json`, no `node_modules`, no second
-lockfile. `deno.json` is the single manifest, and everything — including the
-pure cores' types — is checked by `deno check`.
+| Command             | What it runs                                             |
+| ------------------- | -------------------------------------------------------- |
+| `pnpm install`      | install the workspace (`--frozen-lockfile` in CI)        |
+| `pnpm build`        | turbo: tsdown bundles every package and app              |
+| `pnpm typecheck`    | turbo: `tsc --noEmit` over every package and app         |
+| `pnpm lint`         | turbo: oxlint with the strict preset over the whole tree |
+| `pnpm format:check` | `dprint check`                                           |
+| `pnpm test`         | turbo: the vitest suites                                 |
+| `pnpm check:ci`     | all of the above, the same gate CI runs                  |
+
+Each app builds to a self-contained ESM bundle at
+`apps/<app>/dist/main.js` (npm dependencies inlined, so nothing resolves at
+ship time). Packaging wraps that bundle with `deno compile`:
+
+```bash
+deno compile --allow-read --allow-write --allow-run --allow-env --allow-net --allow-sys \
+  --output dist/<app> dist/main.js
+```
+
+`nix build` produces the same binaries; Deno is the packager here, never the
+runtime. Run an app from its bundle or its binary:
+
+```bash
+node apps/changeset-management/dist/main.js --help
+./apps/changeset-management/dist/changeset-management --help
+```
 
 ## End-to-end test
 
-`deno task e2e` builds one container and drives the entire pipeline in it: a
-two-package pnpm workspace, a bare git origin, a GitHub API mock, and a local
-registry. Fourteen phases run in order and each one's failure names itself.
+`pnpm --filter @systemfsoftware/e2e test` builds one container and drives the
+entire pipeline in it: a two-package pnpm workspace, a bare git origin, a
+GitHub API mock, and a local registry. Fourteen phases run in order under
+vitest and each one's failure names itself.
 
-What the container proves is broader than the apps. `git`, `pnpm`, `node` and
-`deno` are the real binaries; the workspace is a real pnpm workspace with a real
-lockfile; the release PR, tags and Releases go through real git and a real HTTP
-API surface.
+The image builds the workspace with pnpm (`pnpm install --frozen-lockfile`,
+`pnpm build`, then the `package` task that runs `deno compile` over each
+bundle) and ships the five app binaries at `/opt/prm/<app>`. The phases drive
+those binaries, never app source, so the test proves what actually ships.
+
+What the container proves is broader than the apps. `git`, `pnpm` and `node`
+are the real binaries; the workspace is a real pnpm workspace with a real
+lockfile; the release PR, tags and Releases go through real git and a real
+HTTP API surface.
 
 The container is hermetic without weakening the apps. `api.github.com` and
 `registry.npmjs.org` are redirected to `127.0.0.1` inside the container by
-`withExtraHosts`, and a TLS front door on port 443 terminates a certificate
-signed by a CA the image installs into the system trust store. The apps
-therefore run with their production permissions — `--allow-net=api.github.com`
-for the GitHub apps, `--allow-net=registry.npmjs.org` for the registry apps —
-and with production URLs. No app carries a `localhost` grant, and no test-only
-base URL exists to forget to remove.
+`withExtraHosts`, and a TLS front door on port 443 (plain Node, no runtime
+grants to widen) terminates a certificate signed by a CA the image installs
+into the system trust store. The apps therefore talk to their production URLs
+with no `localhost` behaviour anywhere: no app carries a test-only host, and
+no test-only base URL exists to forget to remove.
 
-Green and red runs alike leave a transcript:
+Green and red runs alike leave a transcript under `e2e/.artifacts/<timestamp>/`:
 
 | Artifact         | Contents                                    |
 | ---------------- | ------------------------------------------- |
@@ -285,8 +313,8 @@ Green and red runs alike leave a transcript:
 | `summary.json`   | phase names, statuses and timings           |
 
 ```bash
-E2E_FILTER='publish lands' deno task e2e   # run only matching phases
-E2E_KEEP=1 deno task e2e                  # leave the container up and print its id
+E2E_FILTER='publish lands' pnpm --filter @systemfsoftware/e2e test   # run only matching phases
+E2E_KEEP=1 pnpm --filter @systemfsoftware/e2e test                  # leave the container up and print its id
 ```
 
 ## Contributing

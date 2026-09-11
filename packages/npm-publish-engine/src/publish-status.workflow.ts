@@ -3,7 +3,7 @@ import { PackageName, PackageVersion, StatusClass } from '@systemfsoftware/relea
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import { StatusMode } from './status.schema.ts'
+import { StatusMode } from './status.schema.js'
 
 const PublishStatusDecisionTypeId: unique symbol = Symbol.for(
   '@systemfsoftware/npm-publish-engine/PublishStatusDecision',

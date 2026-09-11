@@ -1,5 +1,5 @@
 import * as S from 'effect/Schema'
-import { Count, PackageName, PackageVersion, RelativePath } from './Workspace.schema.ts'
+import { Count, PackageName, PackageVersion, RelativePath } from './Workspace.schema.js'
 
 const VersionDecisionTypeId: unique symbol = Symbol.for(
   '@systemfsoftware/pnpm-release-management/VersionDecision',

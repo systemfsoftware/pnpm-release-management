@@ -33,9 +33,10 @@ export const makeFakeChangesetStore = (
     readIntent: (path: RelativePath) =>
       Effect.suspend(() => {
         const found = intents.get(path)
-        return found === undefined
-          ? Effect.fail({ _tag: 'IntentFrontmatterMalformed', path } as const)
-          : Effect.succeed(found)
+        if (found === undefined) {
+          return Effect.fail({ _tag: 'IntentFrontmatterMalformed', path } as const)
+        }
+        return Effect.succeed(found)
       }),
     writeIntent: (request: NewIntentRequest) =>
       Effect.flatMap(

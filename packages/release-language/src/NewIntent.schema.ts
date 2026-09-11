@@ -6,8 +6,8 @@ import {
   IntentSlugTaken,
   IntentSummary,
   IntentUnknownPackage,
-} from './Intent.schema.ts'
-import { PackageName, RelativePath } from './Workspace.schema.ts'
+} from './Intent.schema.js'
+import { PackageName, RelativePath } from './Workspace.schema.js'
 
 export const NewIntentRequest = S.Struct({
   packages: S.NonEmptyArray(PackageName),

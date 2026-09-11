@@ -1,5 +1,5 @@
 import * as S from 'effect/Schema'
-import { FsPath, GitRef } from './Workspace.schema.ts'
+import { FsPath, GitRef } from './Workspace.schema.js'
 
 export const ReleaseLabel = S.NonEmptyString.pipe(S.brand('ReleaseLabel'))
 export type ReleaseLabel = S.Schema.Type<typeof ReleaseLabel>

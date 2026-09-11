@@ -1,5 +1,5 @@
 import * as S from 'effect/Schema'
-import { PackageName, RelativePath } from './Workspace.schema.ts'
+import { PackageName, RelativePath } from './Workspace.schema.js'
 
 export const Bump = S.Literals(['none', 'patch', 'minor', 'major'])
 export type Bump = S.Schema.Type<typeof Bump>

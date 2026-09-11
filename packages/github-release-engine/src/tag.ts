@@ -20,7 +20,7 @@ import { Effect } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import { computeCycle, dropExcluded, nonEmptyArray } from './cycle.ts'
+import { computeCycle, dropExcluded, nonEmptyArray } from './cycle.js'
 import {
   type CapturedListMalformed,
   type ExcludedListMalformed,
@@ -29,7 +29,7 @@ import {
   type TagPackagesPreviewed,
   type TagPackagesPushed,
   type TagPackagesUpToDate,
-} from './tag-packages.workflow.ts'
+} from './tag-packages.workflow.js'
 
 export const TagRequest = Wire.wire({
   captured: Wire.mint(S.optional(FsPath)),
@@ -70,17 +70,36 @@ const read = (
       onFailure: (refusal) => ({ _tag: 'DeferredFailed', refusal }) as const,
       onSuccess: (entries) => ({ _tag: 'DeferredRead', entries }) as const,
     })
-    let excluded: Array<PackageName> = []
-    let excludedIssue: FsPath | undefined = undefined
-    if (deferredOutcome._tag === 'DeferredRead') {
-      excluded = [...deferredOutcome.entries]
-    } else {
-      const refusal = deferredOutcome.refusal
-      if (refusal._tag === 'PlanCapturedMalformed') {
-        excludedIssue = refusal.path
-      } else {
-        return yield* Effect.fail(refusal)
-      }
+    const deferredResult: {
+      readonly excluded: Array<PackageName>
+      readonly excludedIssue: FsPath | undefined
+      readonly deferredFailure: PlanDeferredUnknown | undefined
+    } = Match.value(deferredOutcome).pipe(
+      Match.tag('DeferredRead', (read) => ({
+        excluded: [...read.entries],
+        excludedIssue: undefined,
+        deferredFailure: undefined,
+      })),
+      Match.tag('DeferredFailed', (failed) =>
+        Match.value(failed.refusal).pipe(
+          Match.tag('PlanCapturedMalformed', (malformed) => ({
+            excluded: [],
+            excludedIssue: malformed.path,
+            deferredFailure: undefined,
+          })),
+          Match.tag('PlanDeferredUnknown', (unknown) => ({
+            excluded: [],
+            excludedIssue: undefined,
+            deferredFailure: unknown,
+          })),
+          Match.exhaustive,
+        )),
+      Match.exhaustive,
+    )
+    const excluded = deferredResult.excluded
+    const excludedIssue = deferredResult.excludedIssue
+    if (deferredResult.deferredFailure !== undefined) {
+      return yield* Effect.fail(deferredResult.deferredFailure)
     }
     let cycle: Array<CycleEntry> = []
     let capturedIssue: FsPath | undefined = undefined
@@ -93,15 +112,36 @@ const read = (
         onFailure: (refusal) => ({ _tag: 'CapturedFailed', refusal }) as const,
         onSuccess: (entries) => ({ _tag: 'CapturedRead', entries }) as const,
       })
-      if (capturedOutcome._tag === 'CapturedRead') {
-        cycle = dropExcluded([...capturedOutcome.entries], excluded)
-      } else {
-        const refusal = capturedOutcome.refusal
-        if (refusal._tag === 'PlanCapturedMalformed') {
-          capturedIssue = refusal.path
-        } else {
-          return yield* Effect.fail(refusal)
-        }
+      const capturedResult: {
+        readonly cycle: Array<CycleEntry>
+        readonly capturedIssue: FsPath | undefined
+        readonly capturedFailure: PlanDeferredUnknown | undefined
+      } = Match.value(capturedOutcome).pipe(
+        Match.tag('CapturedRead', (read) => ({
+          cycle: dropExcluded([...read.entries], excluded),
+          capturedIssue: undefined,
+          capturedFailure: undefined,
+        })),
+        Match.tag('CapturedFailed', (failed) =>
+          Match.value(failed.refusal).pipe(
+            Match.tag('PlanCapturedMalformed', (malformed) => ({
+              cycle: [],
+              capturedIssue: malformed.path,
+              capturedFailure: undefined,
+            })),
+            Match.tag('PlanDeferredUnknown', (unknown) => ({
+              cycle: [],
+              capturedIssue: undefined,
+              capturedFailure: unknown,
+            })),
+            Match.exhaustive,
+          )),
+        Match.exhaustive,
+      )
+      cycle = capturedResult.cycle
+      capturedIssue = capturedResult.capturedIssue
+      if (capturedResult.capturedFailure !== undefined) {
+        return yield* Effect.fail(capturedResult.capturedFailure)
       }
     }
     return new RawTag(

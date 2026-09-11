@@ -9,18 +9,20 @@ import {
   type PinRefusal,
   type RepoRoot,
   SurfaceStore,
+  type TargetSuffix,
   type VersionRefusal,
   WorkspaceStore,
 } from '@systemfsoftware/release-language'
 import { Effect } from 'effect'
+import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import { PinnedManifest, PinRootManifestCommand, type PinRootManifestInput } from './pin-root-manifest.schema.ts'
+import { PinnedManifest, PinRootManifestCommand, type PinRootManifestInput } from './pin-root-manifest.schema.js'
 import {
   pinRootManifest,
   type WorkspaceVersionAlreadyCurrent as LocalAlreadyCurrent,
   type WorkspaceVersionRepinned as LocalRepinned,
-} from './pin-root-manifest.workflow.ts'
+} from './pin-root-manifest.workflow.js'
 
 const INDENT = /^(\s+)"/m
 
@@ -38,7 +40,10 @@ const mustBrand = <C extends S.Constraint>(schema: C, input: unknown) =>
 
 const pinIndentOf = (text: string): string | number => text.match(INDENT)?.[1] ?? 2
 
-const describeCause = (cause: unknown): string => cause instanceof Error ? cause.message : 'unparseable JSON'
+const describeCause = (cause: unknown): string => {
+  if (cause instanceof Error) return cause.message
+  return 'unparseable JSON'
+}
 
 const read = (
   input: PinRootManifestInput,
@@ -48,7 +53,7 @@ const read = (
     const file = yield* workspace.readFileFromRoot(input.manifest)
     const path: FsPath = yield* mustBrand(FsPath, input.manifest)
     const parsed: unknown = yield* Effect.try({
-      try: () => JSON.parse(file.text),
+      try: (): unknown => JSON.parse(file.text),
       catch: (cause): PinManifestInvalid => ({
         _tag: 'PinManifestInvalid',
         path,
@@ -58,6 +63,31 @@ const read = (
     return { input, text: file.text, parsed, root: workspace.root }
   })
 
+const suffixNamesOf = (
+  suffixes: ReadonlyArray<string> | undefined,
+  name: string,
+): ReadonlyArray<string> => {
+  if (suffixes === undefined) return []
+  return suffixes.map((suffix) => `${name}-${suffix}`)
+}
+
+const requestedUsableOf = (requestedVersion: string | undefined): PackageVersion | undefined => {
+  if (requestedVersion === undefined) return undefined
+  return Result.getOrUndefined(S.decodeUnknownResult(PackageVersion)(requestedVersion))
+}
+
+const declaredUsableOf = (declaredVersion: string | undefined): PackageVersion | undefined => {
+  if (declaredVersion === undefined) return undefined
+  return Result.getOrUndefined(S.decodeUnknownResult(PackageVersion)(declaredVersion))
+}
+
+const suffixesCopyOf = (
+  suffixes: ReadonlyArray<TargetSuffix> | undefined,
+): ReadonlyArray<TargetSuffix> | undefined => {
+  if (suffixes === undefined) return undefined
+  return [...suffixes]
+}
+
 const decode = (raw: PinRaw) =>
   Result.flatMap(
     S.decodeUnknownResult(S.Record(S.String, S.Unknown))(raw.parsed),
@@ -66,11 +96,7 @@ const decode = (raw: PinRaw) =>
         S.decodeUnknownResult(PinnedManifest)(manifest),
         (pinned) =>
           Result.map(
-            S.decodeUnknownResult(S.Array(PinName))(
-              raw.input.suffixes === undefined
-                ? []
-                : raw.input.suffixes.map((suffix) => `${pinned.name}-${suffix}`),
-            ),
+            S.decodeUnknownResult(S.Array(PinName))(suffixNamesOf(raw.input.suffixes, pinned.name)),
             (pinNames) =>
               PinRootManifestCommand.make({
                 _tag: 'PinRootManifestCommand',
@@ -80,14 +106,10 @@ const decode = (raw: PinRaw) =>
                 indent: pinIndentOf(raw.text),
                 trailingNewline: raw.text.endsWith('\n'),
                 requestedVersion: raw.input.requestedVersion,
-                requestedUsable: raw.input.requestedVersion === undefined
-                  ? undefined
-                  : Result.getOrUndefined(S.decodeUnknownResult(PackageVersion)(raw.input.requestedVersion)),
+                requestedUsable: requestedUsableOf(raw.input.requestedVersion),
                 declaredVersion: pinned.version,
-                declaredUsable: pinned.version === undefined
-                  ? undefined
-                  : Result.getOrUndefined(S.decodeUnknownResult(PackageVersion)(pinned.version)),
-                suffixes: raw.input.suffixes === undefined ? undefined : [...raw.input.suffixes],
+                declaredUsable: declaredUsableOf(pinned.version),
+                suffixes: suffixesCopyOf(raw.input.suffixes),
                 pinNames,
                 repoRoot: raw.root,
               }),
@@ -106,13 +128,17 @@ const write = (
   return Effect.flatMap(
     S.decodeUnknownEffect(PinDecision)(output.success).pipe(Effect.orDie),
     (decision) =>
-      Effect.gen(function*() {
-        if (decision._tag === 'WorkspaceVersionAlreadyCurrent') return decision
-        if (raw.input.dryRun === true) return decision
-        const surfaces = yield* SurfaceStore
-        yield* surfaces.writeRootManifest(raw.input.manifest, decision.text)
-        return decision
-      }),
+      Match.value(decision).pipe(
+        Match.tag('WorkspaceVersionAlreadyCurrent', (current) => Effect.succeed(current)),
+        Match.tag('WorkspaceVersionRepinned', (repinned) =>
+          Effect.gen(function*() {
+            if (raw.input.dryRun === true) return repinned
+            const surfaces = yield* SurfaceStore
+            yield* surfaces.writeRootManifest(raw.input.manifest, repinned.text)
+            return repinned
+          })),
+        Match.exhaustive,
+      ),
   )
 }
 

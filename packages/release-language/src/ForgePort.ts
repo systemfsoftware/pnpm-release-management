@@ -1,15 +1,15 @@
 import { Context, type Effect } from 'effect'
-import type { PrTitle } from './Config.schema.ts'
-import type { GithubReleaseRefusal, ReleaseId, ReleaseLookup } from './GithubRelease.schema.ts'
+import type { PrTitle } from './Config.schema.js'
+import type { GithubReleaseRefusal, ReleaseId, ReleaseLookup } from './GithubRelease.schema.js'
 import type {
   PullRequestLookup,
   PullRequestNumber,
   PullRequestRefusal,
   PullRequestSummary,
   ReleaseLabel,
-} from './PullRequest.schema.ts'
-import type { RepoSlug } from './Tag.schema.ts'
-import type { GitRef, ReleaseTag } from './Workspace.schema.ts'
+} from './PullRequest.schema.js'
+import type { RepoSlug } from './Tag.schema.js'
+import type { GitRef, ReleaseTag } from './Workspace.schema.js'
 
 export interface ForgePort {
   readonly releaseByTag: (

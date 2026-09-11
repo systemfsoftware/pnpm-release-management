@@ -1,0 +1,5 @@
+export { gateChangesCell, type GateReport, GateRequest } from './gate-changes.js'
+export { newIntentCell, NewIntentInput } from './new-intent.js'
+export { fakeChangeEvidencePort } from './testing/FakeChangeEvidencePort.js'
+export { fakeChangesetStore } from './testing/FakeChangesetStore.js'
+export { fakeWorkspaceStore } from './testing/FakeWorkspaceStore.js'

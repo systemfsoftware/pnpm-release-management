@@ -1,5 +1,5 @@
 import * as S from 'effect/Schema'
-import { Count, PackageName, PackageVersion } from './Workspace.schema.ts'
+import { Count, PackageName, PackageVersion } from './Workspace.schema.js'
 
 export const TrustSnapshot = S.Struct({
   name: PackageName,

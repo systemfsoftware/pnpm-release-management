@@ -11,7 +11,7 @@ import {
   type PublishNothingOwed,
   publishPackages,
   type PublishWorkflowDecision,
-} from './publish-packages.workflow.ts'
+} from './publish-packages.workflow.js'
 
 export const PublishRequest = Wire.wire({
   capturedPath: Wire.mint(S.optional(Lang.FsPath)),
@@ -36,11 +36,27 @@ class PublishRaw {
   ) {}
 }
 
-type PublishPlan =
-  | { readonly _tag: 'Dispatch'; readonly decision: PublishDispatched }
-  | { readonly _tag: 'Preview'; readonly decision: PublishDryRun }
-  | { readonly _tag: 'Settled'; readonly decision: PublishNothingOwed }
-  | { readonly _tag: 'Refused'; readonly refusal: Lang.PublishRefusal }
+const PublishDispatchTag = { _tag: 'Dispatch' } as const
+type PublishDispatchTag = typeof PublishDispatchTag
+interface PublishDispatchPlan extends PublishDispatchTag {
+  readonly decision: PublishDispatched
+}
+const PublishPreviewTag = { _tag: 'Preview' } as const
+type PublishPreviewTag = typeof PublishPreviewTag
+interface PublishPreviewPlan extends PublishPreviewTag {
+  readonly decision: PublishDryRun
+}
+const PublishSettledTag = { _tag: 'Settled' } as const
+type PublishSettledTag = typeof PublishSettledTag
+interface PublishSettledPlan extends PublishSettledTag {
+  readonly decision: PublishNothingOwed
+}
+const PublishRefusedTag = { _tag: 'Refused' } as const
+type PublishRefusedTag = typeof PublishRefusedTag
+interface PublishRefusedPlan extends PublishRefusedTag {
+  readonly refusal: Lang.PublishRefusal
+}
+type PublishPlan = PublishDispatchPlan | PublishPreviewPlan | PublishSettledPlan | PublishRefusedPlan
 
 const read = (
   request: PublishRequest,
@@ -70,7 +86,12 @@ const read = (
     return new PublishRaw(request, captured, published, filterLines, command, packages)
   })
 
-const provenanceArgsOf = (provenance: boolean): ReadonlyArray<string> => provenance ? ['--provenance'] : []
+const provenanceArgsOf = (provenance: boolean): ReadonlyArray<string> => {
+  if (provenance === true) {
+    return ['--provenance']
+  }
+  return []
+}
 
 const argsOf = (parts: {
   readonly provenance: boolean
@@ -123,16 +144,14 @@ const encode = (
   outcome: Result.Result<PublishWorkflowDecision, Lang.PublishRefusal>,
 ): PublishPlan => {
   if (Result.isFailure(outcome)) {
-    return { _tag: 'Refused', refusal: outcome.failure }
+    return { _tag: 'Refused', refusal: outcome.failure } as const
   }
-  const decision = outcome.success
-  if (decision._tag === 'PublishNothingOwed') {
-    return { _tag: 'Settled', decision }
-  }
-  if (decision._tag === 'PublishDryRun') {
-    return { _tag: 'Preview', decision }
-  }
-  return { _tag: 'Dispatch', decision }
+  return Match.value(outcome.success).pipe(
+    Match.tag('PublishNothingOwed', (settled) => ({ _tag: 'Settled', decision: settled } as const)),
+    Match.tag('PublishDryRun', (preview) => ({ _tag: 'Preview', decision: preview } as const)),
+    Match.tag('PublishDispatched', (job) => ({ _tag: 'Dispatch', decision: job } as const)),
+    Match.exhaustive,
+  )
 }
 
 const write = (

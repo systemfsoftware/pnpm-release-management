@@ -60,9 +60,10 @@ export const makeFakeForge = (state: FakeForgeState = {}) => {
   const layer = Layer.succeed(ForgePort, {
     releaseByTag: (_repo, tag) => {
       const id = releases.get(tag)
-      return Effect.succeed(
-        id === undefined ? ReleaseAbsent.make({ tag }) : ReleaseFound.make({ id }),
-      )
+      if (id === undefined) {
+        return Effect.succeed(ReleaseAbsent.make({ tag }))
+      }
+      return Effect.succeed(ReleaseFound.make({ id }))
     },
     createRelease: (_repo, tag, body) => {
       const id = ReleaseIdSchema.make(nextReleaseId)
@@ -77,11 +78,10 @@ export const makeFakeForge = (state: FakeForgeState = {}) => {
     },
     openPullRequest: (_repo, head) => {
       const found = pullRequests.find((candidate) => candidate.head === head)
-      return Effect.succeed(
-        found === undefined
-          ? PullRequestAbsent.make({ head })
-          : PullRequestFound.make({ number: found.number }),
-      )
+      if (found === undefined) {
+        return Effect.succeed(PullRequestAbsent.make({ head }))
+      }
+      return Effect.succeed(PullRequestFound.make({ number: found.number }))
     },
     listPullRequests: () =>
       Effect.succeed(

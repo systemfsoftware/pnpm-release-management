@@ -1,6 +1,6 @@
 import { Context, type Effect } from 'effect'
-import type { ConfigRefusal, ReleaseConfig } from './Config.schema.ts'
-import type { RepoRoot } from './Workspace.schema.ts'
+import type { ConfigRefusal, ReleaseConfig } from './Config.schema.js'
+import type { RepoRoot } from './Workspace.schema.js'
 
 export interface ReleaseConfigStore {
   readonly loadConfig: (

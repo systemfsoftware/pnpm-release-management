@@ -26,7 +26,7 @@ processes:
       failure_threshold: 60
 
   front:
-    command: deno run --allow-read=/e2e --allow-net /e2e/tls-proxy.ts
+    command: nginx -c /e2e/nginx.conf
     depends_on:
       verdaccio:
         condition: process_healthy

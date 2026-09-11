@@ -1,6 +1,6 @@
 import { Context, type Effect } from 'effect'
-import type { CycleEntry, PlanRefusal } from './Plan.schema.ts'
-import type { Count, FsPath, PackageName } from './Workspace.schema.ts'
+import type { CycleEntry, PlanRefusal } from './Plan.schema.js'
+import type { Count, FsPath, PackageName } from './Workspace.schema.js'
 
 export interface CycleStore {
   readonly readCaptured: (
@@ -11,7 +11,7 @@ export interface CycleStore {
     cycle: ReadonlyArray<CycleEntry>,
   ) => Effect.Effect<Count, PlanRefusal, never>
   readonly readDeferred: (
-    source?: FsPath | undefined,
+    source?: FsPath,
   ) => Effect.Effect<ReadonlyArray<PackageName>, PlanRefusal, never>
   readonly writeDeferred: (
     path: FsPath,

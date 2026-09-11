@@ -1,23 +1,13 @@
-import { Effect, Layer } from 'effect'
-import { Reporter } from './Reporter.ts'
-
-const writeStdout = (line: string): Effect.Effect<void> =>
-  Effect.sync(() => {
-    Deno.stdout.writeSync(new TextEncoder().encode(line))
-  })
-
-const writeStderr = (line: string): Effect.Effect<void> =>
-  Effect.sync(() => {
-    Deno.stderr.writeSync(new TextEncoder().encode(line))
-  })
+import { Console, Effect, Layer } from 'effect'
+import { Reporter } from './Reporter.js'
 
 export const ReporterLive: Layer.Layer<Reporter> = Layer.succeed(Reporter, {
-  emit: (text: string) => writeStdout(`${text}\n`),
-  note: (text: string) => writeStderr(`${text}\n`),
-  annotateError: (text: string) => writeStderr(`::error::${text}\n`),
-  annotateWarning: (text: string) => writeStderr(`::warning::${text}\n`),
+  emit: (text: string) => Console.log(text),
+  note: (text: string) => Console.error(text),
+  annotateError: (text: string) => Console.error(`::error::${text}`),
+  annotateWarning: (text: string) => Console.error(`::warning::${text}`),
   exitCode: (code: number) =>
     Effect.sync(() => {
-      Deno.exitCode = code
+      process.exitCode = code
     }),
 })

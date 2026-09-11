@@ -22,14 +22,22 @@ export interface FakeWorkspace {
   readonly layer: Layer.Layer<Lang.WorkspaceStore>
 }
 
-const manifestOf = (member: FakeMemberSeed): Lang.PackageManifest => ({
-  name: S.decodeSync(Lang.PackageName)(member.name),
-  version: S.decodeSync(Lang.PackageVersion)(member.version),
-  publishConfig: member.provenance === undefined ? undefined : { provenance: member.provenance },
-  scripts: member.build === true
-    ? { build: S.decodeSync(Lang.ScriptCommand)('run build') }
-    : undefined,
-})
+const manifestOf = (member: FakeMemberSeed): Lang.PackageManifest => {
+  let publishConfig: Lang.PackageManifest['publishConfig'] = undefined
+  if (member.provenance !== undefined) {
+    publishConfig = { provenance: member.provenance }
+  }
+  let scripts: Lang.PackageManifest['scripts'] = undefined
+  if (member.build === true) {
+    scripts = { build: S.decodeSync(Lang.ScriptCommand)('run build') }
+  }
+  return {
+    name: S.decodeSync(Lang.PackageName)(member.name),
+    version: S.decodeSync(Lang.PackageVersion)(member.version),
+    publishConfig,
+    scripts,
+  }
+}
 
 export const makeFakeWorkspace = (seed: FakeWorkspaceSeed = {}): FakeWorkspace => {
   const root = S.decodeSync(Lang.RepoRoot)(seed.root ?? '/repo')
@@ -61,16 +69,16 @@ export const makeFakeWorkspace = (seed: FakeWorkspaceSeed = {}): FakeWorkspace =
       ),
     readManifest: (dir) => {
       const member = members.find((entry) => entry.dir === dir)
-      if (member === undefined || badManifests[dir] === true) {
+      if (member === undefined || dir in badManifests) {
         return Effect.fail(missingOf(`${dir}/package.json`))
       }
       return Effect.succeed(manifestOf(member))
     },
     readFileFromRoot: (path) => {
-      const text = files[path]
-      if (text === undefined || badFiles[path] === true) {
+      if (!(path in files) || path in badFiles) {
         return Effect.fail(missingOf(path))
       }
+      const text = files[path] ?? ''
       return Effect.succeed({ path, text })
     },
   })

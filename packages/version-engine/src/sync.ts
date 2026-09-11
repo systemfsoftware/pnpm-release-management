@@ -15,8 +15,8 @@ import {
   type SyncAligned as LocalSyncAligned,
   type SyncRealigned as LocalSyncRealigned,
   syncSurfaces,
-} from './sync-surfaces.workflow.ts'
-import { SyncCommand, type SyncInput } from './sync.schema.ts'
+} from './sync-surfaces.workflow.js'
+import { SyncCommand, type SyncInput } from './sync.schema.js'
 
 type LocalSyncDecision = LocalSyncAligned | LocalSyncRealigned
 

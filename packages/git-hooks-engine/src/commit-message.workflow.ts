@@ -38,7 +38,7 @@ export class CommitWaived extends S.TaggedClass<CommitWaived>()(
   readonly [DecisionTypeId] = DecisionTypeId
 }
 
-const CommitEmpty = S.TaggedStruct('CommitEmpty', { staged: S.Number })
+const CommitEmpty = S.TaggedStruct('CommitEmpty', { staged: S.Finite })
 const CommitHeaderMalformed = S.TaggedStruct('CommitHeaderMalformed', {
   header: S.String,
 })
@@ -55,7 +55,7 @@ const CommitHeaderPunctuation = S.TaggedStruct('CommitHeaderPunctuation', {
   header: S.String,
 })
 const CommitAiAttribution = S.TaggedStruct('CommitAiAttribution', {
-  lines: S.Number,
+  lines: S.Finite,
 })
 const CommitShapeMismatched = S.TaggedStruct('CommitShapeMismatched', {
   type: S.String,

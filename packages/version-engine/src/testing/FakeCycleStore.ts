@@ -27,9 +27,10 @@ export const makeFakeCycleStore = (
     readCaptured: (path: FsPath) =>
       Effect.suspend(() => {
         const found = liveCaptured.get(path)
-        return found === undefined
-          ? Effect.fail({ _tag: 'PlanCapturedMalformed', path } as const)
-          : Effect.succeed(found)
+        if (found === undefined) {
+          return Effect.fail({ _tag: 'PlanCapturedMalformed', path } as const)
+        }
+        return Effect.succeed(found)
       }),
     writeCaptured: (path: FsPath, cycle: ReadonlyArray<CycleEntry>) =>
       Effect.flatMap(
@@ -39,7 +40,7 @@ export const makeFakeCycleStore = (
           return Effect.succeed(count)
         },
       ),
-    readDeferred: (_source?: FsPath | undefined) => Effect.succeed([...liveDeferred]),
+    readDeferred: (_source?: FsPath) => Effect.succeed([...liveDeferred]),
     writeDeferred: (_path: FsPath, next: ReadonlyArray<PackageName>) =>
       Effect.flatMap(
         mustBrand(Count, next.length),

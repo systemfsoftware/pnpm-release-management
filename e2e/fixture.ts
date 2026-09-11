@@ -1,4 +1,4 @@
-import { FIXTURE, GITHUB_API_URL, GITHUB_REPOSITORY, GITHUB_TOKEN, ORIGIN, type World } from './harness.ts'
+import { FIXTURE, GITHUB_API_URL, GITHUB_REPOSITORY, GITHUB_TOKEN, ORIGIN, type World } from './harness.js'
 
 const RELEASE_JSONC = `{
   "base": "main",

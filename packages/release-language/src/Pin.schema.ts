@@ -1,5 +1,5 @@
 import * as S from 'effect/Schema'
-import { FsPath, PackageVersion, RepoRoot } from './Workspace.schema.ts'
+import { FsPath, PackageVersion, RepoRoot } from './Workspace.schema.js'
 
 export const PinName = S.NonEmptyString.pipe(S.brand('PinName'))
 export type PinName = S.Schema.Type<typeof PinName>

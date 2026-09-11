@@ -47,7 +47,7 @@ export const makeFakeRegistry = (seed: FakeRegistrySeed = {}): FakeRegistry => {
 
   const layer = Layer.succeed(Lang.RegistryPort, {
     queryPackage: (name) => {
-      if (queryFailed[name] === true) {
+      if (name in queryFailed) {
         return Effect.fail(unreadableOf(name))
       }
       const snapshot = snapshots[name] ?? {}
@@ -66,13 +66,13 @@ export const makeFakeRegistry = (seed: FakeRegistrySeed = {}): FakeRegistry => {
       })
     },
     isVersionPublished: (name, version) => {
-      if (queryFailed[name] === true) {
+      if (name in queryFailed) {
         return Effect.fail(unreadableOf(name))
       }
       return Effect.succeed(published.has(`${name}@${version}`))
     },
     publishMember: (name, version, provenance) => {
-      if (publishFailed[name] === true) {
+      if (name in publishFailed) {
         return Effect.fail(
           S.decodeSync(Lang.PublishCommandRefused)({
             _tag: 'PublishCommandRefused',

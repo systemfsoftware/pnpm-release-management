@@ -3,7 +3,7 @@ import { Count, PackageName, PackageVersion, RelativePath } from '@systemfsoftwa
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import { BumpCommand } from './bump.schema.ts'
+import { BumpCommand } from './bump.schema.js'
 
 const CORE_PATTERN = /^(\d+)\.(\d+)\.(\d+)/
 

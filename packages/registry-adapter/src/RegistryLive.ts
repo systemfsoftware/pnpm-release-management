@@ -9,7 +9,9 @@ import {
   WorkspaceCommand,
 } from '@systemfsoftware/release-language'
 import { Context, Effect, Layer, Semaphore } from 'effect'
+import * as Match from 'effect/Match'
 import * as S from 'effect/Schema'
+import { PackumentDoc, PublishedBase, type RegistryDoc, UnpublishedBase } from './Registry.schema.js'
 
 export interface RegistryConfig {
   readonly baseUrl: string
@@ -24,24 +26,7 @@ export const RegistryConfig: Context.Service<RegistryConfig, RegistryConfig> = C
 const REGISTRY_CONCURRENCY = 8
 
 const QUERY_TIMEOUT_MS = 30_000
-
 const ABBREVIATED = 'application/vnd.npm.install-v1+json'
-
-const PackumentDoc = S.Struct({
-  'dist-tags': S.optional(S.Record(S.String, S.Unknown)),
-  versions: S.optional(S.Record(S.String, S.Unknown)),
-  error: S.optional(S.Unknown),
-})
-type PackumentDoc = S.Schema.Type<typeof PackumentDoc>
-
-type RegistryDoc =
-  | {
-    readonly _tag: 'Published'
-    readonly latest: PackageVersion
-    readonly attested: boolean
-    readonly versions: Readonly<Record<string, unknown>> | undefined
-  }
-  | { readonly _tag: 'Unpublished' }
 
 const stripTrailingSlashes = (baseUrl: string): string => baseUrl.replace(/\/+$/, '')
 
@@ -61,7 +46,10 @@ const hasAttestations = (entry: unknown): boolean => {
 
 const drainBody = (response: Response): Effect.Effect<void> => {
   const body = response.body
-  return body === null ? Effect.void : Effect.promise(() => body.cancel())
+  if (body === null) {
+    return Effect.void
+  }
+  return Effect.promise(() => body.cancel())
 }
 
 const readRegistryDoc = (
@@ -82,7 +70,7 @@ const readRegistryDoc = (
       })
       if (response.status === 404) {
         yield* drainBody(response)
-        return { _tag: 'Unpublished' } as const
+        return UnpublishedBase.make({})
       }
       if (!response.ok) {
         yield* drainBody(response)
@@ -96,7 +84,7 @@ const readRegistryDoc = (
         Effect.fromResult(S.decodeUnknownResult(PackumentDoc)(body)),
         () => failure,
       )
-      if (doc.error === 'Not found') return { _tag: 'Unpublished' } as const
+      if (doc.error === 'Not found') return UnpublishedBase.make({})
       const latestRaw: unknown = doc['dist-tags']?.['latest']
       if (typeof latestRaw !== 'string') return yield* Effect.fail(failure)
       const latest = yield* Effect.mapError(
@@ -104,12 +92,7 @@ const readRegistryDoc = (
         () => failure,
       )
       const versions = doc.versions
-      return {
-        _tag: 'Published',
-        latest,
-        attested: hasAttestations(versions?.[latest]),
-        versions,
-      } as const
+      return PublishedBase.make({ latest, attested: hasAttestations(versions?.[latest]), versions })
     }),
   )
 
@@ -117,22 +100,15 @@ const publishCommand = (
   name: PackageName,
   provenance: boolean,
   root: RepoRoot,
-): Effect.Effect<WorkspaceCommand> =>
-  Effect.fromResult(
-    S.decodeResult(WorkspaceCommand)({
-      program: 'pnpm',
-      args: [
-        '--filter',
-        name,
-        'publish',
-        '--access',
-        'public',
-        '--no-git-checks',
-        ...(provenance ? ['--provenance'] : []),
-      ],
-      cwd: root,
-    }),
+): Effect.Effect<WorkspaceCommand> => {
+  const args: Array<string> = ['--filter', name, 'publish', '--access', 'public', '--no-git-checks']
+  if (provenance) {
+    args.push('--provenance')
+  }
+  return Effect.fromResult(
+    S.decodeResult(WorkspaceCommand)({ program: 'pnpm', args, cwd: root }),
   ).pipe(Effect.orDie)
+}
 
 export const RegistryLive: Layer.Layer<RegistryPort, never, RegistryConfig | ProcessPort> = Layer.effect(
   RegistryPort,
@@ -156,26 +132,35 @@ export const RegistryLive: Layer.Layer<RegistryPort, never, RegistryConfig | Pro
             ),
           onSuccess: (doc) =>
             Effect.succeed(
-              doc._tag === 'Published'
-                ? {
+              Match.value(doc).pipe(
+                Match.tag('Published', (published) => ({
                   name,
-                  latest: doc.latest,
-                  attested: doc.attested,
+                  latest: published.latest,
+                  attested: published.attested,
                   reachable: true,
-                } satisfies TrustSnapshot
-                : {
+                } satisfies TrustSnapshot)),
+                Match.tag('Unpublished', () => ({
                   name,
                   latest: undefined,
                   attested: false,
                   reachable: true,
-                } satisfies TrustSnapshot,
+                } satisfies TrustSnapshot)),
+                Match.exhaustive,
+              ),
             ),
         }),
       isVersionPublished: (name: PackageName, version: PackageVersion) =>
         Effect.map(readRegistryDoc(base, gate, name), (doc) =>
-          doc._tag === 'Published' && doc.versions !== undefined
-            ? Object.hasOwn(doc.versions, version)
-            : false),
+          Match.value(doc).pipe(
+            Match.tag('Published', (published) => {
+              if (published.versions === undefined) {
+                return false
+              }
+              return Object.hasOwn(published.versions, version)
+            }),
+            Match.tag('Unpublished', () => false),
+            Match.exhaustive,
+          )),
       publishMember: (name: PackageName, _version: PackageVersion, provenance: boolean) =>
         Effect.flatMap(
           publishCommand(name, provenance, root),

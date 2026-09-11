@@ -21,7 +21,7 @@ import { Effect } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import { computeCycle, dropExcluded, nonEmptyArray } from './cycle.ts'
+import { computeCycle, dropExcluded, nonEmptyArray } from './cycle.js'
 import {
   type DeferredPackagesUnknown,
   PlanCommand,
@@ -29,28 +29,16 @@ import {
   type PlanReleasePublish,
   type PlanReleaseSettled,
   type PlanReleaseVersion,
-} from './plan-release.workflow.ts'
+} from './plan-release.workflow.js'
+import { PlanPhase, PlanReport } from './plan.schema.js'
+
+export { PlanReport } from './plan.schema.js'
 
 export const PlanRequest = Wire.wire({
   deferred: Wire.mint(S.optional(FsPath)),
   remote: Wire.mint(S.optional(RemoteName)),
   changelogDir: Wire.mint(RelativePath),
 })
-
-const PlanPhase = S.Literals(['version', 'publish', 'none'])
-
-type PlanPhase = S.Schema.Type<typeof PlanPhase>
-
-export const PlanReport = S.Struct({
-  decision: PlanDecision,
-  phase: PlanPhase,
-  pendingIntents: Count,
-  thisCycle: Count,
-  deferred: Count,
-  unpublished: S.Array(PackageName),
-})
-
-export type PlanReport = S.Schema.Type<typeof PlanReport>
 
 class RawPlan {
   constructor(
@@ -140,43 +128,47 @@ const write = (
   raw: RawPlan,
 ): Effect.Effect<PlanReport, PlanRefusal, never> => {
   if (Result.isFailure(output)) {
-    if (output.failure._tag !== 'PlanDeferredUnknown') {
-      return Effect.fail(output.failure)
-    }
-    const owed = dropExcluded(computeCycle(raw.members, raw.tags, raw.changelogDir), raw.deferred)
-    const phaseFrom = (): PlanPhase => {
-      if (owed.length > 0) {
-        return 'publish'
-      }
-      if (raw.pending > 0) {
-        return 'version'
-      }
-      return 'none'
-    }
-    const decisionFrom = (): PlanDecision => {
-      if (owed.length > 0) {
-        return PlanPublish.make({ cycle: owed })
-      }
-      if (raw.pending > 0) {
-        return PlanVersion.make({ pending: raw.pending, cycle: owed })
-      }
-      return PlanSettled.make({ pending: raw.pending, cycle: Count.make(0) })
-    }
-    const decision = decisionFrom()
-    return Effect.succeed(
-      PlanReport.make({
-        decision,
-        phase: phaseFrom(),
-        pendingIntents: raw.pending,
-        thisCycle: Match.value(decision).pipe(
-          Match.tag('PlanVersion', (version) => Count.make(version.cycle.length)),
-          Match.tag('PlanPublish', (publish) => Count.make(publish.cycle.length)),
-          Match.tag('PlanSettled', (settled) => settled.cycle),
-          Match.exhaustive,
-        ),
-        deferred: Count.make(raw.deferred.length),
-        unpublished: [...output.failure.packages],
-      }),
+    return Match.value(output.failure).pipe(
+      Match.tag('PlanCapturedMalformed', (malformed) => Effect.fail(malformed)),
+      Match.tag('PlanDeferredUnknown', (unknown) =>
+        Effect.succeed(
+          (() => {
+            const owed = dropExcluded(computeCycle(raw.members, raw.tags, raw.changelogDir), raw.deferred)
+            const phaseFrom = (): PlanPhase => {
+              if (owed.length > 0) {
+                return 'publish'
+              }
+              if (raw.pending > 0) {
+                return 'version'
+              }
+              return 'none'
+            }
+            const decisionFrom = (): PlanDecision => {
+              if (owed.length > 0) {
+                return PlanPublish.make({ cycle: owed })
+              }
+              if (raw.pending > 0) {
+                return PlanVersion.make({ pending: raw.pending, cycle: owed })
+              }
+              return PlanSettled.make({ pending: raw.pending, cycle: Count.make(0) })
+            }
+            const decision = decisionFrom()
+            return PlanReport.make({
+              decision,
+              phase: phaseFrom(),
+              pendingIntents: raw.pending,
+              thisCycle: Match.value(decision).pipe(
+                Match.tag('PlanVersion', (version) => Count.make(version.cycle.length)),
+                Match.tag('PlanPublish', (publish) => Count.make(publish.cycle.length)),
+                Match.tag('PlanSettled', (settled) => settled.cycle),
+                Match.exhaustive,
+              ),
+              deferred: Count.make(raw.deferred.length),
+              unpublished: [...unknown.packages],
+            })
+          })(),
+        )),
+      Match.exhaustive,
     )
   }
   const encoded = output.success

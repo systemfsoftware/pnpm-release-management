@@ -1,5 +1,5 @@
 import * as S from 'effect/Schema'
-import { Count, FsPath, OwnerName, ReleaseTag, RepoName } from './Workspace.schema.ts'
+import { Count, FsPath, OwnerName, ReleaseTag, RepoName } from './Workspace.schema.js'
 
 export const RepoSlug = S.Struct({
   owner: OwnerName,

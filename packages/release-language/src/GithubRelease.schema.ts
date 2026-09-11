@@ -1,5 +1,5 @@
 import * as S from 'effect/Schema'
-import { Count, PackageName, PackageVersion, RelativePath, ReleaseTag } from './Workspace.schema.ts'
+import { Count, PackageName, PackageVersion, RelativePath, ReleaseTag } from './Workspace.schema.js'
 
 export const ReleaseId = S.Int.pipe(
   S.check(S.isGreaterThanOrEqualTo(1)),

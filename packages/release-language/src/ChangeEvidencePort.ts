@@ -1,7 +1,7 @@
 import { Context, type Effect } from 'effect'
-import type { TaskName } from './Config.schema.ts'
-import type { ChangeEvidence, GateRefusal } from './Gate.schema.ts'
-import type { GitRef, RepoRoot } from './Workspace.schema.ts'
+import type { TaskName } from './Config.schema.js'
+import type { ChangeEvidence, GateRefusal } from './Gate.schema.js'
+import type { GitRef, RepoRoot } from './Workspace.schema.js'
 
 export interface ChangeEvidencePort {
   readonly pathsEvidence: (

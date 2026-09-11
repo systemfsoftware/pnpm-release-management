@@ -1,0 +1,27 @@
+{
+  "author": "systemfsoftware",
+  "devDependencies": {
+    "@effect/platform-node": "^4.0.0-rc.112",
+    "@effect/vitest": "^4.0.0-rc.112",
+    "@systemfsoftware/effect-gherkin-spec": "^4.0.1",
+    "@systemfsoftware/tsconfig": "^1.3.3",
+    "@types/node": "^24",
+    "effect": "^4.0.0-rc.112",
+    "testcontainers": "^12.1.0",
+    "typescript": "^7",
+    "vitest": "^4"
+  },
+  "exports": {
+    "./package.json": "./package.json"
+  },
+  "license": "Apache-2.0",
+  "name": "@systemfsoftware/e2e",
+  "private": true,
+  "scripts": {
+    "lint": "f=${OXLINT_FORMAT:-${AGENT:+agent}}; oxlint . --format=${f:-default}",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit --incremental && tsc -p tsconfig.node.json --noEmit"
+  },
+  "type": "module",
+  "version": "0.0.0"
+}

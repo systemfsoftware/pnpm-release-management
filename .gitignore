@@ -2,10 +2,13 @@ node_modules/
 dist/
 coverage/
 reports/
+.stryker-tmp/
 *.tsbuildinfo
 
 .mcp.json
+.turbo/
 .direnv/
 result
+result-*
 
 e2e/.artifacts/

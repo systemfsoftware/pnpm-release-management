@@ -1,3 +1,4 @@
+import { NodeServices } from '@effect/platform-node'
 import {
   CommitSha,
   Count,
@@ -24,6 +25,53 @@ import type {
 import { Effect, Layer } from 'effect'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
+import * as Stream from 'effect/Stream'
+import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
+
+interface GitOutput {
+  readonly success: boolean
+  readonly stdout: Uint8Array
+  readonly stderr: Uint8Array
+}
+
+const failedSpawn = (): GitOutput => ({
+  success: false,
+  stdout: new Uint8Array(0),
+  stderr: new Uint8Array(0),
+})
+
+const appendChunk = (left: Uint8Array, right: Uint8Array): Uint8Array => {
+  const out = new Uint8Array(left.length + right.length)
+  out.set(left, 0)
+  out.set(right, left.length)
+  return out
+}
+
+const runGit = (
+  args: ReadonlyArray<string>,
+): Effect.Effect<GitOutput, never, never> =>
+  Effect.scoped(
+    Effect.gen(function*() {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+      const handle = yield* spawner.spawn(ChildProcess.make('git', args))
+      const [stdout, stderr] = yield* Effect.all(
+        [
+          Stream.runFold(handle.stdout, () => new Uint8Array(0), appendChunk),
+          Stream.runFold(handle.stderr, () => new Uint8Array(0), appendChunk),
+        ],
+        { concurrency: 'unbounded' },
+      )
+      const exitCode = yield* handle.exitCode
+      return {
+        success: exitCode === 0,
+        stdout,
+        stderr,
+      }
+    }),
+  ).pipe(
+    Effect.catch((): Effect.Effect<GitOutput> => Effect.succeed(failedSpawn())),
+    Effect.provide(NodeServices.layer),
+  )
 
 const currentBranch = (): Effect.Effect<GitRef, TagRefusal, never> =>
   Effect.gen(function*() {
@@ -34,15 +82,7 @@ const currentBranch = (): Effect.Effect<GitRef, TagRefusal, never> =>
       )
     }
     const opPath = opPathResult.success
-    const output = yield* Effect.tryPromise({
-      try: () =>
-        new Deno.Command('git', {
-          args: ['rev-parse', '--abbrev-ref', 'HEAD'],
-          stdout: 'piped',
-          stderr: 'piped',
-        }).output(),
-      catch: (): TagRefusal => ({ _tag: 'TagCapturedMalformed', path: opPath }),
-    })
+    const output = yield* runGit(['rev-parse', '--abbrev-ref', 'HEAD'])
     if (!output.success) {
       return yield* Effect.fail<TagRefusal>({
         _tag: 'TagCapturedMalformed',
@@ -69,15 +109,7 @@ const headSha = (): Effect.Effect<CommitSha, TagRefusal, never> =>
       )
     }
     const opPath = opPathResult.success
-    const output = yield* Effect.tryPromise({
-      try: () =>
-        new Deno.Command('git', {
-          args: ['rev-parse', 'HEAD'],
-          stdout: 'piped',
-          stderr: 'piped',
-        }).output(),
-      catch: (): TagRefusal => ({ _tag: 'TagCapturedMalformed', path: opPath }),
-    })
+    const output = yield* runGit(['rev-parse', 'HEAD'])
     if (!output.success) {
       return yield* Effect.fail<TagRefusal>({
         _tag: 'TagCapturedMalformed',
@@ -114,18 +146,7 @@ const changedPaths = (
       )
     }
     const diffPath = diffResult.success
-    const output = yield* Effect.tryPromise({
-      try: () =>
-        new Deno.Command('git', {
-          args: ['diff', '--name-only', `${base}...${head}`],
-          stdout: 'piped',
-          stderr: 'piped',
-        }).output(),
-      catch: (): GateRefusal => ({
-        _tag: 'GateIntentMissing',
-        packages: [unknownPkg],
-      }),
-    })
+    const output = yield* runGit(['diff', '--name-only', `${base}...${head}`])
     if (!output.success) {
       return yield* Effect.fail<GateRefusal>({
         _tag: 'GateIntentMissing',
@@ -156,15 +177,7 @@ const remoteTags = (
       )
     }
     const opPath = opPathResult.success
-    const output = yield* Effect.tryPromise({
-      try: () =>
-        new Deno.Command('git', {
-          args: ['ls-remote', '--tags', remote],
-          stdout: 'piped',
-          stderr: 'piped',
-        }).output(),
-      catch: (): TagRefusal => ({ _tag: 'TagCapturedMalformed', path: opPath }),
-    })
+    const output = yield* runGit(['ls-remote', '--tags', remote])
     if (!output.success) {
       return yield* Effect.fail<TagRefusal>({
         _tag: 'TagCapturedMalformed',
@@ -203,54 +216,21 @@ const commitAll = (
       )
     }
     const headRef = headResult.success
-    const added = yield* Effect.tryPromise({
-      try: () =>
-        new Deno.Command('git', {
-          args: ['add', '-A'],
-          stdout: 'piped',
-          stderr: 'piped',
-        }).output(),
-      catch: (): PullRequestRefusal => ({
-        _tag: 'PullRequestBodyUnreadable',
-        path: commitPath,
-      }),
-    })
+    const added = yield* runGit(['add', '-A'])
     if (!added.success) {
       return yield* Effect.fail<PullRequestRefusal>({
         _tag: 'PullRequestBodyUnreadable',
         path: commitPath,
       })
     }
-    const committed = yield* Effect.tryPromise({
-      try: () =>
-        new Deno.Command('git', {
-          args: ['commit', '-m', message],
-          stdout: 'piped',
-          stderr: 'piped',
-        }).output(),
-      catch: (): PullRequestRefusal => ({
-        _tag: 'PullRequestBodyUnreadable',
-        path: commitPath,
-      }),
-    })
+    const committed = yield* runGit(['commit', '-m', message])
     if (!committed.success) {
       return yield* Effect.fail<PullRequestRefusal>({
         _tag: 'PullRequestBodyUnreadable',
         path: commitPath,
       })
     }
-    const revoked = yield* Effect.tryPromise({
-      try: () =>
-        new Deno.Command('git', {
-          args: ['rev-parse', 'HEAD'],
-          stdout: 'piped',
-          stderr: 'piped',
-        }).output(),
-      catch: (): PullRequestRefusal => ({
-        _tag: 'PullRequestHeadInvalid',
-        branch: headRef,
-      }),
-    })
+    const revoked = yield* runGit(['rev-parse', 'HEAD'])
     if (!revoked.success) {
       return yield* Effect.fail<PullRequestRefusal>({
         _tag: 'PullRequestHeadInvalid',
@@ -273,18 +253,7 @@ const pushBranch = (
   remote: RemoteName,
 ): Effect.Effect<void, PullRequestRefusal, never> =>
   Effect.gen(function*() {
-    const output = yield* Effect.tryPromise({
-      try: () =>
-        new Deno.Command('git', {
-          args: ['push', '--force', remote, `HEAD:refs/heads/${branch}`],
-          stdout: 'piped',
-          stderr: 'piped',
-        }).output(),
-      catch: (): PullRequestRefusal => ({
-        _tag: 'PullRequestHeadInvalid',
-        branch,
-      }),
-    })
+    const output = yield* runGit(['push', '--force', remote, `HEAD:refs/heads/${branch}`])
     if (!output.success) {
       return yield* Effect.fail<PullRequestRefusal>({
         _tag: 'PullRequestHeadInvalid',
@@ -298,18 +267,7 @@ const deleteRemoteBranch = (
   remote: RemoteName,
 ): Effect.Effect<BranchDeleted, PullRequestRefusal, never> =>
   Effect.gen(function*() {
-    const output = yield* Effect.tryPromise({
-      try: () =>
-        new Deno.Command('git', {
-          args: ['push', remote, '--delete', branch],
-          stdout: 'piped',
-          stderr: 'piped',
-        }).output(),
-      catch: (): PullRequestRefusal => ({
-        _tag: 'PullRequestHeadInvalid',
-        branch,
-      }),
-    })
+    const output = yield* runGit(['push', remote, '--delete', branch])
     if (!output.success) {
       const stderr = new TextDecoder().decode(output.stderr)
       if (
@@ -348,15 +306,7 @@ const pushTags = (
       return zeroResult.success
     }
     const refspecs = tags.map((tag) => `refs/tags/${tag}`)
-    const output = yield* Effect.tryPromise({
-      try: () =>
-        new Deno.Command('git', {
-          args: ['push', remote, ...refspecs],
-          stdout: 'piped',
-          stderr: 'piped',
-        }).output(),
-      catch: (): TagRefusal => ({ _tag: 'TagCapturedMalformed', path: opPath }),
-    })
+    const output = yield* runGit(['push', remote, ...refspecs])
     if (!output.success) {
       return yield* Effect.fail<TagRefusal>({
         _tag: 'TagCapturedMalformed',
@@ -384,15 +334,7 @@ const writeTag = (
       )
     }
     const opPath = opPathResult.success
-    const output = yield* Effect.tryPromise({
-      try: () =>
-        new Deno.Command('git', {
-          args: ['tag', tag],
-          stdout: 'piped',
-          stderr: 'piped',
-        }).output(),
-      catch: (): TagRefusal => ({ _tag: 'TagCapturedMalformed', path: opPath }),
-    })
+    const output = yield* runGit(['tag', tag])
     if (!output.success) {
       return yield* Effect.fail<TagRefusal>({
         _tag: 'TagCapturedMalformed',
@@ -411,7 +353,7 @@ const repoSlug = (): Effect.Effect<RepoSlug, TagRefusal, never> =>
       )
     }
     const opPath = opPathResult.success
-    const envSlug = Deno.env.get('GITHUB_REPOSITORY')
+    const envSlug = process.env['GITHUB_REPOSITORY']
     if (envSlug !== undefined) {
       const slash = envSlug.indexOf('/')
       if (slash !== -1) {
@@ -422,15 +364,7 @@ const repoSlug = (): Effect.Effect<RepoSlug, TagRefusal, never> =>
         }
       }
     }
-    const output = yield* Effect.tryPromise({
-      try: () =>
-        new Deno.Command('git', {
-          args: ['remote', 'get-url', 'origin'],
-          stdout: 'piped',
-          stderr: 'piped',
-        }).output(),
-      catch: (): TagRefusal => ({ _tag: 'TagCapturedMalformed', path: opPath }),
-    })
+    const output = yield* runGit(['remote', 'get-url', 'origin'])
     if (!output.success) {
       return yield* Effect.fail<TagRefusal>({
         _tag: 'TagCapturedMalformed',
@@ -467,22 +401,10 @@ const repoSlug = (): Effect.Effect<RepoSlug, TagRefusal, never> =>
 
 const stagedPaths = (): Effect.Effect<
   ReadonlyArray<StagedPath>,
-  StagedChecksRefusal,
-  never
+  StagedChecksRefusal
 > =>
   Effect.gen(function*() {
-    const output = yield* Effect.tryPromise({
-      try: () =>
-        new Deno.Command('git', {
-          args: ['diff', '--cached', '--name-only'],
-          stdout: 'piped',
-          stderr: 'piped',
-        }).output(),
-      catch: (): StagedChecksRefusal => ({
-        _tag: 'StagedStateUnreadable',
-        reason: 'git staged paths unavailable',
-      }),
-    })
+    const output = yield* runGit(['diff', '--cached', '--name-only'])
     if (!output.success) {
       return yield* Effect.fail<StagedChecksRefusal>({
         _tag: 'StagedStateUnreadable',
@@ -507,18 +429,7 @@ const mergeInProgress = (): Effect.Effect<
   never
 > =>
   Effect.gen(function*() {
-    const output = yield* Effect.tryPromise({
-      try: () =>
-        new Deno.Command('git', {
-          args: ['rev-parse', '--verify', 'MERGE_HEAD'],
-          stdout: 'piped',
-          stderr: 'piped',
-        }).output(),
-      catch: (): StagedChecksRefusal => ({
-        _tag: 'StagedStateUnreadable',
-        reason: 'git merge state unavailable',
-      }),
-    })
+    const output = yield* runGit(['rev-parse', '--verify', 'MERGE_HEAD'])
     if (!output.success) {
       const stderr = new TextDecoder().decode(output.stderr)
       if (

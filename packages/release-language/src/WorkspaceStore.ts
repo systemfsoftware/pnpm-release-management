@@ -1,5 +1,5 @@
 import { Context, type Effect } from 'effect'
-import type { Member, MemberRefusal, PackageManifest, RelativePath, RepoRoot, RootFile } from './Workspace.schema.ts'
+import type { Member, MemberRefusal, PackageManifest, RelativePath, RepoRoot, RootFile } from './Workspace.schema.js'
 
 export interface WorkspaceStore {
   readonly root: RepoRoot

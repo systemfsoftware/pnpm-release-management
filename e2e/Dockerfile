@@ -1,7 +1,7 @@
 FROM docker.io/library/node:24-bookworm-slim
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl git jq openssl unzip \
+  && apt-get install -y --no-install-recommends ca-certificates curl git jq nginx openssl unzip \
   && rm -rf /var/lib/apt/lists/*
 
 ARG DENO_VERSION=2.9.5
@@ -48,10 +48,20 @@ ENV DENO_TLS_CA_STORE=system \
 
 COPY e2e/verdaccio.yaml /e2e/verdaccio.yaml
 COPY e2e/process-compose.yaml /e2e/process-compose.yaml
-COPY e2e/tls-proxy.ts /e2e/tls-proxy.ts
+COPY e2e/nginx.conf /e2e/nginx.conf
 
-COPY deno.json deno.lock /prm-seed/
-COPY apps packages /prm-seed/
-RUN cd /prm-seed && deno cache apps/*/main.ts && rm -rf /prm-seed
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml turbo.json /build/
+COPY tsconfig.json tsconfig.node.json /build/
+COPY apps/ /build/apps/
+COPY packages/ /build/packages/
+RUN cd /build && pnpm install --frozen-lockfile && pnpm build && pnpm exec turbo run package
+
+RUN mkdir -p /opt/prm \
+  && cp /build/apps/changeset-management/dist/changeset-management /opt/prm/changeset-management \
+  && cp /build/apps/version-management/dist/version-management /opt/prm/version-management \
+  && cp /build/apps/npm-publish-management/dist/npm-publish-management /opt/prm/npm-publish-management \
+  && cp /build/apps/github-release-management/dist/github-release-management /opt/prm/github-release-management \
+  && cp /build/apps/git-hooks/dist/git-hooks /opt/prm/git-hooks \
+  && chmod 0755 /opt/prm/*
 
 CMD ["process-compose", "--config", "/e2e/process-compose.yaml", "up", "--no-server", "--tui=false"]

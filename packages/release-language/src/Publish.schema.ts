@@ -1,6 +1,6 @@
 import * as S from 'effect/Schema'
-import { PublishArg } from './Config.schema.ts'
-import { Count, FsPath, RepoRoot } from './Workspace.schema.ts'
+import { PublishArg } from './Config.schema.js'
+import { Count, FsPath, RepoRoot } from './Workspace.schema.js'
 
 export const CommandName = S.NonEmptyString.pipe(S.brand('CommandName'))
 export type CommandName = S.Schema.Type<typeof CommandName>

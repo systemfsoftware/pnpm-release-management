@@ -22,7 +22,7 @@ type DecisionTypeId = typeof DecisionTypeId
 export class StagedChecksRan extends S.TaggedClass<StagedChecksRan>()(
   'StagedChecksRan',
   {
-    staged: S.Number,
+    staged: S.Finite,
     checks: S.Array(CheckKind),
   },
 ) {
@@ -32,7 +32,7 @@ export class StagedChecksRan extends S.TaggedClass<StagedChecksRan>()(
 export class StagedChecksIdle extends S.TaggedClass<StagedChecksIdle>()(
   'StagedChecksIdle',
   {
-    staged: S.Number,
+    staged: S.Finite,
   },
 ) {
   readonly [DecisionTypeId] = DecisionTypeId
@@ -41,7 +41,7 @@ export class StagedChecksIdle extends S.TaggedClass<StagedChecksIdle>()(
 export class StagedChecksSkipped extends S.TaggedClass<StagedChecksSkipped>()(
   'StagedChecksSkipped',
   {
-    staged: S.Number,
+    staged: S.Finite,
   },
 ) {
   readonly [DecisionTypeId] = DecisionTypeId

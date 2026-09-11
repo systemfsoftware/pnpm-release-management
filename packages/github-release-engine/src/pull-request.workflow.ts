@@ -11,21 +11,21 @@ type PullRequestReleaseDecisionTypeId = typeof PullRequestReleaseDecisionTypeId
 
 export class PullRequestReleaseOpened extends S.TaggedClass<PullRequestReleaseOpened>()(
   'PullRequestReleaseOpened',
-  { number: S.Number },
+  { number: S.Finite },
 ) {
   readonly [PullRequestReleaseDecisionTypeId] = PullRequestReleaseDecisionTypeId
 }
 
 export class PullRequestReleaseRefreshed extends S.TaggedClass<PullRequestReleaseRefreshed>()(
   'PullRequestReleaseRefreshed',
-  { number: S.Number },
+  { number: S.Finite },
 ) {
   readonly [PullRequestReleaseDecisionTypeId] = PullRequestReleaseDecisionTypeId
 }
 
 export class PullRequestReleaseClosed extends S.TaggedClass<PullRequestReleaseClosed>()(
   'PullRequestReleaseClosed',
-  { number: S.Number, branch: S.String },
+  { number: S.Finite, branch: S.String },
 ) {
   readonly [PullRequestReleaseDecisionTypeId] = PullRequestReleaseDecisionTypeId
 }
@@ -50,9 +50,9 @@ export class HeadRefInvalid extends S.TaggedError<HeadRefInvalid>()(
 const PullRequestCase = S.Union([
   S.TaggedStruct('PRBodyBad', { path: FsPath }),
   S.TaggedStruct('PRHeadBad', { branch: GitRef }),
-  S.TaggedStruct('PRDirtyFound', { number: S.Number }),
+  S.TaggedStruct('PRDirtyFound', { number: S.Finite }),
   S.TaggedStruct('PRDirtyAbsent', {}),
-  S.TaggedStruct('PRCleanFound', { number: S.Number }),
+  S.TaggedStruct('PRCleanFound', { number: S.Finite }),
   S.TaggedStruct('PRCleanAbsent', {}),
 ])
 

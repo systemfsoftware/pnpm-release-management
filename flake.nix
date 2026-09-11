@@ -20,13 +20,32 @@
           dprint = pkgs.callPackage ./nix/dprint.nix { };
           cc = comment-checker.packages.${pkgs.stdenv.hostPlatform.system}.comment-checker;
           comment-checker-bwrap = pkgs.callPackage ./nix/comment-checker-bwrap.nix { comment-checker = cc; };
-        in { inherit dprint comment-checker-bwrap; comment-checker = cc; default = dprint; });
+          denort = pkgs.callPackage ./nix/denort.nix { };
+          cliApp = appName:
+            pkgs.callPackage ./nix/cli-app.nix {
+              inherit (pkgs) pnpm_11 nodejs_24 deno;
+              inherit denort;
+              src = self;
+              inherit appName;
+            };
+        in {
+          inherit dprint comment-checker-bwrap;
+          comment-checker = cc;
+          default = dprint;
+          changeset-management = cliApp "changeset-management";
+          version-management = cliApp "version-management";
+          npm-publish-management = cliApp "npm-publish-management";
+          github-release-management = cliApp "github-release-management";
+          git-hooks = cliApp "git-hooks";
+        });
 
       devShells = forEachSystem (pkgs: {
         default = pkgs.mkShell {
           packages = [
             self.packages.${pkgs.stdenv.hostPlatform.system}.dprint
             self.packages.${pkgs.stdenv.hostPlatform.system}.comment-checker-bwrap
+            pkgs.nodejs_24
+            pkgs.pnpm
             pkgs.deno
           ];
         };

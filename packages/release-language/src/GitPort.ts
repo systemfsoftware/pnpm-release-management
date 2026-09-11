@@ -1,10 +1,10 @@
 import { Context, type Effect } from 'effect'
-import type { PrTitle } from './Config.schema.ts'
-import type { GateRefusal } from './Gate.schema.ts'
-import type { BranchDeleted, PullRequestRefusal } from './PullRequest.schema.ts'
-import type { StagedChecksRefusal, StagedPath } from './StagedChecks.schema.ts'
-import type { CommitSha, RemoteName, RepoSlug, TagRefusal } from './Tag.schema.ts'
-import type { Count, GitRef, RelativePath, ReleaseTag } from './Workspace.schema.ts'
+import type { PrTitle } from './Config.schema.js'
+import type { GateRefusal } from './Gate.schema.js'
+import type { BranchDeleted, PullRequestRefusal } from './PullRequest.schema.js'
+import type { StagedChecksRefusal, StagedPath } from './StagedChecks.schema.js'
+import type { CommitSha, RemoteName, RepoSlug, TagRefusal } from './Tag.schema.js'
+import type { Count, GitRef, RelativePath, ReleaseTag } from './Workspace.schema.js'
 
 export interface GitPort {
   readonly currentBranch: () => Effect.Effect<GitRef, TagRefusal, never>

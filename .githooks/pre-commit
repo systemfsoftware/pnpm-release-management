@@ -1,8 +1,0 @@
-#!/usr/bin/env sh
-# Skip during a merge: the staged set is the merge result, not authored work,
-# and a formatter that rewrites it corrupts in-progress merge state.
-if [ -e "$(git rev-parse --git-path MERGE_HEAD)" ]; then
-  exit 0
-fi
-
-exec ./apps/git-hooks/main.ts pre-commit

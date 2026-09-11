@@ -1,1 +1,0 @@
-{ "name": "@systemfsoftware/release-language", "version": "0.0.0", "exports": { ".": "./mod.ts" } }

@@ -33,12 +33,12 @@ export const makeFakeCycleStore = (seed: FakeCycleSeed = {}): FakeCycle => {
 
   const layer = Layer.succeed(Lang.CycleStore, {
     readCaptured: (path) => {
-      const entries = captured[path]
-      if (entries === undefined || malformed[path] === true) {
+      if (!(path in captured) || path in malformed) {
         return Effect.fail(
           S.decodeSync(Lang.PlanCapturedMalformed)({ _tag: 'PlanCapturedMalformed', path }),
         )
       }
+      const entries = captured[path] ?? []
       return Effect.succeed(
         entries.map((entry) => ({
           name: S.decodeSync(Lang.PackageName)(entry.name),

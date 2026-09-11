@@ -23,7 +23,7 @@ on:
         type: string
         default: "24"
       deno-version:
-        description: deno version used for the tools
+        description: reserved, unused; kept so existing callers keep working
         required: false
         type: string
         default: v2.x
@@ -41,26 +41,32 @@ jobs:
       pending_intents: ${{ steps.plan.outputs.pending_intents }}
       this_cycle: ${{ steps.plan.outputs.this_cycle }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
 
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7
         with:
           repository: systemfsoftware/pnpm-release-management
           ref: ${{ inputs.tools-ref }}
           path: .release-tools
 
-      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
-          deno-version: ${{ inputs.deno-version }}
+          node-version: ${{ inputs.node-version }}
+
+      - name: Build the release tools
+        run: |
+          pnpm --dir .release-tools install --frozen-lockfile
+          pnpm --dir .release-tools build
 
       - id: plan
         name: Decide release phase from repository state
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: ./release-tools/apps/github-release-management/main.ts plan --output "$GITHUB_OUTPUT"
+        run: node .release-tools/apps/github-release-management/dist/main.js plan --output "$GITHUB_OUTPUT"
 
   version:
     name: version · open release PR
@@ -71,33 +77,34 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: true
 
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7
         with:
           repository: systemfsoftware/pnpm-release-management
           ref: ${{ inputs.tools-ref }}
           path: .release-tools
-
-      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2
-        with:
-          deno-version: ${{ inputs.deno-version }}
 
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
 
+      - name: Build the release tools
+        run: |
+          pnpm --dir .release-tools install --frozen-lockfile
+          pnpm --dir .release-tools build
+
       - name: Bump every version surface and consume the intents
-        run: ./release-tools/apps/version-management/main.ts bump
+        run: node .release-tools/apps/version-management/dist/main.js bump
 
       - name: Open or update the release PR
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./release-tools/apps/github-release-management/main.ts pr
+        run: node .release-tools/apps/github-release-management/dist/main.js pr
 
   publish:
     name: publish · oidc · tag · release
@@ -108,27 +115,28 @@ jobs:
       contents: write
       id-token: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: true
 
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7
         with:
           repository: systemfsoftware/pnpm-release-management
           ref: ${{ inputs.tools-ref }}
           path: .release-tools
-
-      - uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2
-        with:
-          deno-version: ${{ inputs.deno-version }}
 
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
           registry-url: https://registry.npmjs.org
+
+      - name: Build the release tools
+        run: |
+          pnpm --dir .release-tools install --frozen-lockfile
+          pnpm --dir .release-tools build
 
       - name: Install
         run: pnpm install --frozen-lockfile
@@ -138,7 +146,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           mkdir -p "${{ inputs.artifacts-dir }}"
-          ./release-tools/apps/github-release-management/main.ts tag \
+          node .release-tools/apps/github-release-management/dist/main.js tag \
             --output "${{ inputs.artifacts-dir }}/captured.json"
 
       - name: Build
@@ -146,20 +154,20 @@ jobs:
 
       - name: Publish unpublished versions via OIDC
         run: |
-          ./release-tools/apps/npm-publish-management/main.ts publish \
+          node .release-tools/apps/npm-publish-management/dist/main.js publish \
             --captured "${{ inputs.artifacts-dir }}/captured.json" --unpublished
 
       - name: Tag released versions
         run: |
-          ./release-tools/apps/github-release-management/main.ts tag \
+          node .release-tools/apps/github-release-management/dist/main.js tag \
             --captured "${{ inputs.artifacts-dir }}/captured.json"
 
       - name: GitHub Releases from the authored changelogs
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          ./release-tools/apps/github-release-management/main.ts release \
+          node .release-tools/apps/github-release-management/dist/main.js release \
             --captured "${{ inputs.artifacts-dir }}/captured.json"
 
       - name: Report registry state
-        run: ./release-tools/apps/npm-publish-management/main.ts status
+        run: node .release-tools/apps/npm-publish-management/dist/main.js status

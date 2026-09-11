@@ -1,7 +1,7 @@
 import { Context, type Effect } from 'effect'
-import type { PublishRefusal } from './Publish.schema.ts'
-import type { TrustRefusal, TrustSnapshot } from './Trust.schema.ts'
-import type { PackageName, PackageVersion } from './Workspace.schema.ts'
+import type { PublishRefusal } from './Publish.schema.js'
+import type { TrustRefusal, TrustSnapshot } from './Trust.schema.js'
+import type { PackageName, PackageVersion } from './Workspace.schema.js'
 
 export interface RegistryPort {
   readonly queryPackage: (

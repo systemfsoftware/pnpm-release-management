@@ -10,9 +10,7 @@ import {
   type TrustWorkflowDecision,
   type TrustWorkflowRefusal,
   type TrustWorkItem,
-} from './bootstrap-npm-trust.workflow.ts'
-
-const PositiveInt = S.Int.pipe(S.check(S.isGreaterThan(0)))
+} from './bootstrap-npm-trust.workflow.js'
 
 export const TrustRequest = Wire.wire({
   only: Wire.mint(S.Array(Lang.PackageName)),
@@ -20,7 +18,7 @@ export const TrustRequest = Wire.wire({
   registry: Wire.mint(Lang.HttpUrl),
   workflowFile: Wire.mint(S.optional(S.NonEmptyString)),
   slug: Wire.mint(S.NonEmptyString),
-  jobs: Wire.mint(S.optional(PositiveInt)),
+  jobs: Wire.mint(S.optional(S.Int.pipe(S.check(S.isGreaterThan(0))))),
   launcherManifest: Wire.mint(S.optional(Lang.RelativePath)),
 })
 export type TrustRequest = S.Schema.Type<typeof TrustRequest>
@@ -40,21 +38,27 @@ class TrustRaw {
   ) {}
 }
 
-type TrustPlan =
-  | {
-    readonly _tag: 'Execute'
-    readonly debuts: number
-    readonly owed: ReadonlyArray<TrustWorkItem>
-    readonly dryRun: boolean
-    readonly workflowFile: string
-    readonly slug: string
-  }
-  | { readonly _tag: 'Quiet'; readonly packages: number }
-  | {
-    readonly _tag: 'Refused'
-    readonly kind: 'only' | 'empty' | 'unreadable' | 'launcher'
-    readonly names: ReadonlyArray<Lang.PackageName>
-  }
+const TrustExecuteTag = { _tag: 'Execute' } as const
+type TrustExecuteTag = typeof TrustExecuteTag
+interface TrustExecutePlan extends TrustExecuteTag {
+  readonly debuts: number
+  readonly owed: ReadonlyArray<TrustWorkItem>
+  readonly dryRun: boolean
+  readonly workflowFile: string
+  readonly slug: string
+}
+const TrustQuietTag = { _tag: 'Quiet' } as const
+type TrustQuietTag = typeof TrustQuietTag
+interface TrustQuietPlan extends TrustQuietTag {
+  readonly packages: number
+}
+const TrustRefusedTag = { _tag: 'Refused' } as const
+type TrustRefusedTag = typeof TrustRefusedTag
+interface TrustRefusedPlan extends TrustRefusedTag {
+  readonly kind: 'only' | 'empty' | 'unreadable' | 'launcher'
+  readonly names: ReadonlyArray<Lang.PackageName>
+}
+type TrustPlan = TrustExecutePlan | TrustQuietPlan | TrustRefusedPlan
 
 const read = (
   request: TrustRequest,
@@ -70,7 +74,7 @@ const read = (
         return {
           name: member.name,
           version: manifest.version,
-          hasBuild: typeof manifest.scripts?.build === 'string',
+          hasBuild: typeof manifest.scripts?.['build'] === 'string',
           snapshot,
         }
       }))
@@ -106,30 +110,35 @@ const encode = (
   outcome: Result.Result<TrustWorkflowDecision, TrustWorkflowRefusal>,
 ): TrustPlan => {
   if (Result.isFailure(outcome)) {
-    const refusal = outcome.failure
-    if (refusal._tag === 'TrustOnlyUnmatched') {
-      return { _tag: 'Refused', kind: 'only', names: [...refusal.only] }
-    }
-    if (refusal._tag === 'TrustWorkspaceEmpty') {
-      return { _tag: 'Refused', kind: 'empty', names: [] }
-    }
-    if (refusal._tag === 'TrustRegistryUnreadable') {
-      return { _tag: 'Refused', kind: 'unreadable', names: [...refusal.packages] }
-    }
-    return { _tag: 'Refused', kind: 'launcher', names: [...refusal.packages] }
+    return Match.value(outcome.failure).pipe(
+      Match.tag(
+        'TrustOnlyUnmatched',
+        (unmatched) => ({ _tag: 'Refused', kind: 'only', names: [...unmatched.only] } as const),
+      ),
+      Match.tag('TrustWorkspaceEmpty', () => ({ _tag: 'Refused', kind: 'empty', names: [] } as const)),
+      Match.tag(
+        'TrustRegistryUnreadable',
+        (unreadable) => ({ _tag: 'Refused', kind: 'unreadable', names: [...unreadable.packages] } as const),
+      ),
+      Match.tag(
+        'TrustLauncherMissing',
+        (missing) => ({ _tag: 'Refused', kind: 'launcher', names: [...missing.packages] } as const),
+      ),
+      Match.exhaustive,
+    )
   }
-  const decision = outcome.success
-  if (decision._tag === 'TrustIdle') {
-    return { _tag: 'Quiet', packages: decision.packages }
-  }
-  return {
-    _tag: 'Execute',
-    debuts: decision.debuts,
-    owed: [...decision.owed],
-    dryRun: decision.dryRun,
-    workflowFile: decision.workflowFile,
-    slug: decision.slug,
-  }
+  return Match.value(outcome.success).pipe(
+    Match.tag('TrustIdle', (idle) => ({ _tag: 'Quiet' as const, packages: idle.packages })),
+    Match.tag('TrustComplete', (complete) => ({
+      _tag: 'Execute' as const,
+      debuts: complete.debuts,
+      owed: [...complete.owed],
+      dryRun: complete.dryRun,
+      workflowFile: complete.workflowFile,
+      slug: complete.slug,
+    })),
+    Match.exhaustive,
+  )
 }
 
 const runParts = (

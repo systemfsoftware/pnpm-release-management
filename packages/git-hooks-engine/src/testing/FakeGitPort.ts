@@ -31,9 +31,11 @@ export const makeFakeGitPort = (state: FakeGitState): Layer.Layer<GitPort> =>
     pushTags: () => unimplemented('pushTags'),
     writeTag: () => unimplemented('writeTag'),
     repoSlug: () => unimplemented('repoSlug'),
-    stagedPaths: () =>
-      state.stagedError !== undefined
-        ? Effect.fail(state.stagedError)
-        : Effect.forEach(state.staged, decodePath),
+    stagedPaths: () => {
+      if (state.stagedError !== undefined) {
+        return Effect.fail(state.stagedError)
+      }
+      return Effect.forEach(state.staged, decodePath)
+    },
     mergeInProgress: () => Effect.succeed(state.merge),
   })

@@ -1,6 +1,6 @@
 import * as S from 'effect/Schema'
-import { WorkspaceCommand } from './Publish.schema.ts'
-import { Count } from './Workspace.schema.ts'
+import { WorkspaceCommand } from './Publish.schema.js'
+import { Count } from './Workspace.schema.js'
 
 export const StagedPath = S.String.pipe(
   S.check(S.isPattern(/^(?![/])(?!\s*$).+/)),

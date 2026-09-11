@@ -18,7 +18,7 @@ export class TagPackagesPreviewed extends S.TaggedClass<TagPackagesPreviewed>()(
 
 export class TagPackagesUpToDate extends S.TaggedClass<TagPackagesUpToDate>()(
   'TagPackagesUpToDate',
-  { tags: S.Number },
+  { tags: S.Finite },
 ) {
   readonly [TagPackagesDecisionTypeId] = TagPackagesDecisionTypeId
 }

@@ -25,7 +25,7 @@ export class PlanReleaseVersion extends S.TaggedClass<PlanReleaseVersion>()(
 
 export class PlanReleaseSettled extends S.TaggedClass<PlanReleaseSettled>()(
   'PlanReleaseSettled',
-  { pending: Count, cycleCount: S.Number },
+  { pending: Count, cycleCount: S.Finite },
 ) {
   readonly [PlanReleaseDecisionTypeId] = PlanReleaseDecisionTypeId
 }

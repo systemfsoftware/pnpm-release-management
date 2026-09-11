@@ -1,5 +1,5 @@
 import * as S from 'effect/Schema'
-import { Count, FsPath, PackageName, PackageVersion, RelativePath, ReleaseTag } from './Workspace.schema.ts'
+import { Count, FsPath, PackageName, PackageVersion, RelativePath, ReleaseTag } from './Workspace.schema.js'
 
 export const CycleEntry = S.Struct({
   name: PackageName,

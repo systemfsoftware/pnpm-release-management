@@ -17,9 +17,10 @@ export const makeFakeProcessPort = (
   const layer = Layer.succeed(ProcessPort, {
     runCommand: (command: WorkspaceCommand) => {
       calls.push(command)
-      return handler === undefined
-        ? Effect.succeed({ _tag: 'ProcessCompleted', command } as const)
-        : handler(command)
+      if (handler === undefined) {
+        return Effect.succeed({ _tag: 'ProcessCompleted', command } as const)
+      }
+      return handler(command)
     },
   })
   return { layer, state: { calls } }

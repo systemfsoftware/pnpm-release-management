@@ -29,9 +29,10 @@ export const fakeChangesetStore = (
     listIntents: () => Effect.succeed(intents.map((intent) => intent.path)),
     readIntent: (path) => {
       const found = intents.find((intent) => intent.path === path)
-      return found !== undefined
-        ? Effect.succeed(found)
-        : Effect.fail({ _tag: 'IntentFrontmatterMalformed' as const, path })
+      if (found !== undefined) {
+        return Effect.succeed(found)
+      }
+      return Effect.fail({ _tag: 'IntentFrontmatterMalformed' as const, path })
     },
     readReadme: () => Effect.die(new Error('FakeChangesetStore.readReadme is not used by these cells')),
     deleteIntents: () => Effect.die(new Error('FakeChangesetStore.deleteIntents is not used by these cells')),
@@ -43,21 +44,25 @@ export const fakeChangesetStore = (
       const joined = request.packages.map((pkg) => pkg).join(' ')
       const derived = joined.toLowerCase().replace(/[^a-z0-9]+/g, '-')
         .replace(/^-|-$/g, '').slice(0, 48)
-      const name = request.slug ?? (derived.length > 0 ? derived : 'changeset')
-      const decision = request.slug !== undefined
-        ? IntentStagedNamed.make({
+      let fallback = 'changeset'
+      if (derived.length > 0) {
+        fallback = derived
+      }
+      const name = request.slug ?? fallback
+      if (request.slug !== undefined) {
+        return Effect.succeed(IntentStagedNamed.make({
           path: RelativePath.make(`${name}.md`),
           packages: request.packages.map((pkg) => ({ name: pkg, bump: request.bump })),
           bump: request.bump,
           summary: request.summary,
-        })
-        : IntentStagedDerived.make({
-          path: RelativePath.make(`${name}.md`),
-          packages: request.packages.map((pkg) => ({ name: pkg, bump: request.bump })),
-          bump: request.bump,
-          summary: request.summary,
-        })
-      return Effect.succeed(decision)
+        }))
+      }
+      return Effect.succeed(IntentStagedDerived.make({
+        path: RelativePath.make(`${name}.md`),
+        packages: request.packages.map((pkg) => ({ name: pkg, bump: request.bump })),
+        bump: request.bump,
+        summary: request.summary,
+      }))
     },
   })
   return { layer, written }

@@ -1,5 +1,5 @@
 import * as S from 'effect/Schema'
-import { Member, PackageName, RelativePath } from './Workspace.schema.ts'
+import { Member, PackageName, RelativePath } from './Workspace.schema.js'
 
 export const ChangeEvidence = S.Struct({
   members: S.Array(Member),

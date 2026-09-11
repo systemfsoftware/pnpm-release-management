@@ -25,14 +25,14 @@ import { Effect } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import { deriveBump } from './bump-derive.ts'
-import { bumpVersions } from './bump-versions.workflow.ts'
+import { deriveBump } from './bump-derive.js'
+import { bumpVersions } from './bump-versions.workflow.js'
 import type {
   VersionBumped as LocalVersionBumped,
   VersionConsumed as LocalVersionConsumed,
   VersionIdle as LocalVersionIdle,
-} from './bump-versions.workflow.ts'
-import { BumpCommand, type BumpInput } from './bump.schema.ts'
+} from './bump-versions.workflow.js'
+import { BumpCommand, type BumpInput } from './bump.schema.js'
 
 type BumpRaw = {
   readonly input: BumpInput
@@ -140,7 +140,8 @@ const summaryFor = (
 ): string => {
   const found = raw.derived.packageRanks.find((entry) => entry.name === name)
   const own = found?.summaries ?? []
-  return own.length > 0 ? own.join(' ') : raw.derived.fallbackSummary
+  if (own.length > 0) return own.join(' ')
+  return raw.derived.fallbackSummary
 }
 const write = (
   output: Result.Result<LocalVersionDecision, VersionRefusal>,
@@ -157,9 +158,9 @@ const write = (
       Effect.gen(function*() {
         const changesets = yield* ChangesetStore
         yield* Match.value(decision).pipe(
-          Match.tag('VersionBumped', (bumped) =>
-            raw.input.strategy === 'surfaces'
-              ? Effect.gen(function*() {
+          Match.tag('VersionBumped', (bumped) => {
+            if (raw.input.strategy === 'surfaces') {
+              return Effect.gen(function*() {
                 const surfaces = yield* SurfaceStore
                 const changelogs = yield* ChangelogStore
                 yield* surfaces.writeSurface(raw.input.manifest.file, raw.input.manifest.surface, bumped.version)
@@ -187,34 +188,40 @@ const write = (
                   { discard: true },
                 )
               })
-              : Effect.gen(function*() {
-                const process = yield* ProcessPort
-                const changelogs = yield* ChangelogStore
-                const workspace = yield* WorkspaceStore
-                const program = yield* mustBrand(CommandName, 'pnpm')
-                const args = yield* Effect.forEach(
-                  ['version', '-r'],
-                  (arg) => mustBrand(PublishArg, arg),
-                )
-                yield* process.runCommand({ program, args, cwd: workspace.root })
-                const members = yield* workspace.listMembers()
-                const manifests = yield* Effect.forEach(
-                  members,
-                  (member) => workspace.readManifest(member.dir),
-                )
-                const actualByName = new Map(manifests.map((manifest) => [manifest.name, manifest.version]))
-                yield* Effect.forEach(
-                  bumped.moved,
-                  (name) =>
-                    changelogs.writeMemberChangelog({
-                      changelogDir: raw.input.changelogDir,
-                      name,
-                      version: actualByName.get(name) ?? bumped.version,
-                      summary: summaryFor(raw, name),
-                    }),
-                  { discard: true },
-                )
-              })),
+            }
+            return Effect.gen(function*() {
+              const process = yield* ProcessPort
+              const changelogs = yield* ChangelogStore
+              const workspace = yield* WorkspaceStore
+              const program = yield* mustBrand(CommandName, 'pnpm')
+              const args = yield* Effect.forEach(
+                ['version', '-r'],
+                (arg) => mustBrand(PublishArg, arg),
+              )
+              yield* process.runCommand({ program, args, cwd: workspace.root })
+              const members = yield* workspace.listMembers()
+              const manifests = yield* Effect.forEach(
+                members,
+                (member) => workspace.readManifest(member.dir),
+              )
+              const actualOf = (name: PackageName): PackageVersion => {
+                const manifest = manifests.find((candidate) => candidate.name === name)
+                if (manifest === undefined) return bumped.version
+                return manifest.version
+              }
+              yield* Effect.forEach(
+                bumped.moved,
+                (name) =>
+                  changelogs.writeMemberChangelog({
+                    changelogDir: raw.input.changelogDir,
+                    name,
+                    version: actualOf(name),
+                    summary: summaryFor(raw, name),
+                  }),
+                { discard: true },
+              )
+            })
+          }),
           Match.tag('VersionConsumed', () => Effect.void),
           Match.tag('VersionIdle', () => Effect.void),
           Match.exhaustive,

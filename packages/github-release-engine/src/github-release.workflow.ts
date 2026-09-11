@@ -11,12 +11,12 @@ type GithubReleasesDecisionTypeId = typeof GithubReleasesDecisionTypeId
 
 const ReleaseCreatedEntry = S.Struct({
   tag: S.String,
-  id: S.Number,
+  id: S.Finite,
 })
 
 export class GithubReleasesCreated extends S.TaggedClass<GithubReleasesCreated>()(
   'GithubReleasesCreated',
-  { created: S.NonEmptyArray(ReleaseCreatedEntry), skipped: S.Number },
+  { created: S.NonEmptyArray(ReleaseCreatedEntry), skipped: S.Finite },
 ) {
   readonly [GithubReleasesDecisionTypeId] = GithubReleasesDecisionTypeId
 }
@@ -30,7 +30,7 @@ export class GithubReleasesSkipped extends S.TaggedClass<GithubReleasesSkipped>(
 
 export class GithubReleasesAsserted extends S.TaggedClass<GithubReleasesAsserted>()(
   'GithubReleasesAsserted',
-  { count: S.Number },
+  { count: S.Finite },
 ) {
   readonly [GithubReleasesDecisionTypeId] = GithubReleasesDecisionTypeId
 }
@@ -44,7 +44,7 @@ export class GithubReleasesPreviewed extends S.TaggedClass<GithubReleasesPreview
 
 export class GithubReleasesEmpty extends S.TaggedClass<GithubReleasesEmpty>()(
   'GithubReleasesEmpty',
-  { cycle: S.Number },
+  { cycle: S.Finite },
 ) {
   readonly [GithubReleasesDecisionTypeId] = GithubReleasesDecisionTypeId
 }

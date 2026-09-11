@@ -1,3 +1,4 @@
+import { NodeServices } from '@effect/platform-node'
 import {
   type ChangeEvidence,
   ChangeEvidencePort,
@@ -9,9 +10,15 @@ import {
   type RepoRoot,
   type TaskName,
 } from '@systemfsoftware/release-language'
-import { Effect, Layer } from 'effect'
+import { Effect, FileSystem, Layer } from 'effect'
+import * as HashSet from 'effect/HashSet'
+import type { PlatformError } from 'effect/PlatformError'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
+import * as Stream from 'effect/Stream'
+import { ChildProcess } from 'effect/unstable/process'
+import type { ChildProcessSpawner } from 'effect/unstable/process/ChildProcessSpawner'
+import { DryRunDocument } from './TurboDryRun.schema.js'
 
 const MANIFEST_SUFFIX = '/package.json'
 const LOCKFILE = 'pnpm-lock.yaml'
@@ -19,9 +26,15 @@ const TURBO_MANIFEST = 'node_modules/turbo/package.json'
 const TURBO_BIN = 'node_modules/.bin/turbo'
 const WORKTREE_PREFIX = 'changeset-base-'
 
-const decoder = new TextDecoder()
-
-const describeCause = (cause: unknown): string => cause instanceof Error ? cause.message : String(cause)
+const describeCause = (cause: unknown): string => {
+  if (cause instanceof Error) {
+    return cause.message
+  }
+  if (typeof cause === 'string') {
+    return cause
+  }
+  return 'unknown error'
+}
 
 type CommandOutput = {
   readonly success: boolean
@@ -34,35 +47,45 @@ const capture = (
   program: string,
   args: ReadonlyArray<string>,
   cwd: string,
-): Effect.Effect<CommandOutput, Error> =>
-  Effect.tryPromise({
-    try: async (): Promise<CommandOutput> => {
-      const out = await new Deno.Command(program, {
-        args: [...args],
+): Effect.Effect<CommandOutput, Error, ChildProcessSpawner> =>
+  Effect.scoped(
+    Effect.gen(function*() {
+      const start = (cause: unknown): Error =>
+        new Error(`${program} ${args.join(' ')} failed to start: ${describeCause(cause)}`)
+      const handle = yield* ChildProcess.make(program, [...args], {
         cwd,
-        stdout: 'piped',
-        stderr: 'piped',
-      }).output()
+        stdin: 'ignore',
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }).pipe(Effect.mapError(start))
+      const collect = (
+        stream: Stream.Stream<Uint8Array, PlatformError>,
+      ): Effect.Effect<string, Error> => stream.pipe(Stream.decodeText, Stream.mkString, Effect.mapError(start))
+      const [stdout, stderr, code] = yield* Effect.all(
+        [collect(handle.stdout), collect(handle.stderr), handle.exitCode],
+        { concurrency: 3 },
+      ).pipe(Effect.mapError(start))
       return {
-        success: out.success,
-        code: out.code,
-        stdout: decoder.decode(out.stdout),
-        stderr: decoder.decode(out.stderr),
+        success: code === 0,
+        code,
+        stdout,
+        stderr,
       }
-    },
-    catch: (cause) => new Error(`${program} ${args.join(' ')} failed to start: ${describeCause(cause)}`),
-  })
+    }),
+  )
 
-const readFile = (path: string): Effect.Effect<string, Error> =>
-  Effect.tryPromise({
-    try: () => Deno.readTextFile(path),
-    catch: (cause) => new Error(`cannot read ${path}: ${describeCause(cause)}`),
+const readFile = (path: string): Effect.Effect<string, Error, FileSystem.FileSystem> =>
+  Effect.gen(function*() {
+    const fs = yield* FileSystem.FileSystem
+    return yield* fs.readFileString(path).pipe(
+      Effect.mapError((cause) => new Error(`cannot read ${path}: ${describeCause(cause)}`)),
+    )
   })
 
 const gitLines = (
   args: ReadonlyArray<string>,
   cwd: string,
-): Effect.Effect<ReadonlyArray<string>, Error> =>
+): Effect.Effect<ReadonlyArray<string>, Error, ChildProcessSpawner> =>
   Effect.gen(function*() {
     const out = yield* capture('git', args, cwd)
     if (!out.success) {
@@ -103,47 +126,115 @@ type DryRun = {
   readonly engineVersion: string | null
 }
 
-const parseDryRunOutput = (stdout: string, context: string, task: TaskName): DryRun => {
-  const suffix = `#${task}`
-  let doc: { readonly packages?: unknown; readonly tasks?: unknown; readonly turboVersion?: unknown }
+const parseDryRunDocument = (
+  stdout: string,
+  context: string,
+  task: TaskName,
+): DryRunDocument => {
+  let parsed: unknown
   try {
-    doc = JSON.parse(stdout)
+    parsed = JSON.parse(stdout)
   } catch {
     throw new Error(`unparsable ${context} output — expected JSON from 'turbo run ${task} --dry=json'`)
   }
-  if (!Array.isArray(doc.packages) || !Array.isArray(doc.tasks)) {
+  const decoded = S.decodeUnknownResult(DryRunDocument)(parsed)
+  if (Result.isFailure(decoded)) {
     throw new Error(`${context} output missing the packages/tasks arrays — is this turbo's dry-run JSON?`)
   }
+  return decoded.success
+}
+
+const taskIdEnding = (entry: object, suffix: string): string | null => {
+  if (!('taskId' in entry)) return null
+  const taskId: unknown = entry.taskId
+  if (typeof taskId !== 'string' || !taskId.endsWith(suffix)) return null
+  return taskId
+}
+
+const entryName = (entry: object, context: string, task: TaskName): string => {
+  if (!('package' in entry)) {
+    throw new Error(`${context} output: a ${task} task without a package name`)
+  }
+  const name: unknown = entry.package
+  if (typeof name !== 'string' || name.length === 0) {
+    throw new Error(`${context} output: a ${task} task without a package name`)
+  }
+  return name
+}
+
+const entryHash = (entry: object, context: string, task: TaskName, name: string, suffix: string): string => {
+  if (!('hash' in entry)) {
+    throw new Error(`${context} output: ${name}${suffix} has no hash`)
+  }
+  const hash: unknown = entry.hash
+  if (typeof hash !== 'string' || hash.length === 0) {
+    throw new Error(`${context} output: ${name}${suffix} has no hash`)
+  }
+  return hash
+}
+
+const entryDir = (entry: object): string | null => {
+  if (!('directory' in entry)) return null
+  const directory: unknown = entry.directory
+  if (typeof directory !== 'string' || directory.length === 0) return null
+  return directory
+}
+
+const collectDryRunTask = (
+  entry: unknown,
+  suffix: string,
+  context: string,
+  task: TaskName,
+  matrix: Record<string, string>,
+  dirs: Record<string, string>,
+): void => {
+  if (typeof entry !== 'object' || entry === null) return
+  if (taskIdEnding(entry, suffix) === null) return
+  const name = entryName(entry, context, task)
+  const hash = entryHash(entry, context, task, name, suffix)
+  if (Object.hasOwn(matrix, name)) throw new Error(`${context} output: duplicate task for ${name}`)
+  matrix[name] = hash
+  const directory = entryDir(entry)
+  if (directory !== null) dirs[name] = directory
+}
+
+const parseDryRunTasks = (
+  tasks: unknown,
+  suffix: string,
+  context: string,
+  task: TaskName,
+): { readonly matrix: Record<string, string>; readonly dirs: Record<string, string> } => {
+  if (!Array.isArray(tasks)) {
+    throw new Error(`${context} output missing the packages/tasks arrays — is this turbo's dry-run JSON?`)
+  }
+  const entries: ReadonlyArray<unknown> = tasks
   const matrix: Record<string, string> = {}
   const dirs: Record<string, string> = {}
-  for (const entry of doc.tasks) {
-    if (typeof entry !== 'object' || entry === null) continue
-    if (!('taskId' in entry)) continue
-    const taskId: unknown = entry.taskId
-    if (typeof taskId !== 'string' || !taskId.endsWith(suffix)) continue
-    const name: unknown = 'package' in entry ? entry.package : undefined
-    if (typeof name !== 'string' || name.length === 0) {
-      throw new Error(`${context} output: a ${task} task without a package name`)
-    }
-    const hash: unknown = 'hash' in entry ? entry.hash : undefined
-    if (typeof hash !== 'string' || hash.length === 0) {
-      throw new Error(`${context} output: ${name}${suffix} has no hash`)
-    }
-    if (Object.hasOwn(matrix, name)) throw new Error(`${context} output: duplicate task for ${name}`)
-    matrix[name] = hash
-    const directory: unknown = 'directory' in entry ? entry.directory : undefined
-    if (typeof directory === 'string' && directory.length > 0) dirs[name] = directory
+  for (const entry of entries) collectDryRunTask(entry, suffix, context, task, matrix, dirs)
+  return { matrix, dirs }
+}
+
+const parseDryRunOutput = (stdout: string, context: string, task: TaskName): DryRun => {
+  const suffix = `#${task}`
+  const doc = parseDryRunDocument(stdout, context, task)
+  if (!Array.isArray(doc.packages)) {
+    throw new Error(`${context} output missing the packages/tasks arrays — is this turbo's dry-run JSON?`)
   }
+  const { matrix, dirs } = parseDryRunTasks(doc.tasks, suffix, context, task)
   if (doc.packages.length > 0 && Object.keys(matrix).length === 0) {
     throw new Error(
       `${context} output: ${doc.packages.length} package(s) enumerated but no ${suffix} task parsed — turbo's task format drifted`,
     )
   }
+  let engineVersion: string | null = null
+  if (typeof doc.turboVersion === 'string') {
+    engineVersion = doc.turboVersion
+  }
   return {
     packages: doc.packages,
     matrix,
     dirs,
-    engineVersion: typeof doc.turboVersion === 'string' ? doc.turboVersion : null,
+    engineVersion,
   }
 }
 
@@ -159,7 +250,11 @@ const lockfileTurboEntry = (lockfile: string): { readonly specifier: string; rea
   if (rootStart === -1) return null
   const root = importers.slice(rootStart + 1)
   const nextRoot = root.search(/^\n[ ]{2}(?!\.)/m)
-  const block = (nextRoot === -1 ? root : root.slice(0, nextRoot)) + '\n'
+  let end = root.length
+  if (nextRoot !== -1) {
+    end = nextRoot
+  }
+  const block = `${root.slice(0, end)}\n`
   const match = /^ {6}turbo:\n {8}specifier: (\S+)\n {8}version: ([^\s'\n]+)/m.exec(block)
   if (match === null) return null
   const specifier = match[1]
@@ -180,9 +275,12 @@ const assertTurboPin = (
   if (pinned === null) {
     throw new Error(`${context}: no 'turbo' devDependency in the root importer of ${LOCKFILE}`)
   }
-  let resolved: { readonly version?: unknown }
+  let resolved: { readonly version?: unknown } = {}
   try {
-    resolved = JSON.parse(resolvedTurboPackageJson)
+    const raw: unknown = JSON.parse(resolvedTurboPackageJson)
+    if (typeof raw === 'object' && raw !== null && 'version' in raw) {
+      resolved = { version: raw.version }
+    }
   } catch {
     throw new Error(`${context}: ${TURBO_MANIFEST} is not parseable JSON`)
   }
@@ -195,13 +293,13 @@ const assertTurboPin = (
   return pinned.version
 }
 
-const liveTurboPin = (root: RepoRoot): Effect.Effect<string, Error> =>
+const liveTurboPin = (root: RepoRoot): Effect.Effect<string, Error, FileSystem.FileSystem> =>
   Effect.gen(function*() {
     const lockfile = yield* readFile(`${root}/${LOCKFILE}`)
-    const resolvedTurbo = yield* Effect.tryPromise({
-      try: () => Deno.readTextFile(`${root}/${TURBO_MANIFEST}`).catch(() => '{}'),
-      catch: (cause) => new Error(`cannot read ${root}/${TURBO_MANIFEST}: ${describeCause(cause)}`),
-    })
+    const fs = yield* FileSystem.FileSystem
+    const resolvedTurbo = yield* fs.readFileString(`${root}/${TURBO_MANIFEST}`).pipe(
+      Effect.orElseSucceed(() => '{}'),
+    )
     try {
       return assertTurboPin(lockfile, resolvedTurbo, 'change-evidence')
     } catch (cause) {
@@ -215,13 +313,14 @@ const dryRunAt = (
   root: RepoRoot,
   task: TaskName,
   pinned: string,
-): Effect.Effect<DryRun, Error> =>
+): Effect.Effect<DryRun, Error, FileSystem.FileSystem | ChildProcessSpawner> =>
   Effect.gen(function*() {
+    const fs = yield* FileSystem.FileSystem
     const turboBin = `${root}/${TURBO_BIN}`
-    const installed = yield* Effect.tryPromise({
-      try: () => Deno.lstat(turboBin).then(() => true).catch(() => false),
-      catch: (cause) => new Error(`cannot stat ${turboBin}: ${describeCause(cause)}`),
-    })
+    const installed = yield* fs.stat(turboBin).pipe(
+      Effect.as(true),
+      Effect.orElseSucceed(() => false),
+    )
     if (!installed) {
       return yield* Effect.fail(
         new Error(
@@ -251,10 +350,12 @@ const dryRunAt = (
     return run
   })
 
-const listManifestPaths = (root: RepoRoot): Effect.Effect<ReadonlyArray<string>, Error> =>
+const listManifestPaths = (root: RepoRoot): Effect.Effect<ReadonlyArray<string>, Error, ChildProcessSpawner> =>
   gitLines(['ls-files', '*package.json', ':(exclude)repos/**'], root)
 
-const allMembers = (root: RepoRoot): Effect.Effect<ReadonlyArray<Member>, Error> =>
+const allMembers = (
+  root: RepoRoot,
+): Effect.Effect<ReadonlyArray<Member>, Error, FileSystem.FileSystem | ChildProcessSpawner> =>
   Effect.gen(function*() {
     const paths = yield* listManifestPaths(root)
     const members: Array<Member> = []
@@ -268,25 +369,25 @@ const allMembers = (root: RepoRoot): Effect.Effect<ReadonlyArray<Member>, Error>
 const turboMembers = (
   root: RepoRoot,
   runs: ReadonlyArray<DryRun>,
-): Effect.Effect<ReadonlyArray<Member>, Error> =>
+): Effect.Effect<ReadonlyArray<Member>, Error, FileSystem.FileSystem | ChildProcessSpawner> =>
   Effect.gen(function*() {
-    const dirs = new Map<string, string>()
+    const dirs: Record<string, string> = {}
     for (const run of runs) {
-      for (const [name, dir] of Object.entries(run.dirs)) dirs.set(name, dir)
+      for (const [name, dir] of Object.entries(run.dirs)) dirs[name] = dir
     }
-    const turboNames = new Set(runs.flatMap((run) => run.packages))
-    if ([...turboNames].some((name) => !dirs.has(name))) {
+    const turboNames = HashSet.fromIterable(runs.flatMap((run) => run.packages))
+    if ([...turboNames].some((name) => !Object.hasOwn(dirs, name))) {
       const manifestPaths = yield* listManifestPaths(root)
       for (const manifestPath of manifestPaths) {
         const member = probeMember(manifestPath, yield* readFile(`${root}/${manifestPath}`))
-        if (member === null || !turboNames.has(member.name) || dirs.has(member.name)) continue
-        dirs.set(member.name, member.dir)
+        if (member === null || !HashSet.has(turboNames, member.name) || Object.hasOwn(dirs, member.name)) continue
+        dirs[member.name] = member.dir
       }
     }
     const members: Array<Member> = []
-    for (const [, dir] of dirs) {
+    for (const dir of Object.values(dirs)) {
       const member = probeMember(`${dir}${MANIFEST_SUFFIX}`, yield* readFile(`${root}/${dir}${MANIFEST_SUFFIX}`))
-      if (member === null || dirs.get(member.name) !== member.dir) continue
+      if (member === null || dirs[member.name] !== member.dir) continue
       members.push(member)
     }
     return members
@@ -296,10 +397,10 @@ const pathsTouched = (
   members: ReadonlyArray<Member>,
   changedFiles: ReadonlyArray<RelativePath>,
 ): ReadonlyArray<PackageName> => {
-  const touched = new Set<PackageName>()
+  let touched = HashSet.empty<PackageName>()
   for (const file of changedFiles) {
     const owner = memberOwning(file, members)
-    if (owner !== null && owner.publishable) touched.add(owner.name)
+    if (owner !== null && owner.publishable) touched = HashSet.add(touched, owner.name)
   }
   return [...touched].sort()
 }
@@ -310,18 +411,28 @@ const verdictTouched = (
   members: ReadonlyArray<Member>,
   changedFiles: ReadonlyArray<RelativePath>,
 ): ReadonlyArray<PackageName> => {
-  const touched = new Set<PackageName>()
+  let touched = HashSet.empty<PackageName>()
   for (const member of members) {
     if (!member.publishable) continue
-    const atBase = Object.hasOwn(base, member.name) ? base[member.name] : undefined
-    const atHead = Object.hasOwn(head, member.name) ? head[member.name] : undefined
+    let atBase: string | undefined
+    if (Object.hasOwn(base, member.name)) {
+      atBase = base[member.name]
+    } else {
+      atBase = undefined
+    }
+    let atHead: string | undefined
+    if (Object.hasOwn(head, member.name)) {
+      atHead = head[member.name]
+    } else {
+      atHead = undefined
+    }
     if (atHead === undefined) continue
-    if (atBase === undefined || atBase !== atHead) touched.add(member.name)
+    if (atBase === undefined || atBase !== atHead) touched = HashSet.add(touched, member.name)
   }
   for (const member of members) {
     if (!member.publishable) continue
     if (Object.hasOwn(base, member.name) || Object.hasOwn(head, member.name)) continue
-    if (changedFiles.some((file) => memberOwning(file, [member]) !== null)) touched.add(member.name)
+    if (changedFiles.some((file) => memberOwning(file, [member]) !== null)) touched = HashSet.add(touched, member.name)
   }
   return [...touched].sort()
 }
@@ -333,14 +444,12 @@ const collectTurboEvidence = (
   task: TaskName,
   pinned: string,
   changedFiles: ReadonlyArray<RelativePath>,
-): Effect.Effect<ChangeEvidence, Error> =>
+): Effect.Effect<ChangeEvidence, Error, FileSystem.FileSystem | ChildProcessSpawner> =>
   Effect.gen(function*() {
+    const fs = yield* FileSystem.FileSystem
     const added = yield* capture('git', ['worktree', 'add', '--detach', '--force', baseDir, baseSha], root)
     if (!added.success) {
-      yield* Effect.tryPromise({
-        try: () => Deno.remove(baseDir, { recursive: true }).catch(() => undefined),
-        catch: (cause) => new Error(`cannot remove ${baseDir}: ${describeCause(cause)}`),
-      }).pipe(Effect.orDie)
+      yield* fs.remove(baseDir, { recursive: true }).pipe(Effect.ignore)
       return yield* Effect.fail(new Error(`git worktree failed: ${added.stderr.trim()}`))
     }
     const [baseRun, headRun] = yield* Effect.all(
@@ -370,7 +479,7 @@ const collectTurboEvidence = (
     return evidence
   })
 
-export const ChangeEvidenceLive: Layer.Layer<ChangeEvidencePort, never, GitPort> = Layer.effect(
+const ChangeEvidenceInner: Layer.Layer<ChangeEvidencePort, never, GitPort> = Layer.effect(
   ChangeEvidencePort,
   Effect.gen(function*() {
     const git = yield* GitPort
@@ -385,7 +494,7 @@ export const ChangeEvidenceLive: Layer.Layer<ChangeEvidencePort, never, GitPort>
           raw: { strategy: 'paths', base: ref, changedPaths: [...changed] },
         }
         return evidence
-      })
+      }).pipe(Effect.provide(NodeServices.layer))
     const turboEvidence: ChangeEvidencePort['turboEvidence'] = (root, ref, task) =>
       Effect.gen(function*() {
         const head = yield* git.currentBranch().pipe(Effect.orDie)
@@ -394,15 +503,20 @@ export const ChangeEvidenceLive: Layer.Layer<ChangeEvidencePort, never, GitPort>
         const baseSha = parsed[0]
         if (baseSha === undefined) return yield* Effect.die(new Error(`git rev-parse returned no sha for ${ref}`))
         const changed = yield* git.changedPaths(ref, head)
-        const baseDir = yield* Effect.tryPromise({
-          try: () => Deno.makeTempDir({ prefix: WORKTREE_PREFIX }),
-          catch: (cause) => new Error(`cannot create a base worktree directory: ${describeCause(cause)}`),
-        }).pipe(Effect.orDie)
+        const fs = yield* FileSystem.FileSystem
+        const baseDir = yield* fs.makeTempDirectory({ prefix: WORKTREE_PREFIX }).pipe(
+          Effect.mapError((cause) => new Error(`cannot create a base worktree directory: ${describeCause(cause)}`)),
+          Effect.orDie,
+        )
         return yield* Effect.ensuring(
           collectTurboEvidence(root, baseDir, baseSha, task, pinned, changed).pipe(Effect.orDie),
           Effect.asVoid(Effect.option(gitLines(['worktree', 'remove', '--force', baseDir], root))),
         )
-      })
+      }).pipe(Effect.provide(NodeServices.layer))
     return { pathsEvidence, turboEvidence }
   }),
+)
+
+export const ChangeEvidenceLive: Layer.Layer<ChangeEvidencePort, never, GitPort> = ChangeEvidenceInner.pipe(
+  Layer.provide(NodeServices.layer),
 )

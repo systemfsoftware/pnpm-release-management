@@ -22,7 +22,7 @@ import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 
-import { type ChangesGated, type ChangesVacant, gateChanges, GateCommand } from './gate-changes.workflow.ts'
+import { type ChangesGated, type ChangesVacant, gateChanges, GateCommand } from './gate-changes.workflow.js'
 export const GateRequest = Wire.wire({
   root: Wire.mint(RepoRoot),
   ref: Wire.mint(GitRef),

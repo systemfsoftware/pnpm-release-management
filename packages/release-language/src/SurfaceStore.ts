@@ -1,8 +1,8 @@
 import { Context, type Effect } from 'effect'
-import type { VersionSurface } from './Config.schema.ts'
-import type { SurfaceWrite } from './Sync.schema.ts'
-import type { VersionRefusal } from './Version.schema.ts'
-import type { PackageVersion, RelativePath, RootFile } from './Workspace.schema.ts'
+import type { VersionSurface } from './Config.schema.js'
+import type { SurfaceWrite } from './Sync.schema.js'
+import type { VersionRefusal } from './Version.schema.js'
+import type { PackageVersion, RelativePath, RootFile } from './Workspace.schema.js'
 
 export interface SurfaceStore {
   readonly readSurface: (

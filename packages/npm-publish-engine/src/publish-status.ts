@@ -10,8 +10,8 @@ import {
   type PublishStatusWorkflowRefusal,
   type ScoredEvaluation,
   StatusCommand,
-} from './publish-status.workflow.ts'
-import { StatusMode, type StatusReport, type StatusRow } from './status.schema.ts'
+} from './publish-status.workflow.js'
+import { StatusMode, type StatusReport, type StatusRow } from './status.schema.js'
 
 export const StatusRequest = Wire.wire({
   mode: Wire.mint(StatusMode),
@@ -31,20 +31,41 @@ class StatusRaw {
   ) {}
 }
 
+const StatusReportTag = { _tag: 'Report' } as const
+type StatusReportTag = typeof StatusReportTag
+interface StatusReportPlan extends StatusReportTag {
+  readonly healthy: boolean
+  readonly unpublished: number
+  readonly untrusted: number
+  readonly stuck: number
+  readonly total: number
+  readonly evaluations: ReadonlyArray<ScoredEvaluation>
+}
+const StatusRefusedUnpublishedTag = { _tag: 'RefusedUnpublished' } as const
+type StatusRefusedUnpublishedTag = typeof StatusRefusedUnpublishedTag
+interface StatusRefusedUnpublishedPlan extends StatusRefusedUnpublishedTag {
+  readonly packages: ReadonlyArray<Lang.PackageName>
+}
+const StatusRefusedUnattestedTag = { _tag: 'RefusedUnattested' } as const
+type StatusRefusedUnattestedTag = typeof StatusRefusedUnattestedTag
+interface StatusRefusedUnattestedPlan extends StatusRefusedUnattestedTag {
+  readonly packages: ReadonlyArray<Lang.PackageName>
+}
+const StatusRefusedUnreadableTag = { _tag: 'RefusedUnreadable' } as const
+type StatusRefusedUnreadableTag = typeof StatusRefusedUnreadableTag
+interface StatusRefusedUnreadablePlan extends StatusRefusedUnreadableTag {
+  readonly packages: ReadonlyArray<Lang.PackageName>
+}
+const StatusVacantTag = { _tag: 'Vacant' } as const
+type StatusVacantTag = typeof StatusVacantTag
+interface StatusVacantPlan extends StatusVacantTag {
+}
 type StatusPlan =
-  | {
-    readonly _tag: 'Report'
-    readonly healthy: boolean
-    readonly unpublished: number
-    readonly untrusted: number
-    readonly stuck: number
-    readonly total: number
-    readonly evaluations: ReadonlyArray<ScoredEvaluation>
-  }
-  | { readonly _tag: 'RefusedUnpublished'; readonly packages: ReadonlyArray<Lang.PackageName> }
-  | { readonly _tag: 'RefusedUnattested'; readonly packages: ReadonlyArray<Lang.PackageName> }
-  | { readonly _tag: 'RefusedUnreadable'; readonly packages: ReadonlyArray<Lang.PackageName> }
-  | { readonly _tag: 'Vacant' }
+  | StatusReportPlan
+  | StatusRefusedUnpublishedPlan
+  | StatusRefusedUnattestedPlan
+  | StatusRefusedUnreadablePlan
+  | StatusVacantPlan
 
 const read = (
   request: StatusRequest,
@@ -81,39 +102,44 @@ const encode = (
   outcome: Result.Result<PublishStatusWorkflowDecision, PublishStatusWorkflowRefusal>,
 ): StatusPlan => {
   if (Result.isFailure(outcome)) {
-    const refusal = outcome.failure
-    if (refusal._tag === 'PublishStatusUnpublished') {
-      return { _tag: 'RefusedUnpublished', packages: [...refusal.packages] }
-    }
-    if (refusal._tag === 'PublishStatusUnattested') {
-      return { _tag: 'RefusedUnattested', packages: [...refusal.packages] }
-    }
-    if (refusal._tag === 'PublishStatusUnreadable') {
-      return { _tag: 'RefusedUnreadable', packages: [...refusal.packages] }
-    }
-    return { _tag: 'Vacant' }
+    return Match.value(outcome.failure).pipe(
+      Match.tag(
+        'PublishStatusUnpublished',
+        (unpublished) => ({ _tag: 'RefusedUnpublished' as const, packages: [...unpublished.packages] }),
+      ),
+      Match.tag(
+        'PublishStatusUnattested',
+        (unattested) => ({ _tag: 'RefusedUnattested' as const, packages: [...unattested.packages] }),
+      ),
+      Match.tag(
+        'PublishStatusUnreadable',
+        (unreadable) => ({ _tag: 'RefusedUnreadable' as const, packages: [...unreadable.packages] }),
+      ),
+      Match.tag('PublishStatusEmpty', () => ({ _tag: 'Vacant' as const })),
+      Match.exhaustive,
+    )
   }
-  const decision = outcome.success
-  if (decision._tag === 'PublishStatusHealthy') {
-    return {
-      _tag: 'Report',
+  return Match.value(outcome.success).pipe(
+    Match.tag('PublishStatusHealthy', (healthy) => ({
+      _tag: 'Report' as const,
       healthy: true,
       unpublished: 0,
       untrusted: 0,
       stuck: 0,
-      total: decision.packages,
-      evaluations: [...decision.evaluations],
-    }
-  }
-  return {
-    _tag: 'Report',
-    healthy: false,
-    unpublished: decision.unpublished,
-    untrusted: decision.untrusted,
-    stuck: decision.stuck,
-    total: decision.evaluations.length,
-    evaluations: [...decision.evaluations],
-  }
+      total: healthy.packages,
+      evaluations: [...healthy.evaluations],
+    })),
+    Match.tag('PublishStatusOwed', (owed) => ({
+      _tag: 'Report' as const,
+      healthy: false,
+      unpublished: owed.unpublished,
+      untrusted: owed.untrusted,
+      stuck: owed.stuck,
+      total: owed.evaluations.length,
+      evaluations: [...owed.evaluations],
+    })),
+    Match.exhaustive,
+  )
 }
 
 const refusedOf = (

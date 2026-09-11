@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"],
+    "customConditions": ["@systemfsoftware/source"],
+    "plugins": [{ "name": "@effect/language-service" }]
+  },
+  "extends": "@systemfsoftware/tsconfig/tsc/no-dom/library-monorepo",
+  "include": ["**/*.ts"],
+  "exclude": ["vitest.config.ts", "oxlint.config.ts"]
+}

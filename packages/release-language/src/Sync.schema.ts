@@ -1,5 +1,5 @@
 import * as S from 'effect/Schema'
-import { Count, PackageVersion, RelativePath } from './Workspace.schema.ts'
+import { Count, PackageVersion, RelativePath } from './Workspace.schema.js'
 
 export const SurfaceWrite = S.Struct({
   path: RelativePath,

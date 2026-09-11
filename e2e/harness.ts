@@ -1,8 +1,7 @@
-import { dirname } from '@std/path'
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers'
 
 export const IMAGE = 'pnpm-release-management-e2e:local'
-export const APPS_DIR = '/prm/apps'
+export const BINS_DIR = '/opt/prm'
 export const FIXTURE = '/srv/fixture'
 export const ORIGIN = '/srv/origin.git'
 
@@ -18,6 +17,11 @@ export const REDIRECTED_HOSTS = [
 
 const READY = 'curl -fsS https://api.github.com/meta > /dev/null && ' +
   'curl -fsS https://registry.npmjs.org/-/ping > /dev/null'
+
+const GITHUB_HEADERS: ReadonlyArray<string> = [
+  `Authorization: Bearer ${GITHUB_TOKEN}`,
+  'Accept: application/vnd.github+json',
+]
 
 export interface ExecOptions {
   cwd?: string
@@ -71,7 +75,7 @@ export interface World {
   tool(app: string, subcommand: string, args?: string, options?: ExecOptions): Promise<ExecResult>
   write(path: string, content: string): Promise<void>
   read(path: string): Promise<string>
-  github<T>(path: string): Promise<GitHubResponse<T>>
+  github<T>(path: string, decode: (input: unknown) => T): Promise<GitHubResponse<T>>
   snapshot(): Promise<Snapshot>
   archive(): Promise<string>
   keepAlive(): void
@@ -80,6 +84,11 @@ export interface World {
 
 const quote = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`
 
+export const parseJson = (text: string): unknown => {
+  const parsed: unknown = JSON.parse(text)
+  return parsed
+}
+
 const DEFAULT_ENV: Readonly<Record<string, string>> = {
   NO_COLOR: '1',
   GITHUB_API_URL,
@@ -87,19 +96,13 @@ const DEFAULT_ENV: Readonly<Record<string, string>> = {
   GITHUB_REPOSITORY,
 }
 
-const shellScript = (command: string, options: ExecOptions): string =>
-  [
-    ...Object.entries({ ...DEFAULT_ENV, ...options.env }).map(([name, value]) => `export ${name}=${quote(value)}`),
-    options.cwd === undefined ? '' : `cd ${quote(options.cwd)}`,
-    command,
-  ]
-    .filter((line) => line.length > 0)
-    .join('\n')
-
-interface ContainerExec {
-  exitCode: number
-  stdout: string
-  stderr: string
+const shellScript = (command: string, options: ExecOptions): string => {
+  const lines = Object.entries({ ...DEFAULT_ENV, ...options.env }).map(([name, value]) =>
+    `export ${name}=${quote(value)}`
+  )
+  if (options.cwd !== undefined) lines.push(`cd ${quote(options.cwd)}`)
+  lines.push(command)
+  return lines.join('\n')
 }
 
 export const makeWorld = (container: StartedTestContainer, listener: Listener): World => {
@@ -108,33 +111,31 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
   const run = async (command: string, options: ExecOptions = {}): Promise<ExecResult> => {
     const started = performance.now()
     const result = await container.exec(['sh', '-lc', shellScript(command, options)])
-    const exec = result as unknown as ContainerExec
     const record: CommandRecord = {
       phase: state.phase,
       command,
       cwd: options.cwd ?? '(default)',
       env: options.env ?? {},
-      code: exec.exitCode,
+      code: result.exitCode,
       durationMs: Math.round(performance.now() - started),
-      stdout: exec.stdout,
-      stderr: exec.stderr,
+      stdout: result.stdout,
+      stderr: result.stderr,
     }
     listener.command(record)
-    return { code: exec.exitCode, stdout: exec.stdout, stderr: exec.stderr }
+    return { code: result.exitCode, stdout: result.stdout, stderr: result.stderr }
   }
-
-  const describe = (command: string, result: ExecResult): string =>
-    `${command}\nexit ${result.code}\n${result.stdout}${result.stderr}`
 
   const must = async (command: string, options: ExecOptions = {}): Promise<ExecResult> => {
     const result = await run(command, options)
-    if (result.code !== 0) throw new Error(describe(command, result))
+    if (result.code !== 0) throw new Error(`${command}\nexit ${result.code}\n${result.stdout}${result.stderr}`)
     return result
   }
 
   const fails = async (command: string, options: ExecOptions = {}): Promise<ExecResult> => {
     const result = await run(command, options)
-    if (result.code === 0) throw new Error(`expected a non-zero exit\n${describe(command, result)}`)
+    if (result.code === 0) {
+      throw new Error(`expected a non-zero exit\n${command}\nexit ${result.code}\n${result.stdout}${result.stderr}`)
+    }
     return result
   }
 
@@ -142,7 +143,7 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
     const marker = 'PRM_FIXTURE_EOF'
     if (content.includes(marker)) throw new Error(`${path} cannot contain the heredoc marker`)
     await must(
-      `mkdir -p ${quote(dirname(path))} && cat > ${quote(path)} <<'${marker}'\n${content}\n${marker}`,
+      `mkdir -p "$(dirname ${quote(path)})" && cat > ${quote(path)} <<'${marker}'\n${content}\n${marker}`,
     )
   }
 
@@ -151,38 +152,36 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
     subcommand: string,
     args = '',
     options: ExecOptions = {},
-  ): Promise<ExecResult> =>
-    run(
-      `${quote(`${APPS_DIR}/${app}/main.ts`)} ${subcommand}${args.length === 0 ? '' : ` ${args}`}`,
-      {
-        cwd: FIXTURE,
-        ...options,
-      },
-    )
+  ): Promise<ExecResult> => {
+    const parts = [`${quote(`${BINS_DIR}/${app}`)} ${subcommand}`]
+    if (args.length > 0) parts.push(args)
+    return run(parts.join(' '), {
+      cwd: FIXTURE,
+      ...options,
+    })
+  }
 
-  const curlJson = async <T>(url: string, headers: readonly string[] = []): Promise<GitHubResponse<T>> => {
+  const curlJson = async (
+    url: string,
+    headers: ReadonlyArray<string> = [],
+  ): Promise<{ status: number; body: unknown }> => {
     const result = await must(
       `curl -sS -w '\\n%{http_code}' ${headers.map((header) => `-H ${quote(header)}`).join(' ')} ` +
         quote(url),
     )
     const lines = result.stdout.trimEnd().split('\n')
-    const status = Number(lines.pop())
+    const statusText = lines.pop()
+    if (statusText === undefined) throw new Error(`no status line in response from ${url}`)
+    const status = Number(statusText)
     const text = lines.join('\n')
-    return { status, body: text.length === 0 ? null : JSON.parse(text) as T }
+    if (text.length === 0) return { status, body: null }
+    return { status, body: parseJson(text) }
   }
 
-  const github = <T>(path: string): Promise<GitHubResponse<T>> =>
-    curlJson<T>(`${GITHUB_API_URL}${path}`, [
-      `Authorization: Bearer ${GITHUB_TOKEN}`,
-      'Accept: application/vnd.github+json',
-    ])
-
-  const tolerant = async (fetchBody: () => Promise<unknown>): Promise<unknown> => {
-    try {
-      return await fetchBody()
-    } catch (error) {
-      return { unavailable: error instanceof Error ? error.message : String(error) }
-    }
+  const github = async <A>(path: string, decode: (input: unknown) => A): Promise<GitHubResponse<A>> => {
+    const response = await curlJson(`${GITHUB_API_URL}${path}`, GITHUB_HEADERS)
+    if (response.body === null) return { status: response.status, body: null }
+    return { status: response.status, body: decode(response.body) }
   }
 
   const snapshot = async (): Promise<Snapshot> => {
@@ -190,7 +189,8 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
       try {
         return (await run(command, { cwd: FIXTURE })).stdout
       } catch (error) {
-        return `unavailable: ${error instanceof Error ? error.message : String(error)}`
+        if (error instanceof Error) return `unavailable: ${error.message}`
+        return 'unavailable: unknown error'
       }
     }
 
@@ -200,28 +200,40 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
 
     const registry: Record<string, unknown> = {}
     for (const name of ['@e2e/alpha', '@e2e/beta']) {
-      registry[name] = await tolerant(async () =>
-        (await curlJson<unknown>(`${REGISTRY}/${encodeURIComponent(name)}`)).body
-      )
+      registry[name] = await tolerant(async () => (await curlJson(`${REGISTRY}/${encodeURIComponent(name)}`)).body)
+    }
+
+    const versions: Record<string, string> = {}
+    for (const line of versionsRaw.split('\n')) {
+      if (!line.includes('"version"')) continue
+      const file = line.split(' ')[0]
+      if (file === undefined || file.length === 0) continue
+      versions[file] = line.match(/"version": "([^"]+)"/)?.[1] ?? '?'
     }
 
     return {
       takenAt: new Date().toISOString(),
       git: await safely('git log --oneline -20 && echo --- && git tag --list'),
       status: await safely('git status --porcelain'),
-      versions: Object.fromEntries(
-        versionsRaw.split('\n').filter((line) => line.includes('"version"')).map((line) => [
-          line.split(' ')[0],
-          line.match(/"version": "([^"]+)"/)?.[1] ?? '?',
-        ]),
-      ),
+      versions,
       changesets: await safely('ls -la .changeset .changeset/changelogs'),
       files: await safely('find . -path ./node_modules -prune -o -type f -print | sort'),
-      releases: await tolerant(async () => (await github<unknown>('/repos/admin/fixture/releases?per_page=100')).body),
+      releases: await tolerant(async () =>
+        (await curlJson(`${GITHUB_API_URL}/repos/admin/fixture/releases?per_page=100`, GITHUB_HEADERS)).body
+      ),
       pulls: await tolerant(async () =>
-        (await github<unknown>('/repos/admin/fixture/pulls?state=all&per_page=100')).body
+        (await curlJson(`${GITHUB_API_URL}/repos/admin/fixture/pulls?state=all&per_page=100`, GITHUB_HEADERS)).body
       ),
       registry,
+    }
+  }
+
+  const tolerant = async (fetchBody: () => Promise<unknown>): Promise<unknown> => {
+    try {
+      return await fetchBody()
+    } catch (error) {
+      if (error instanceof Error) return { unavailable: error.message }
+      return { unavailable: 'unknown error' }
     }
   }
 

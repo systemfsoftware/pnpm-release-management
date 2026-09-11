@@ -22,7 +22,15 @@ export const ForgeConfig: Context.Service<ForgeConfig, ForgeConfig> = Context.Se
   ForgeConfig
 >('ForgeConfig')
 
-const message = (error: unknown): string => error instanceof Error ? error.message : String(error)
+const message = (error: unknown): string => {
+  if (error instanceof Error) {
+    return error.message
+  }
+  if (typeof error === 'string') {
+    return error
+  }
+  return 'unknown error'
+}
 
 const isAlreadyExists = (error: unknown): boolean =>
   error instanceof RequestError &&
@@ -33,10 +41,14 @@ const decodeOrDie = <A, E>(result: Result.Result<A, E>): Effect.Effect<A> =>
   Effect.fromResult(result).pipe(Effect.orDie)
 
 const makeForge = (config: ForgeConfig): ForgePort => {
-  const client = new Octokit({
-    ...(config.token === undefined ? {} : { auth: config.token }),
-    ...(config.baseUrl === undefined ? {} : { baseUrl: config.baseUrl }),
-  })
+  let octokitOptions: { readonly auth?: string; readonly baseUrl?: string } = {}
+  if (config.token !== undefined) {
+    octokitOptions = { ...octokitOptions, auth: config.token }
+  }
+  if (config.baseUrl !== undefined) {
+    octokitOptions = { ...octokitOptions, baseUrl: config.baseUrl }
+  }
+  const client = new Octokit(octokitOptions)
 
   const addLabels = (
     repo: RepoSlug,
@@ -78,14 +90,16 @@ const makeForge = (config: ForgeConfig): ForgePort => {
           catch: (error) => error,
         }),
         {
-          onFailure: (error: unknown) =>
-            error instanceof RequestError && error.status === 404
-              ? Effect.succeed<ReleaseLookup>({ _tag: 'ReleaseAbsent', tag })
-              : Effect.die(
-                new Error(
-                  `looking up ${tag} in ${repo.owner}/${repo.repo} failed: ${message(error)}`,
-                ),
+          onFailure: (error: unknown) => {
+            if (error instanceof RequestError && error.status === 404) {
+              return Effect.succeed<ReleaseLookup>({ _tag: 'ReleaseAbsent', tag })
+            }
+            return Effect.die(
+              new Error(
+                `looking up ${tag} in ${repo.owner}/${repo.repo} failed: ${message(error)}`,
               ),
+            )
+          },
           onSuccess: (res) =>
             decodeOrDie(S.decodeUnknownResult(ReleaseId)(res.data.id)).pipe(
               Effect.map((id): ReleaseLookup => ({ _tag: 'ReleaseFound', id })),
@@ -107,16 +121,18 @@ const makeForge = (config: ForgeConfig): ForgePort => {
           catch: (error) => error,
         }),
         {
-          onFailure: (error: unknown) =>
-            isAlreadyExists(error)
-              ? Effect.die(
+          onFailure: (error: unknown) => {
+            if (isAlreadyExists(error)) {
+              return Effect.die(
                 new Error(
                   `release ${tag} already exists in ${repo.owner}/${repo.repo}`,
                 ),
               )
-              : Effect.die(
-                new Error(`creating release ${tag} failed: ${message(error)}`),
-              ),
+            }
+            return Effect.die(
+              new Error(`creating release ${tag} failed: ${message(error)}`),
+            )
+          },
           onSuccess: (res) => decodeOrDie(S.decodeUnknownResult(ReleaseId)(res.data.id)),
         },
       ),
@@ -163,7 +179,7 @@ const makeForge = (config: ForgeConfig): ForgePort => {
               ),
             ),
           onSuccess: (res) => {
-            const first = res.data[0]
+            const first = res.data.at(0)
             if (first === undefined) {
               return Effect.succeed<PullRequestLookup>({
                 _tag: 'PullRequestAbsent',
@@ -243,13 +259,14 @@ const makeForge = (config: ForgeConfig): ForgePort => {
             decodeOrDie(
               S.decodeUnknownResult(PullRequestNumber)(res.data.number),
             ).pipe(
-              Effect.flatMap((number) =>
-                labels.length === 0
-                  ? Effect.succeed(number)
-                  : addLabels(repo, number, labels).pipe(
-                    Effect.map((_void): PullRequestNumber => number),
-                  )
-              ),
+              Effect.flatMap((number) => {
+                if (labels.length === 0) {
+                  return Effect.succeed(number)
+                }
+                return addLabels(repo, number, labels).pipe(
+                  Effect.map((_void): PullRequestNumber => number),
+                )
+              }),
             ),
         },
       ),
@@ -279,10 +296,12 @@ const makeForge = (config: ForgeConfig): ForgePort => {
                 `updating pull request #${String(number)} failed: ${message(error)}`,
               ),
             ),
-          onSuccess: (_res) =>
-            labels.length === 0
-              ? Effect.void
-              : addLabels(repo, number, labels),
+          onSuccess: (_res) => {
+            if (labels.length === 0) {
+              return Effect.void
+            }
+            return addLabels(repo, number, labels)
+          },
         },
       ),
     closePullRequest: (repo: RepoSlug, number: PullRequestNumber) =>

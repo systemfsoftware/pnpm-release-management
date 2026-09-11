@@ -1,6 +1,6 @@
 import { Context, type Effect } from 'effect'
-import type { ChangelogFile, ChangelogRefusal, MemberChangelogEntry, RootChangelogAppend } from './Version.schema.ts'
-import type { RelativePath } from './Workspace.schema.ts'
+import type { ChangelogFile, ChangelogRefusal, MemberChangelogEntry, RootChangelogAppend } from './Version.schema.js'
+import type { RelativePath } from './Workspace.schema.js'
 
 export interface ChangelogStore {
   readonly readRootChangelog: (

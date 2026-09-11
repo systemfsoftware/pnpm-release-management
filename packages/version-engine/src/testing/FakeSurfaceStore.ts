@@ -21,14 +21,15 @@ export const makeFakeSurfaceStore = (
     readSurface: (file: RelativePath, _surface: VersionSurface) =>
       Effect.suspend(() => {
         const found = versions.get(file)
-        return found === undefined
-          ? Effect.fail(
+        if (found === undefined) {
+          return Effect.fail(
             {
               _tag: 'VersionSurfaceMissing',
               path: file,
             } as const,
           )
-          : Effect.succeed(found)
+        }
+        return Effect.succeed(found)
       }),
     writeSurface: (file: RelativePath, _surface: VersionSurface, version: PackageVersion) =>
       Effect.sync(() => {

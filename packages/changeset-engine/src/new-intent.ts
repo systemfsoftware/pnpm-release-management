@@ -22,8 +22,8 @@ import * as Array from 'effect/Array'
 import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import type { IntentDerivedStaged, IntentNamedStaged } from './new-intent.workflow.ts'
-import { newIntent, NewIntentCommand } from './new-intent.workflow.ts'
+import type { IntentDerivedStaged, IntentNamedStaged } from './new-intent.workflow.js'
+import { newIntent, NewIntentCommand } from './new-intent.workflow.js'
 
 export const NewIntentInput = Wire.wire({
   packages: Wire.mint(S.Array(S.String)),
@@ -72,9 +72,12 @@ const decode = (
     return Result.fail(NewIntentInvalidBump.make({ given: raw.request.bump ?? '' }))
   }
   if (names.malformed.length > 0) {
-    return Result.fail(
-      NewIntentPackageNameMalformedSchema.make({ given: names.malformed[0].given }),
-    )
+    const first = names.malformed[0]
+    if (first !== undefined) {
+      return Result.fail(
+        NewIntentPackageNameMalformedSchema.make({ given: first.given }),
+      )
+    }
   }
   const summary = S.decodeUnknownResult(IntentSummary)(raw.request.summary)
   if (Result.isFailure(summary)) {

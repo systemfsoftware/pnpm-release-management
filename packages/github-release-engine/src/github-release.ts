@@ -32,7 +32,7 @@ import { Effect } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import { computeCycle, nonEmptyArray } from './cycle.ts'
+import { computeCycle, nonEmptyArray } from './cycle.js'
 import {
   type ChangelogFileEmpty,
   type ChangelogFileMissing,
@@ -43,7 +43,7 @@ import {
   type GithubReleasesEmpty,
   type GithubReleasesPreviewed,
   type GithubReleasesSkipped,
-} from './github-release.workflow.ts'
+} from './github-release.workflow.js'
 
 export const GithubReleaseRequest = Wire.wire({
   captured: Wire.mint(S.optional(FsPath)),
@@ -96,9 +96,13 @@ const read = (
     const existing: Array<ReleaseTag> = []
     for (const entry of cycle) {
       const lookup = yield* forge.releaseByTag(slug, entry.tag)
-      if (lookup._tag === 'ReleaseFound') {
-        existing.push(entry.tag)
-      }
+      Match.value(lookup).pipe(
+        Match.tag('ReleaseFound', () => {
+          existing.push(entry.tag)
+        }),
+        Match.tag('ReleaseAbsent', () => undefined),
+        Match.exhaustive,
+      )
     }
     return new RawRelease(items, request.assert, request.dryRun, existing, slug)
   })
@@ -206,28 +210,39 @@ const write = (
   return Effect.gen(function*() {
     const forge = yield* ForgePort
     return yield* Match.value(encoded.decision).pipe(
-      Match.tag('GithubReleasePreview', (preview) =>
-        raw.preview
-          ? Effect.succeed(preview)
-          : Effect.gen(function*() {
-            const created: Array<CreatedRelease> = []
-            for (const tag of preview.tags) {
-              const item = raw.items.find((candidate) => candidate.entry.tag === tag)
-              const lookup = yield* forge.releaseByTag(raw.slug, tag)
-              if (lookup._tag === 'ReleaseAbsent') {
-                created.push({ tag, id: yield* forge.createRelease(raw.slug, tag, item?.body ?? '') })
-              }
-            }
-            const first = created[0]
-            if (first === undefined) {
-              return GithubReleaseSkipped.make({ tags: nonEmptyArray(preview.tags) })
-            }
-            yield* forge.promoteLatest(raw.slug, first.id)
-            return GithubReleaseCreated.make({
-              created: nonEmptyArray(created),
-              skipped: Count.make(preview.tags.length - created.length),
-            })
-          })),
+      Match.tag('GithubReleasePreview', (preview) => {
+        if (raw.preview) {
+          return Effect.succeed(preview)
+        }
+        return Effect.gen(function*() {
+          const created: Array<CreatedRelease> = []
+          for (const tag of preview.tags) {
+            const item = raw.items.find((candidate) => candidate.entry.tag === tag)
+            const lookup = yield* forge.releaseByTag(raw.slug, tag)
+            yield* Match.value(lookup).pipe(
+              Match.tag('ReleaseAbsent', () =>
+                Effect.gen(function*() {
+                  let body = ''
+                  if (item?.body !== undefined) {
+                    body = item.body
+                  }
+                  created.push({ tag, id: yield* forge.createRelease(raw.slug, tag, body) })
+                })),
+              Match.tag('ReleaseFound', () => Effect.void),
+              Match.exhaustive,
+            )
+          }
+          if (created.length === 0) {
+            return GithubReleaseSkipped.make({ tags: nonEmptyArray(preview.tags) })
+          }
+          const first = nonEmptyArray(created)[0]
+          yield* forge.promoteLatest(raw.slug, first.id)
+          return GithubReleaseCreated.make({
+            created: nonEmptyArray(created),
+            skipped: Count.make(preview.tags.length - created.length),
+          })
+        })
+      }),
       Match.tag('GithubReleaseCreated', (created) => Effect.succeed(created)),
       Match.tag('GithubReleaseSkipped', (skipped) => Effect.succeed(skipped)),
       Match.tag('GithubReleaseAsserted', (asserted) => Effect.succeed(asserted)),
