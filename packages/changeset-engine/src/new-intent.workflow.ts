@@ -17,7 +17,7 @@ export class NewIntentCommand extends S.TaggedClass<NewIntentCommand>()(
   'NewIntentCommand',
   {
     members: S.Array(Member),
-    packages: S.Array(PackageName),
+    packages: S.NonEmptyArray(PackageName),
     bump: Bump,
     summary: IntentSummary,
     slug: S.optional(IntentSlug),
@@ -29,86 +29,104 @@ const NewIntentStagedDecisionTypeId: unique symbol = Symbol.for(
 )
 type NewIntentStagedDecisionTypeId = typeof NewIntentStagedDecisionTypeId
 
-const StagedEntry = S.Struct({
-  name: PackageName,
-  bump: Bump,
-})
-
-const StagedFields = {
-  path: S.String,
-  packages: S.Array(StagedEntry),
-  bump: Bump,
-  summary: IntentSummary,
-}
-
 export class IntentNamedStaged extends S.TaggedClass<IntentNamedStaged>()(
   'IntentNamedStaged',
-  StagedFields,
+  {
+    packages: S.NonEmptyArray(PackageName),
+    bump: Bump,
+    summary: IntentSummary,
+    slug: IntentSlug,
+  },
 ) {
   readonly [NewIntentStagedDecisionTypeId] = NewIntentStagedDecisionTypeId
 }
 
 export class IntentDerivedStaged extends S.TaggedClass<IntentDerivedStaged>()(
   'IntentDerivedStaged',
-  StagedFields,
+  {
+    packages: S.NonEmptyArray(PackageName),
+    bump: Bump,
+    summary: IntentSummary,
+  },
 ) {
   readonly [NewIntentStagedDecisionTypeId] = NewIntentStagedDecisionTypeId
 }
 
-const slugify = (value: string): string =>
-  value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(
-    0,
-    48,
-  )
-const unknownMembers = (command: S.Schema.Type<typeof NewIntentCommand>) => {
-  const live = command.members.map((member) => member.name)
-  return command.packages.filter((name) => !live.includes(name))
-}
+const UnknownCase = S.TaggedStruct('NewIntentUnknownPackage', {
+  package: PackageName,
+})
+const NamedCase = S.TaggedStruct('NewIntentNamed', { slug: IntentSlug })
+const DerivedCase = S.TaggedStruct('NewIntentDerived', {})
 
-const derivedName = (command: S.Schema.Type<typeof NewIntentCommand>): string =>
-  Option.some(slugify(command.packages.join(' '))).pipe(
-    Option.filter((name) => name.length > 0),
-    Option.getOrElse(() => 'changeset'),
+type NewIntentCase =
+  | S.Schema.Type<typeof UnknownCase>
+  | S.Schema.Type<typeof NamedCase>
+  | S.Schema.Type<typeof DerivedCase>
+
+type NewIntentStaging = Result.Result<
+  IntentNamedStaged | IntentDerivedStaged,
+  IntentUnknownPackage
+>
+
+type NewIntentSubject = S.Schema.Type<typeof NewIntentCommand>
+
+const firstUnknownPackage = (command: NewIntentSubject): Option.Option<PackageName> =>
+  Array.findFirst(
+    command.packages,
+    (name) => !Array.some(command.members, (member) => member.name === name),
   )
 
-const entries = (command: S.Schema.Type<typeof NewIntentCommand>) =>
-  command.packages.map((name) => ({ name, bump: command.bump }))
+const classifyNewIntent = (command: NewIntentSubject): NewIntentCase =>
+  Match.value({
+    unknown: firstUnknownPackage(command),
+    slug: Option.fromNullishOr(command.slug),
+  }).pipe(
+    Match.when(
+      { unknown: Option.isSome },
+      ({ unknown }): NewIntentCase => UnknownCase.make({ package: Option.getOrThrow(unknown) }),
+    ),
+    Match.when(
+      { slug: Option.isSome },
+      ({ slug }): NewIntentCase => NamedCase.make({ slug: Option.getOrThrow(slug) }),
+    ),
+    Match.orElse((): NewIntentCase => DerivedCase.make({})),
+  )
 
 export const newIntent = Workflow.make(
   NewIntentCommand,
-  (command): Result.Result<IntentNamedStaged | IntentDerivedStaged, IntentUnknownPackage> =>
-    Array.match(unknownMembers(command), {
-      onEmpty: () => Result.succeed(stage(command)),
-      onNonEmpty: (unknown) =>
-        Result.fail(
-          {
+  (command): NewIntentStaging =>
+    Match.value(classifyNewIntent(command)).pipe(
+      Match.tag(
+        'NewIntentUnknownPackage',
+        (found): NewIntentStaging =>
+          Result.fail<IntentUnknownPackage>({
             _tag: 'IntentUnknownPackage',
-            package: unknown[0],
-          } as const,
-        ),
-    }),
+            package: found.package,
+          }),
+      ),
+      Match.tag(
+        'NewIntentNamed',
+        (found): NewIntentStaging =>
+          Result.succeed(
+            IntentNamedStaged.make({
+              packages: command.packages,
+              bump: command.bump,
+              summary: command.summary,
+              slug: found.slug,
+            }),
+          ),
+      ),
+      Match.tag(
+        'NewIntentDerived',
+        (): NewIntentStaging =>
+          Result.succeed(
+            IntentDerivedStaged.make({
+              packages: command.packages,
+              bump: command.bump,
+              summary: command.summary,
+            }),
+          ),
+      ),
+      Match.exhaustive,
+    ),
 )
-
-const stage = (
-  command: S.Schema.Type<typeof NewIntentCommand>,
-): IntentNamedStaged | IntentDerivedStaged =>
-  Match.value({ slug: Option.fromNullishOr(command.slug) }).pipe(
-    Match.when(
-      { slug: Option.isSome },
-      ({ slug }) =>
-        IntentNamedStaged.make({
-          path: `${slug.value}.md`,
-          packages: entries(command),
-          bump: command.bump,
-          summary: command.summary,
-        }),
-    ),
-    Match.orElse(() =>
-      IntentDerivedStaged.make({
-        path: `${derivedName(command)}.md`,
-        packages: entries(command),
-        bump: command.bump,
-        summary: command.summary,
-      })
-    ),
-  )

@@ -1,6 +1,5 @@
 import { Cell } from '@systemfsoftware/effect-cell-types'
 import {
-  type Bump,
   type ChangelogRefusal,
   ChangelogStore,
   ChangesetStore,
@@ -9,63 +8,50 @@ import {
   type IntentRefusal,
   type Member,
   type MemberRefusal,
+  type PackageManifest,
   type PackageName,
   type PackageVersion,
   ProcessPort,
   PublishArg,
   type PublishRefusal,
-  type RelativePath,
   type RepoRoot,
   SurfaceStore,
-  VersionDecision,
+  VersionBumped,
+  VersionConsumed,
+  type VersionDecision,
+  VersionIdle,
+  type VersionIntentMalformed,
   type VersionRefusal,
+  type VersionUnknownPackage,
   WorkspaceStore,
 } from '@systemfsoftware/release-language'
 import { Effect } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import { deriveBump } from './bump-derive.js'
-import { bumpVersions } from './bump-versions.workflow.js'
-import type {
-  VersionBumped as LocalVersionBumped,
-  VersionConsumed as LocalVersionConsumed,
-  VersionIdle as LocalVersionIdle,
+import { deriveBump, rootBulletsOf, summaryForPackage } from './bump-derive.js'
+import {
+  bumpVersions,
+  type VersionBumped as LocalVersionBumped,
+  type VersionConsumed as LocalVersionConsumed,
+  type VersionIdle as LocalVersionIdle,
 } from './bump-versions.workflow.js'
 import { BumpCommand, type BumpInput } from './bump.schema.js'
 
-type BumpRaw = {
-  readonly input: BumpInput
-  readonly root: RepoRoot
-  readonly intents: ReadonlyArray<Intent>
-  readonly members: ReadonlyArray<Member>
-  readonly manifestVersion: PackageVersion
-  readonly derived: {
-    readonly unknownPackage: PackageName | undefined
-    readonly malformedPath: RelativePath | undefined
-    readonly consolidated: Bump
-    readonly consolidatedNext: string
-    readonly nexts: ReadonlyArray<{ readonly name: PackageName; readonly next: string }>
-    readonly moved: ReadonlyArray<PackageName>
-    readonly changelogPaths: ReadonlyArray<{ readonly name: PackageName; readonly path: string }>
-    readonly packageRanks: ReadonlyArray<{
-      readonly name: PackageName
-      readonly rank: Bump
-      readonly summaries: ReadonlyArray<string>
-    }>
-    readonly intentCount: number
-    readonly fallbackSummary: string
-    readonly rootBullets: string
-  }
+class RawBump {
+  constructor(
+    readonly request: BumpInput,
+    readonly root: RepoRoot,
+    readonly intents: ReadonlyArray<Intent>,
+    readonly members: ReadonlyArray<Member>,
+    readonly manifestVersion: PackageVersion,
+  ) {}
 }
 
-const mustBrand = <C extends S.Constraint>(schema: C, input: unknown) =>
-  S.decodeUnknownEffect(schema)(input).pipe(Effect.orDie)
-
 const read = (
-  input: BumpInput,
+  request: BumpInput,
 ): Effect.Effect<
-  BumpRaw,
+  RawBump,
   IntentRefusal | MemberRefusal | VersionRefusal,
   ChangesetStore | WorkspaceStore | SurfaceStore
 > =>
@@ -76,160 +62,187 @@ const read = (
     const paths = yield* changesets.listIntents()
     const intents = yield* Effect.forEach(paths, (path) => changesets.readIntent(path))
     const members = yield* workspace.listMembers()
-    const manifestVersion = yield* surfaces.readSurface(input.manifest.file, input.manifest.surface)
-    const derived = deriveBump({
-      intents,
-      members,
-      strategy: input.strategy,
-      manifestVersion,
-      changelogDir: input.changelogDir,
-    })
-    return {
-      input,
-      root: workspace.root,
-      intents,
-      members,
-      manifestVersion,
-      derived: {
-        unknownPackage: derived.unknownPackage,
-        malformedPath: derived.malformedPath,
-        consolidated: derived.consolidated,
-        consolidatedNext: derived.consolidatedNext,
-        nexts: derived.nexts,
-        moved: derived.moved,
-        changelogPaths: derived.changelogPaths,
-        packageRanks: derived.packages,
-        intentCount: derived.intentCount,
-        fallbackSummary: derived.fallbackSummary,
-        rootBullets: derived.rootBullets,
-      },
-    }
+    const manifestVersion = yield* surfaces.readSurface(
+      request.manifest.file,
+      request.manifest.surface,
+    )
+    return new RawBump(request, workspace.root, intents, members, manifestVersion)
   })
 
-const decode = (raw: BumpRaw) =>
-  S.decodeUnknownResult(BumpCommand)({
-    _tag: 'BumpCommand',
-    strategy: raw.input.strategy,
+const decode = (raw: RawBump) => {
+  const { packages, ...derived } = deriveBump({
     intents: raw.intents,
     members: raw.members,
+    strategy: raw.request.strategy,
     manifestVersion: raw.manifestVersion,
-    changelogDir: raw.input.changelogDir,
-    rootChangelog: raw.input.rootChangelog,
-    consolidated: raw.derived.consolidated,
-    consolidatedNext: raw.derived.consolidatedNext,
-    nexts: raw.derived.nexts,
-    moved: raw.derived.moved,
-    changelogPaths: raw.derived.changelogPaths,
-    packageRanks: raw.derived.packageRanks,
-    unknownPackage: raw.derived.unknownPackage,
-    malformedPath: raw.derived.malformedPath,
-    intentCount: raw.derived.intentCount,
+    changelogDir: raw.request.changelogDir,
   })
-type LocalVersionDecision =
-  | LocalVersionBumped
-  | LocalVersionConsumed
-  | LocalVersionIdle
+  return S.decodeUnknownResult(BumpCommand)({
+    _tag: 'BumpCommand',
+    strategy: raw.request.strategy,
+    intents: [...raw.intents],
+    members: [...raw.members],
+    manifestVersion: raw.manifestVersion,
+    changelogDir: raw.request.changelogDir,
+    rootChangelog: raw.request.rootChangelog,
+    ...derived,
+    packageRanks: packages,
+  })
+}
+
+const toDecision = (
+  decision: LocalVersionBumped | LocalVersionConsumed | LocalVersionIdle,
+): VersionDecision =>
+  Match.value(decision).pipe(
+    Match.tag(
+      'VersionBumped',
+      (bumped) =>
+        VersionBumped.make({
+          version: bumped.version,
+          moved: [...bumped.moved],
+          changelogs: [...bumped.changelogs],
+        }),
+    ),
+    Match.tag(
+      'VersionConsumed',
+      (consumed) => VersionConsumed.make({ consumed: consumed.consumed }),
+    ),
+    Match.tag('VersionIdle', (idle) => VersionIdle.make({ pending: idle.pending })),
+    Match.exhaustive,
+  )
 
 const encode = (
-  outcome: Result.Result<LocalVersionDecision, VersionRefusal>,
-): Result.Result<LocalVersionDecision, VersionRefusal> => outcome
+  outcome: Result.Result<
+    LocalVersionBumped | LocalVersionConsumed | LocalVersionIdle,
+    VersionUnknownPackage | VersionIntentMalformed
+  >,
+): Result.Result<VersionDecision, VersionUnknownPackage | VersionIntentMalformed> => Result.map(outcome, toDecision)
 
-const summaryFor = (
-  raw: BumpRaw,
+const commandVersionOf = (
+  manifests: ReadonlyArray<PackageManifest>,
   name: PackageName,
-): string => {
-  const found = raw.derived.packageRanks.find((entry) => entry.name === name)
-  const own = found?.summaries ?? []
-  if (own.length > 0) return own.join(' ')
-  return raw.derived.fallbackSummary
+  fallback: PackageVersion,
+): PackageVersion => {
+  const manifest = manifests.find((candidate) => candidate.name === name)
+  if (manifest === undefined) return fallback
+  return manifest.version
 }
+
+const writeMemberChangelogs = (
+  request: BumpInput,
+  intents: ReadonlyArray<Intent>,
+  moved: ReadonlyArray<PackageName>,
+  versionOf: (name: PackageName) => PackageVersion,
+): Effect.Effect<void, ChangelogRefusal, ChangelogStore> =>
+  Effect.gen(function*() {
+    const changelogs = yield* ChangelogStore
+    yield* Effect.forEach(
+      moved,
+      (name) =>
+        changelogs.writeMemberChangelog({
+          changelogDir: request.changelogDir,
+          name,
+          version: versionOf(name),
+          summary: summaryForPackage(intents, name),
+        }),
+      { discard: true },
+    )
+  })
+
+const writeSurfaces = (
+  raw: RawBump,
+  bumped: VersionBumped,
+): Effect.Effect<void, VersionRefusal | ChangelogRefusal, SurfaceStore | ChangelogStore> =>
+  Effect.gen(function*() {
+    const surfaces = yield* SurfaceStore
+    const changelogs = yield* ChangelogStore
+    yield* surfaces.writeSurface(
+      raw.request.manifest.file,
+      raw.request.manifest.surface,
+      bumped.version,
+    )
+    yield* Effect.forEach(
+      raw.request.surfaces,
+      (surface) => surfaces.writeSurface(surface.file, surface.surface, bumped.version),
+      { discard: true },
+    )
+    if (raw.request.rootChangelog !== undefined) {
+      yield* changelogs.appendReleaseSummary({
+        path: raw.request.rootChangelog,
+        version: bumped.version,
+        summary: rootBulletsOf(raw.intents),
+      })
+    }
+    yield* writeMemberChangelogs(
+      raw.request,
+      raw.intents,
+      bumped.moved,
+      () => bumped.version,
+    )
+  })
+
+const writePnpm = (
+  raw: RawBump,
+  bumped: VersionBumped,
+): Effect.Effect<
+  void,
+  ChangelogRefusal | MemberRefusal | PublishRefusal,
+  ChangelogStore | ProcessPort | WorkspaceStore
+> =>
+  Effect.gen(function*() {
+    const process = yield* ProcessPort
+    const workspace = yield* WorkspaceStore
+    yield* process.runCommand({
+      program: CommandName.make('pnpm'),
+      args: [PublishArg.make('version'), PublishArg.make('-r')],
+      cwd: raw.root,
+    })
+    const members = yield* workspace.listMembers()
+    const manifests = yield* Effect.forEach(
+      members,
+      (member) => workspace.readManifest(member.dir),
+    )
+    yield* writeMemberChangelogs(
+      raw.request,
+      raw.intents,
+      bumped.moved,
+      (name) => commandVersionOf(manifests, name, bumped.version),
+    )
+  })
+
+const applyBumped = (
+  raw: RawBump,
+  bumped: VersionBumped,
+): Effect.Effect<
+  void,
+  VersionRefusal | ChangelogRefusal | MemberRefusal | PublishRefusal,
+  ChangelogStore | SurfaceStore | ProcessPort | WorkspaceStore
+> => {
+  if (raw.request.strategy === 'surfaces') return writeSurfaces(raw, bumped)
+  return writePnpm(raw, bumped)
+}
+
 const write = (
-  output: Result.Result<LocalVersionDecision, VersionRefusal>,
-  raw: BumpRaw,
+  output: Result.Result<VersionDecision, VersionRefusal>,
+  raw: RawBump,
 ): Effect.Effect<
   VersionDecision,
   VersionRefusal | IntentRefusal | MemberRefusal | ChangelogRefusal | PublishRefusal,
   ChangesetStore | WorkspaceStore | SurfaceStore | ChangelogStore | ProcessPort
 > => {
   if (Result.isFailure(output)) return Effect.fail(output.failure)
-  return Effect.flatMap(
-    S.decodeUnknownEffect(VersionDecision)(output.success).pipe(Effect.orDie),
-    (decision) =>
-      Effect.gen(function*() {
-        const changesets = yield* ChangesetStore
-        yield* Match.value(decision).pipe(
-          Match.tag('VersionBumped', (bumped) => {
-            if (raw.input.strategy === 'surfaces') {
-              return Effect.gen(function*() {
-                const surfaces = yield* SurfaceStore
-                const changelogs = yield* ChangelogStore
-                yield* surfaces.writeSurface(raw.input.manifest.file, raw.input.manifest.surface, bumped.version)
-                yield* Effect.forEach(
-                  raw.input.surfaces,
-                  (surface) => surfaces.writeSurface(surface.file, surface.surface, bumped.version),
-                  { discard: true },
-                )
-                if (raw.input.rootChangelog !== undefined) {
-                  yield* changelogs.appendReleaseSummary({
-                    path: raw.input.rootChangelog,
-                    version: bumped.version,
-                    summary: raw.derived.rootBullets,
-                  })
-                }
-                yield* Effect.forEach(
-                  bumped.moved,
-                  (name) =>
-                    changelogs.writeMemberChangelog({
-                      changelogDir: raw.input.changelogDir,
-                      name,
-                      version: bumped.version,
-                      summary: summaryFor(raw, name),
-                    }),
-                  { discard: true },
-                )
-              })
-            }
-            return Effect.gen(function*() {
-              const process = yield* ProcessPort
-              const changelogs = yield* ChangelogStore
-              const workspace = yield* WorkspaceStore
-              const program = yield* mustBrand(CommandName, 'pnpm')
-              const args = yield* Effect.forEach(
-                ['version', '-r'],
-                (arg) => mustBrand(PublishArg, arg),
-              )
-              yield* process.runCommand({ program, args, cwd: workspace.root })
-              const members = yield* workspace.listMembers()
-              const manifests = yield* Effect.forEach(
-                members,
-                (member) => workspace.readManifest(member.dir),
-              )
-              const actualOf = (name: PackageName): PackageVersion => {
-                const manifest = manifests.find((candidate) => candidate.name === name)
-                if (manifest === undefined) return bumped.version
-                return manifest.version
-              }
-              yield* Effect.forEach(
-                bumped.moved,
-                (name) =>
-                  changelogs.writeMemberChangelog({
-                    changelogDir: raw.input.changelogDir,
-                    name,
-                    version: actualOf(name),
-                    summary: summaryFor(raw, name),
-                  }),
-                { discard: true },
-              )
-            })
-          }),
-          Match.tag('VersionConsumed', () => Effect.void),
-          Match.tag('VersionIdle', () => Effect.void),
-          Match.exhaustive,
-        )
-        yield* changesets.deleteIntents(raw.intents.map((intent) => intent.path))
-        return decision
-      }),
-  )
+  const decision = output.success
+  return Effect.gen(function*() {
+    const changesets = yield* ChangesetStore
+    yield* Match.value(decision).pipe(
+      Match.tag('VersionBumped', (bumped) => applyBumped(raw, bumped)),
+      Match.tag('VersionConsumed', () => Effect.void),
+      Match.tag('VersionIdle', () => Effect.void),
+      Match.exhaustive,
+    )
+    yield* changesets.deleteIntents(raw.intents.map((intent) => intent.path))
+    return decision
+  })
 }
 
 export const bumpCell = Cell.layer({

@@ -1,6 +1,8 @@
 import { Workflow } from '@systemfsoftware/effect-cell-types'
+import type { PinDistributionMissing, PinVersionUnusable } from '@systemfsoftware/release-language'
 import { PackageVersion, PinName, RepoRoot } from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
+import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import { PinRootManifestCommand } from './pin-root-manifest.schema.js'
@@ -34,27 +36,6 @@ export class WorkspaceVersionAlreadyCurrent extends S.TaggedClass<
   readonly [PinDecisionTypeId] = PinDecisionTypeId
 }
 
-const terminated = (text: string, trailingNewline: boolean): string => {
-  if (trailingNewline) return `${text}\n`
-  return text
-}
-const rewritten = (
-  command: PinRootManifestCommand,
-  version: string,
-): string =>
-  terminated(
-    JSON.stringify(
-      {
-        ...command.manifest,
-        version,
-        optionalDependencies: Object.fromEntries(command.pinNames.map((name) => [name, version])),
-      },
-      null,
-      command.indent,
-    ),
-    command.trailingNewline,
-  )
-
 const PinCase = S.Union([
   S.TaggedStruct('VersionUnusable', { given: S.optional(S.String) }),
   S.TaggedStruct('NoDistribution', { root: RepoRoot }),
@@ -71,24 +52,77 @@ const PinCase = S.Union([
 ])
 type PinCase = S.Schema.Type<typeof PinCase>
 
-const classify = (command: PinRootManifestCommand): PinCase => {
-  if (command.suffixes === undefined) return { _tag: 'NoDistribution', root: command.repoRoot }
-  if (command.requestedVersion !== undefined && command.requestedUsable === undefined) {
-    return { _tag: 'VersionUnusable', given: command.requestedVersion }
-  }
-  const version = command.requestedUsable ?? command.declaredUsable
-  if (version === undefined) return { _tag: 'VersionUnusable', given: command.requestedVersion }
-  const text = rewritten(command, version)
-  if (text === command.manifestText) {
-    return { _tag: 'RevisionUnchanged', version, pins: [...command.pinNames], text: command.manifestText }
-  }
-  return { _tag: 'RevisionChanged', version, pins: [...command.pinNames], text }
+const renderedManifest = (command: PinRootManifestCommand, version: PackageVersion): string =>
+  `${
+    JSON.stringify(
+      {
+        ...command.manifest,
+        version,
+        optionalDependencies: Object.fromEntries(command.pinNames.map((name) => [name, version])),
+      },
+      null,
+      command.indent,
+    )
+  }${'\n'.repeat(Number(command.trailingNewline))}`
+
+const revisionCaseOf = (command: PinRootManifestCommand, version: PackageVersion): PinCase => {
+  const text = renderedManifest(command, version)
+  return Option.match(
+    Option.filter(Option.some(text), (candidate) => candidate === command.manifestText),
+    {
+      onNone: (): PinCase => ({ _tag: 'RevisionChanged', version, pins: [...command.pinNames], text }),
+      onSome: (): PinCase => ({
+        _tag: 'RevisionUnchanged',
+        version,
+        pins: [...command.pinNames],
+        text: command.manifestText,
+      }),
+    },
+  )
 }
+
+const versionOf = (command: PinRootManifestCommand): Option.Option<PackageVersion> =>
+  Option.orElse(
+    Option.fromNullishOr(command.requestedUsable),
+    () => Option.fromNullishOr(command.declaredUsable),
+  )
+
+const versionCaseOf = (command: PinRootManifestCommand): PinCase =>
+  Option.match(versionOf(command), {
+    onNone: (): PinCase => ({ _tag: 'VersionUnusable', given: command.requestedVersion }),
+    onSome: (version): PinCase => revisionCaseOf(command, version),
+  })
+
+const requestedUnusableOf = (command: PinRootManifestCommand): Option.Option<PinCase> =>
+  Option.map(
+    Option.filter(
+      Option.fromNullishOr(command.requestedVersion),
+      () => command.requestedUsable === undefined,
+    ),
+    (given): PinCase => ({ _tag: 'VersionUnusable', given }),
+  )
+
+const unusableCaseOf = (command: PinRootManifestCommand): PinCase =>
+  Option.match(requestedUnusableOf(command), {
+    onNone: (): PinCase => versionCaseOf(command),
+    onSome: (unusable): PinCase => unusable,
+  })
+
+const caseOf = (command: PinRootManifestCommand): PinCase =>
+  Option.match(Option.fromNullishOr(command.suffixes), {
+    onNone: (): PinCase => ({ _tag: 'NoDistribution', root: command.repoRoot }),
+    onSome: (): PinCase => unusableCaseOf(command),
+  })
 
 export const pinRootManifest = Workflow.make(
   PinRootManifestCommand,
-  (command) =>
-    Match.value(classify(command)).pipe(
+  (
+    command,
+  ): Result.Result<
+    WorkspaceVersionRepinned | WorkspaceVersionAlreadyCurrent,
+    PinVersionUnusable | PinDistributionMissing
+  > =>
+    Match.value(caseOf(command)).pipe(
       Match.tag(
         'VersionUnusable',
         (unusable) => Result.fail({ _tag: 'PinVersionUnusable' as const, given: unusable.given }),

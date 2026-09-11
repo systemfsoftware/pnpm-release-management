@@ -1,6 +1,7 @@
 import { Workflow } from '@systemfsoftware/effect-cell-types'
 import { CycleEntry, FsPath } from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
+import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 
@@ -40,26 +41,6 @@ export class ExcludedListMalformed extends S.TaggedError<ExcludedListMalformed>(
   { path: FsPath },
 ) {}
 
-const nonEmpty = <A>(list: ReadonlyArray<A>): [A, ...Array<A>] => {
-  const [first, ...rest] = list
-  if (first === undefined) {
-    throw new Error('nonEmpty: empty list')
-  }
-  return [first, ...rest]
-}
-
-const tagsOf = (cycle: ReadonlyArray<CycleEntry>): Array<string> => cycle.map((entry) => entry.tag)
-
-const TagCase = S.Union([
-  S.TaggedStruct('TagCapturedBad', { path: FsPath }),
-  S.TaggedStruct('TagExcludedBad', { path: FsPath }),
-  S.TaggedStruct('TagPreviewing', {}),
-  S.TaggedStruct('TagVacant', {}),
-  S.TaggedStruct('TagReady', {}),
-])
-
-type TagCase = S.Schema.Type<typeof TagCase>
-
 export class TagCommand extends S.TaggedClass<TagCommand>()('TagCommand', {
   cycle: S.Array(CycleEntry),
   preview: S.Boolean,
@@ -67,21 +48,56 @@ export class TagCommand extends S.TaggedClass<TagCommand>()('TagCommand', {
   excludedIssue: S.optional(FsPath),
 }) {}
 
-const classify = (command: TagCommand): TagCase => {
-  if (command.capturedIssue !== undefined) {
-    return { _tag: 'TagCapturedBad', path: command.capturedIssue }
-  }
-  if (command.excludedIssue !== undefined) {
-    return { _tag: 'TagExcludedBad', path: command.excludedIssue }
-  }
-  if (command.preview) {
-    return { _tag: 'TagPreviewing' }
-  }
-  if (command.cycle.length === 0) {
-    return { _tag: 'TagVacant' }
-  }
-  return { _tag: 'TagReady' }
+const CapturedBadCase = S.TaggedStruct('TagCapturedBad', { path: FsPath })
+const ExcludedBadCase = S.TaggedStruct('TagExcludedBad', { path: FsPath })
+const PreviewingCase = S.TaggedStruct('TagPreviewing', { tags: S.Array(S.String) })
+const VacantCase = S.TaggedStruct('TagVacant', {})
+const ReadyCase = S.TaggedStruct('TagReady', { tags: S.NonEmptyArray(S.String) })
+const TagCase = S.Union([CapturedBadCase, ExcludedBadCase, PreviewingCase, VacantCase, ReadyCase])
+type TagCase = S.Schema.Type<typeof TagCase>
+
+const nonEmptyOf = <A>(
+  values: ReadonlyArray<A>,
+): Option.Option<readonly [A, ...Array<A>]> =>
+  Option.map(
+    Option.fromNullishOr(values[0]),
+    (head): readonly [A, ...Array<A>] => [head, ...values.slice(1)],
+  )
+
+const readyTagsOf = (
+  cycle: readonly [CycleEntry, ...Array<CycleEntry>],
+): readonly [string, ...Array<string>] => {
+  const [first, ...rest] = cycle
+  return [first.tag, ...rest.map((entry) => entry.tag)]
 }
+
+const cycleCaseOf = (command: TagCommand): TagCase =>
+  Match.value(nonEmptyOf(command.cycle)).pipe(
+    Match.tag('Some', (cycle) => ReadyCase.make({ tags: readyTagsOf(cycle.value) })),
+    Match.tag('None', () => VacantCase.make({})),
+    Match.exhaustive,
+  )
+
+const previewCaseOf = (command: TagCommand): TagCase =>
+  Match.value(command.preview).pipe(
+    Match.when(true, () => PreviewingCase.make({ tags: command.cycle.map((entry) => entry.tag) })),
+    Match.when(false, () => cycleCaseOf(command)),
+    Match.exhaustive,
+  )
+
+const excludedCaseOf = (command: TagCommand): TagCase =>
+  Match.value(Option.fromNullishOr(command.excludedIssue)).pipe(
+    Match.tag('Some', (excluded) => ExcludedBadCase.make({ path: excluded.value })),
+    Match.tag('None', () => previewCaseOf(command)),
+    Match.exhaustive,
+  )
+
+const classify = (command: TagCommand): TagCase =>
+  Match.value(Option.fromNullishOr(command.capturedIssue)).pipe(
+    Match.tag('Some', (captured) => CapturedBadCase.make({ path: captured.value })),
+    Match.tag('None', () => excludedCaseOf(command)),
+    Match.exhaustive,
+  )
 
 export const tagPackages = Workflow.make(
   TagCommand,
@@ -94,20 +110,11 @@ export const tagPackages = Workflow.make(
     Match.value(classify(command)).pipe(
       Match.tag('TagCapturedBad', (bad) => Result.fail(CapturedListMalformed.make({ path: bad.path }))),
       Match.tag('TagExcludedBad', (bad) => Result.fail(ExcludedListMalformed.make({ path: bad.path }))),
-      Match.tag(
-        'TagPreviewing',
-        () => Result.succeed(TagPackagesPreviewed.make({ tags: tagsOf(command.cycle) })),
-      ),
-      Match.tag('TagVacant', () => Result.succeed(TagPackagesUpToDate.make({ tags: 0 }))),
-      Match.tag(
-        'TagReady',
-        () =>
-          Result.succeed(
-            TagPackagesPushed.make({
-              tags: nonEmpty(tagsOf(command.cycle)),
-            }),
-          ),
-      ),
+      Match.tag('TagPreviewing', (previewing) =>
+        Result.succeed(TagPackagesPreviewed.make({ tags: [...previewing.tags] }))),
+      Match.tag('TagVacant', () =>
+        Result.succeed(TagPackagesUpToDate.make({ tags: 0 }))),
+      Match.tag('TagReady', (ready) => Result.succeed(TagPackagesPushed.make({ tags: [...ready.tags] }))),
       Match.exhaustive,
     ),
 )

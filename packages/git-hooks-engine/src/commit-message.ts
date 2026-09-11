@@ -1,11 +1,10 @@
 import { Cell, Wire } from '@systemfsoftware/effect-cell-types'
-import { CommitMessageDecision, CommitMessageRefusal } from '@systemfsoftware/release-language'
+import { CommitAccepted, CommitIgnored, type CommitMessageDecision } from '@systemfsoftware/release-language'
 import { Effect } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import { CommitAcceptedWire, CommitIgnoredWire, CommitRejected } from './commit-message.schema.js'
-import type { DecisionWire } from './commit-message.schema.js'
+import { CommitRejected } from './commit-message.schema.js'
 import { commitMessage, CommitMessageCommand } from './commit-message.workflow.js'
 import type { CommitAllowed, CommitRefusal, CommitWaived } from './commit-message.workflow.js'
 
@@ -16,7 +15,9 @@ export const CommitMessageInput = Wire.wire({
   staged: Wire.mint(S.Array(S.String)),
 })
 
-const TYPE_NAMES = [
+type CommitMessageRequest = S.Schema.Type<typeof CommitMessageInput>
+
+const TYPE_NAMES: ReadonlyArray<string> = [
   'ai',
   'api',
   'build',
@@ -34,9 +35,9 @@ const TYPE_NAMES = [
   'security',
   'style',
   'test',
-].sort().join(' / ')
+]
 
-const SCOPE_NAMES = [
+const SCOPE_NAMES: ReadonlyArray<string> = [
   'ci',
   'deps',
   'docs',
@@ -51,21 +52,29 @@ const SCOPE_NAMES = [
   'solutions',
   'tag',
   'version',
-].sort().join(' / ')
+]
 
-const punctuationProblem = (header: string): string => {
-  if (header.endsWith('.')) return 'the header must not end with a full stop'
-  return 'the subject must not end with a full stop'
-}
+const typeNames = [...TYPE_NAMES].sort().join(' / ')
+const scopeNames = [...SCOPE_NAMES].sort().join(' / ')
 
-const commitProblemText = (refusal: CommitMessageRefusal): string =>
+const punctuatedProblem = (header: string): string =>
+  Match.value(header.endsWith('.')).pipe(
+    Match.when(true, () => 'the header must not end with a full stop'),
+    Match.when(false, () => 'the subject must not end with a full stop'),
+    Match.exhaustive,
+  )
+
+const problemOf = (refusal: CommitRefusal): string =>
   Match.value(refusal).pipe(
     Match.tag('CommitEmpty', () => 'the commit message is empty'),
-    Match.tag('CommitHeaderMalformed', (malformed) => `"${malformed.header}" is not "<type>(<scope>): <subject>"`),
-    Match.tag('CommitTypeUnknown', (unknown) => `type "${unknown.type}" is not one of ${TYPE_NAMES}`),
-    Match.tag('CommitScopeUnknown', (unknown) => `scope "${unknown.scope}" is not one of ${SCOPE_NAMES}`),
+    Match.tag(
+      'CommitHeaderMalformed',
+      (malformed) => `"${malformed.header}" is not "<type>(<scope>): <subject>"`,
+    ),
+    Match.tag('CommitTypeUnknown', (unknown) => `type "${unknown.type}" is not one of ${typeNames}`),
+    Match.tag('CommitScopeUnknown', (unknown) => `scope "${unknown.scope}" is not one of ${scopeNames}`),
     Match.tag('CommitSubjectEmpty', () => 'the subject is empty'),
-    Match.tag('CommitHeaderPunctuation', (punctuated) => punctuationProblem(punctuated.header)),
+    Match.tag('CommitHeaderPunctuation', (punctuated) => punctuatedProblem(punctuated.header)),
     Match.tag(
       'CommitAiAttribution',
       () => 'AI co-authors and AI model references are not allowed in commit messages',
@@ -79,53 +88,51 @@ const commitProblemText = (refusal: CommitMessageRefusal): string =>
     Match.exhaustive,
   )
 
-class RawMessage {
-  constructor(readonly input: S.Schema.Type<typeof CommitMessageInput>) {}
-}
+const decisionOf = (decision: CommitAllowed | CommitWaived): CommitMessageDecision =>
+  Match.value(decision).pipe(
+    Match.tag('CommitWaived', (waived) => CommitIgnored.make({ kind: waived.kind })),
+    Match.tag('CommitAllowed', (allowed) =>
+      CommitAccepted.make({
+        type: allowed.type,
+        scope: allowed.scope,
+        subject: allowed.subject,
+      })),
+    Match.exhaustive,
+  )
 
-const read = (
-  input: S.Schema.Type<typeof CommitMessageInput>,
-): Effect.Effect<RawMessage> => Effect.succeed(new RawMessage(input))
+const read = (request: CommitMessageRequest): Effect.Effect<CommitMessageRequest> => Effect.succeed(request)
 
 const decode = (
-  raw: RawMessage,
+  raw: CommitMessageRequest,
 ): Result.Result<CommitMessageCommand, S.SchemaError> =>
   S.decodeUnknownResult(CommitMessageCommand)({
     _tag: 'CommitMessageCommand',
-    raw: raw.input.raw,
-    staged: raw.input.staged,
+    raw: raw.raw,
+    staged: [...raw.staged],
   })
 
-const decisionWire = (decision: CommitAllowed | CommitWaived): DecisionWire =>
-  Match.value(decision).pipe(
-    Match.tag('CommitWaived', (waived) => CommitIgnoredWire.make({ kind: waived.kind })),
-    Match.tag('CommitAllowed', (allowed) => {
-      if (allowed.scope === undefined) {
-        return CommitAcceptedWire.make({ type: allowed.type, subject: allowed.subject })
-      }
-      return CommitAcceptedWire.make({ type: allowed.type, scope: allowed.scope, subject: allowed.subject })
-    }),
-    Match.exhaustive,
-  )
 const encode = (
   outcome: Result.Result<CommitAllowed | CommitWaived, CommitRefusal>,
-): Result.Result<DecisionWire, CommitRefusal> => Result.map(outcome, decisionWire)
+): Result.Result<CommitMessageDecision, CommitRejected> =>
+  Match.value(outcome).pipe(
+    Match.tag('Success', (success) => Result.succeed(decisionOf(success.success))),
+    Match.tag('Failure', (failure) =>
+      Result.fail(
+        CommitRejected.make({
+          refusal: failure.failure,
+          problem: problemOf(failure.failure),
+        }),
+      )),
+    Match.exhaustive,
+  )
 
 const write = (
-  output: Result.Result<DecisionWire, CommitRefusal>,
-  _raw: RawMessage,
-): Effect.Effect<CommitMessageDecision, S.SchemaError | CommitRejected> => {
-  if (Result.isFailure(output)) {
-    return Effect.flatMap(
-      S.decodeUnknownEffect(CommitMessageRefusal)(output.failure),
-      (refusal) => Effect.fail(CommitRejected.make({ refusal, problem: commitProblemText(refusal) })),
-    )
-  }
-  return S.decodeUnknownEffect(CommitMessageDecision)(output.success)
-}
+  output: Result.Result<CommitMessageDecision, CommitRejected>,
+  _raw: CommitMessageRequest,
+): Effect.Effect<CommitMessageDecision, S.SchemaError | CommitRejected> => Effect.fromResult(output)
 
 export const commitMessageCell: Cell.Cell<
-  S.Schema.Type<typeof CommitMessageInput>,
+  CommitMessageRequest,
   CommitMessageDecision,
   S.SchemaError | CommitRejected,
   never

@@ -8,81 +8,56 @@ import {
 } from '@systemfsoftware/release-language'
 import { Effect, Layer } from 'effect'
 import { FileSystem } from 'effect/FileSystem'
-import * as Match from 'effect/Match'
 import * as S from 'effect/Schema'
+import { CapturedText } from './Cycle.schema.js'
+import { readTextFile, writeTextFile } from './StoreFile.js'
+
+const capturedDocument = (cycle: ReadonlyArray<CycleEntry>): string => `${JSON.stringify(cycle, null, 2)}\n`
+
+const deferredDocument = (deferred: ReadonlyArray<PackageName>): string => {
+  if (deferred.length === 0) return ''
+  return `${deferred.join('\n')}\n`
+}
 
 export const CycleStoreLive: Layer.Layer<CycleStore, never, FileSystem> = Layer.effect(
   CycleStore,
-  Effect.map(FileSystem, (fs) => ({
-    readCaptured: (cyclePath: FsPath) =>
-      Effect.gen(function*() {
-        const text = yield* fs.readFileString(cyclePath).pipe(
-          Effect.catchTag(
-            'PlatformError',
-            (): Effect.Effect<never, PlanRefusal> =>
-              Effect.fail({ _tag: 'PlanCapturedMalformed', path: cyclePath } as const),
-          ),
-        )
-        let parsed: unknown
-        try {
-          parsed = JSON.parse(text)
-        } catch {
-          return yield* Effect.fail({ _tag: 'PlanCapturedMalformed', path: cyclePath } as const)
-        }
-        return yield* S.decodeUnknownEffect(S.Array(CycleEntry))(parsed).pipe(
-          Effect.mapError((): PlanRefusal => ({ _tag: 'PlanCapturedMalformed', path: cyclePath })),
-        )
-      }),
+  Effect.gen(function*() {
+    const fs = yield* FileSystem
+    const malformed = (file: FsPath): PlanRefusal => ({ _tag: 'PlanCapturedMalformed', path: file })
 
-    writeCaptured: (cyclePath: FsPath, cycle: ReadonlyArray<CycleEntry>) =>
+    const readCaptured = (file: FsPath): Effect.Effect<ReadonlyArray<CycleEntry>, PlanRefusal> =>
       Effect.gen(function*() {
-        yield* fs.writeFileString(cyclePath, `${JSON.stringify(cycle, null, 2)}\n`).pipe(
-          Effect.catchTag('PlatformError', (error) =>
-            Match.value(error.reason).pipe(
-              Match.tag('NotFound', () => Effect.fail({ _tag: 'PlanCapturedMalformed', path: cyclePath } as const)),
-              Match.orElse(() => Effect.die(error)),
-            )),
-        )
-        return yield* S.decodeUnknownEffect(Count)(cycle.length).pipe(Effect.orDie)
-      }),
+        const text = yield* readTextFile(fs, file).pipe(Effect.mapError(() => malformed(file)))
+        return yield* S.decodeUnknownEffect(CapturedText)(text).pipe(Effect.mapError(() => malformed(file)))
+      })
 
-    readDeferred: (source?: FsPath) =>
+    const writeCaptured = (file: FsPath, cycle: ReadonlyArray<CycleEntry>): Effect.Effect<Count, PlanRefusal> =>
+      writeTextFile(fs, file, capturedDocument(cycle), 'overwrite').pipe(
+        Effect.mapError(() => malformed(file)),
+        Effect.as(Count.make(cycle.length)),
+      )
+
+    const readDeferred = (source?: FsPath): Effect.Effect<ReadonlyArray<PackageName>, PlanRefusal> =>
       Effect.gen(function*() {
         if (source === undefined) return []
-        const text = yield* fs.readFileString(source).pipe(
-          Effect.catchTag(
-            'PlatformError',
-            (): Effect.Effect<never, PlanRefusal> =>
-              Effect.fail({ _tag: 'PlanCapturedMalformed', path: source } as const),
-          ),
-        )
+        const text = yield* readTextFile(fs, source).pipe(Effect.mapError(() => malformed(source)))
         const deferred: Array<PackageName> = []
         for (const line of text.split(/\r?\n/)) {
           const trimmed = line.trim()
           if (trimmed === '') continue
           deferred.push(
-            yield* S.decodeUnknownEffect(PackageName)(trimmed).pipe(
-              Effect.mapError((): PlanRefusal => ({ _tag: 'PlanCapturedMalformed', path: source })),
-            ),
+            yield* S.decodeUnknownEffect(PackageName)(trimmed).pipe(Effect.mapError(() => malformed(source))),
           )
         }
         return deferred
-      }),
+      })
 
-    writeDeferred: (deferredPath: FsPath, deferred: ReadonlyArray<PackageName>) =>
-      Effect.gen(function*() {
-        let text = `${deferred.join('\n')}\n`
-        if (deferred.length === 0) {
-          text = ''
-        }
-        yield* fs.writeFileString(deferredPath, text).pipe(
-          Effect.catchTag('PlatformError', (error) =>
-            Match.value(error.reason).pipe(
-              Match.tag('NotFound', () => Effect.fail({ _tag: 'PlanCapturedMalformed', path: deferredPath } as const)),
-              Match.orElse(() => Effect.die(error)),
-            )),
-        )
-        return yield* S.decodeUnknownEffect(Count)(deferred.length).pipe(Effect.orDie)
-      }),
-  })),
+    const writeDeferred = (file: FsPath, deferred: ReadonlyArray<PackageName>): Effect.Effect<Count, PlanRefusal> =>
+      writeTextFile(fs, file, deferredDocument(deferred), 'overwrite').pipe(
+        Effect.mapError(() => malformed(file)),
+        Effect.as(Count.make(deferred.length)),
+      )
+
+    return { readCaptured, writeCaptured, readDeferred, writeDeferred }
+  }),
 )

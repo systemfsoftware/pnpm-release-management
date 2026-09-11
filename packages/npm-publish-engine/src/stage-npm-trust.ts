@@ -1,6 +1,7 @@
 import { Cell, Wire } from '@systemfsoftware/effect-cell-types'
 import * as Lang from '@systemfsoftware/release-language'
 import { Effect } from 'effect'
+import { pipe } from 'effect/Function'
 import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
@@ -14,12 +15,8 @@ import { evaluateTrustState, EvaluateTrustStateCommand } from './evaluate-trust-
 import { planStagedWork, PlanStagedWorkCommand } from './plan-staged-work.workflow.js'
 import { selectTrustCandidates, SelectTrustCandidatesCommand } from './select-trust-candidates.workflow.js'
 import { splitDryRun, SplitDryRunCommand, type TrustComplete, type TrustIdle } from './split-dry-run.workflow.js'
-import {
-  type TrustCandidateState,
-  TrustItemUnstaged,
-  type TrustWorkItem,
-  type TrustWorkStep,
-} from './stage-trust.schema.js'
+import { TrustItemUnstaged } from './stage-trust.schema.js'
+import type { TrustCandidateState, TrustWorkItem, TrustWorkStep } from './stage-trust.schema.js'
 
 export const TrustRequest = Wire.wire({
   only: Wire.mint(S.Array(Lang.PackageName)),
@@ -32,24 +29,25 @@ export const TrustRequest = Wire.wire({
 })
 export type TrustRequest = S.Schema.Type<typeof TrustRequest>
 
-interface TrustContext {
+interface TrustFlow {
   readonly request: TrustRequest
   readonly candidates: ReadonlyArray<TrustCandidateState>
   readonly launcherReadable: boolean
-}
-
-interface TrustRun {
-  readonly context: TrustContext
   readonly selected: ReadonlyArray<TrustCandidateState>
   readonly owed: ReadonlyArray<TrustCandidateState>
-  readonly items: ReadonlyArray<TrustWorkItem>
   readonly debuts: ReadonlyArray<Lang.PackageName>
+  readonly items: ReadonlyArray<TrustWorkItem>
   readonly outcomes: ReadonlyArray<StagedItemOutcome>
   readonly packages: number
 }
 
 interface StagedRun {
-  readonly run: TrustRun
+  readonly flow: TrustFlow
+  readonly decision: TrustIdle | TrustComplete
+}
+
+interface StagedPublishRead {
+  readonly command: AssessStagedPublishCommand
   readonly decision: TrustIdle | TrustComplete
 }
 
@@ -58,12 +56,27 @@ interface WorkFrame {
   readonly slug: string
 }
 
-const defaultWorkflowFile = 'release.yml'
+type StepRunner = (
+  item: TrustWorkItem,
+  frame: WorkFrame,
+) => Effect.Effect<void, TrustItemUnstaged, Lang.RegistryPort | Lang.ProcessPort>
 
-const read = (
+const defaultWorkflowFile = 'release.yml'
+const defaultJobs = 4
+
+const launcherReadableOf = (
+  workspace: Lang.WorkspaceStore,
+  request: TrustRequest,
+): Effect.Effect<boolean, never, never> =>
+  Option.match(Option.fromNullishOr(request.launcherManifest), {
+    onNone: () => Effect.succeed(false),
+    onSome: (path) => workspace.readFileFromRoot(path).pipe(Effect.as(true), Effect.orElseSucceed(() => false)),
+  })
+
+const gatherOf = (
   request: TrustRequest,
 ): Effect.Effect<
-  TrustContext,
+  TrustFlow,
   Lang.MemberRefusal | Lang.TrustRefusal,
   Lang.WorkspaceStore | Lang.RegistryPort
 > =>
@@ -82,104 +95,19 @@ const read = (
           snapshot,
         }
       }))
-    const launcherReadable = yield* Option.getOrElse(
-      Option.map(Option.fromNullishOr(request.launcherManifest), (path) =>
-        workspace.readFileFromRoot(path).pipe(
-          Effect.as(true),
-          Effect.orElseSucceed(() => false),
-        )),
-      () => Effect.succeed(false),
-    )
-    return { candidates, launcherReadable, request }
+    const launcherReadable = yield* launcherReadableOf(workspace, request)
+    return {
+      request,
+      candidates,
+      launcherReadable,
+      selected: [],
+      owed: [],
+      debuts: [],
+      items: [],
+      outcomes: [],
+      packages: 0,
+    }
   })
-
-const selectionCell = Cell.layer({
-  read,
-  decode: (context: TrustContext): Result.Result<SelectTrustCandidatesCommand, never> =>
-    Result.succeed(
-      new SelectTrustCandidatesCommand({
-        candidates: [...context.candidates],
-        only: [...context.request.only],
-      }),
-    ),
-  decide: selectTrustCandidates,
-  encode: (outcome) => outcome,
-  write: (outcome, context) =>
-    Effect.map(
-      Effect.fromResult(outcome),
-      (selection) => ({
-        context,
-        debuts: [],
-        items: [],
-        outcomes: [],
-        owed: [],
-        packages: selection.selected.length,
-        selected: [...selection.selected],
-      }),
-    ),
-})
-
-const trustStateCell = Cell.layer({
-  read: (run: TrustRun) => Effect.succeed(run),
-  decode: (run: TrustRun): Result.Result<EvaluateTrustStateCommand, never> =>
-    Result.succeed(new EvaluateTrustStateCommand({ candidates: [...run.selected] })),
-  decide: evaluateTrustState,
-  encode: (outcome) => outcome,
-  write: (outcome, run) =>
-    Effect.map(
-      Effect.fromResult(outcome),
-      (trust) => ({
-        context: run.context,
-        debuts: run.debuts,
-        items: run.items,
-        outcomes: run.outcomes,
-        owed: [...trust.owed],
-        packages: run.packages,
-        selected: run.selected,
-      }),
-    ),
-})
-
-const stagedWorkCell = Cell.layer({
-  read: (run: TrustRun) => Effect.succeed(run),
-  decode: (run: TrustRun): Result.Result<PlanStagedWorkCommand, never> =>
-    Result.succeed(new PlanStagedWorkCommand({ owed: [...run.owed] })),
-  decide: planStagedWork,
-  encode: (outcome) => outcome,
-  write: (outcome, run) =>
-    Effect.map(
-      Effect.fromResult(outcome),
-      (plan) => ({
-        context: run.context,
-        debuts: [...plan.debuts],
-        items: [...plan.items],
-        outcomes: run.outcomes,
-        owed: run.owed,
-        packages: run.packages,
-        selected: run.selected,
-      }),
-    ),
-})
-
-const launcherCell = Cell.layer({
-  read: (run: TrustRun) => Effect.succeed(run),
-  decode: (run: TrustRun): Result.Result<AssessLauncherReadinessCommand, never> =>
-    Result.succeed(
-      new AssessLauncherReadinessCommand({
-        debuts: [...run.debuts],
-        launcherManifest: run.context.request.launcherManifest,
-        launcherReadable: run.context.launcherReadable,
-      }),
-    ),
-  decide: assessLauncherReadiness,
-  encode: (outcome) => outcome,
-  write: (outcome, run) => Effect.as(Effect.fromResult(outcome), run),
-})
-
-type StepRunner = (
-  item: TrustWorkItem,
-  frame: WorkFrame,
-) => Effect.Effect<void, TrustItemUnstaged, Lang.RegistryPort | Lang.ProcessPort>
 
 const runParts = (
   item: TrustWorkItem,
@@ -218,99 +146,131 @@ const stepRunners: Record<TrustWorkStep, StepRunner> = {
   'trust-list': (item) => runParts(item, 'npm', ['trust', 'list', item.name]),
 }
 
-const attemptItem = (
+const attemptOf = (
   item: TrustWorkItem,
   frame: WorkFrame,
 ): Effect.Effect<ReadonlyArray<void>, TrustItemUnstaged, Lang.RegistryPort | Lang.ProcessPort> =>
   Effect.forEach(item.steps, (step) => stepRunners[step](item, frame))
 
-const stageItems = (
+const stageOf = (
   items: ReadonlyArray<TrustWorkItem>,
-  run: TrustRun,
-): Effect.Effect<
-  ReadonlyArray<StagedItemOutcome>,
-  never,
-  Lang.RegistryPort | Lang.ProcessPort
-> =>
-  Effect.gen(function*() {
-    const frame = {
-      slug: run.context.request.slug,
-      workflowFile: Option.getOrElse(
-        Option.fromNullishOr(run.context.request.workflowFile),
-        () => defaultWorkflowFile,
-      ),
-    }
-    return yield* Effect.forEach(
-      items,
-      (item) =>
-        Effect.match(attemptItem(item, frame), {
-          onFailure: () => ({ name: item.name, staged: false }),
-          onSuccess: () => ({ name: item.name, staged: true }),
+  flow: TrustFlow,
+): Effect.Effect<ReadonlyArray<StagedItemOutcome>, never, Lang.RegistryPort | Lang.ProcessPort> =>
+  Effect.forEach(
+    items,
+    (item) =>
+      Effect.match(
+        attemptOf(item, {
+          slug: flow.request.slug,
+          workflowFile: flow.request.workflowFile ?? defaultWorkflowFile,
         }),
-      { concurrency: Option.getOrElse(Option.fromNullishOr(run.context.request.jobs), () => 4) },
-    )
-  })
+        {
+          onFailure: (): StagedItemOutcome => ({ name: item.name, staged: false }),
+          onSuccess: (): StagedItemOutcome => ({ name: item.name, staged: true }),
+        },
+      ),
+    { concurrency: flow.request.jobs ?? defaultJobs },
+  )
+
+const selectionCell = Cell.layer({
+  read: gatherOf,
+  decode: (flow: TrustFlow): Result.Result<SelectTrustCandidatesCommand, never> =>
+    Result.succeed(
+      new SelectTrustCandidatesCommand({
+        candidates: [...flow.candidates],
+        only: [...flow.request.only],
+      }),
+    ),
+  decide: selectTrustCandidates,
+  encode: (outcome) => outcome,
+  write: (outcome, flow) =>
+    Effect.map(Effect.fromResult(outcome), (selection) => ({
+      ...flow,
+      packages: selection.selected.length,
+      selected: [...selection.selected],
+    })),
+})
+
+const trustStateCell = Cell.layer({
+  read: (flow: TrustFlow) => Effect.succeed(flow),
+  decode: (flow: TrustFlow): Result.Result<EvaluateTrustStateCommand, never> =>
+    Result.succeed(new EvaluateTrustStateCommand({ candidates: [...flow.selected] })),
+  decide: evaluateTrustState,
+  encode: (outcome) => outcome,
+  write: (outcome, flow) => Effect.map(Effect.fromResult(outcome), (trust) => ({ ...flow, owed: [...trust.owed] })),
+})
+
+const stagedWorkCell = Cell.layer({
+  read: (flow: TrustFlow) => Effect.succeed(flow),
+  decode: (flow: TrustFlow): Result.Result<PlanStagedWorkCommand, never> =>
+    Result.succeed(new PlanStagedWorkCommand({ owed: [...flow.owed] })),
+  decide: planStagedWork,
+  encode: (outcome) => outcome,
+  write: (outcome, flow) =>
+    Effect.map(Effect.fromResult(outcome), (plan) => ({
+      ...flow,
+      debuts: [...plan.debuts],
+      items: [...plan.items],
+    })),
+})
+
+const launcherCell = Cell.layer({
+  read: (flow: TrustFlow) => Effect.succeed(flow),
+  decode: (flow: TrustFlow): Result.Result<AssessLauncherReadinessCommand, never> =>
+    Result.succeed(
+      new AssessLauncherReadinessCommand({
+        debuts: [...flow.debuts],
+        launcherManifest: flow.request.launcherManifest,
+        launcherReadable: flow.launcherReadable,
+      }),
+    ),
+  decide: assessLauncherReadiness,
+  encode: (outcome) => outcome,
+  write: (outcome, flow) => Effect.as(Effect.fromResult(outcome), flow),
+})
 
 const stagingCell = Cell.layer({
-  read: (run: TrustRun) => Effect.succeed(run),
-  decode: (run: TrustRun): Result.Result<SplitDryRunCommand, never> =>
+  read: (flow: TrustFlow) => Effect.succeed(flow),
+  decode: (flow: TrustFlow): Result.Result<SplitDryRunCommand, never> =>
     Result.succeed(
       new SplitDryRunCommand({
-        debuts: [...run.debuts],
-        dryRun: run.context.request.dryRun,
-        items: [...run.items],
-        launcherManifest: run.context.request.launcherManifest,
-        launcherReadable: run.context.launcherReadable,
-        packages: run.packages,
-        slug: run.context.request.slug,
-        workflowFile: Option.getOrElse(
-          Option.fromNullishOr(run.context.request.workflowFile),
-          () => defaultWorkflowFile,
-        ),
+        debuts: [...flow.debuts],
+        dryRun: flow.request.dryRun,
+        items: [...flow.items],
+        launcherManifest: flow.request.launcherManifest,
+        launcherReadable: flow.launcherReadable,
+        packages: flow.packages,
+        slug: flow.request.slug,
+        workflowFile: flow.request.workflowFile ?? defaultWorkflowFile,
       }),
     ),
   decide: splitDryRun,
   encode: (outcome) => outcome,
-  write: (outcome, run) =>
-    Effect.flatMap(
-      Effect.fromResult(outcome),
-      (decision) =>
-        Effect.map(stageItems(decision.stage, run), (outcomes) => ({
-          decision,
-          run: {
-            context: run.context,
-            debuts: run.debuts,
-            items: run.items,
-            outcomes,
-            owed: run.owed,
-            packages: run.packages,
-            selected: run.selected,
-          },
-        })),
-    ),
+  write: (outcome, flow) =>
+    Effect.flatMap(Effect.fromResult(outcome), (decision) =>
+      Effect.map(
+        stageOf(decision.stage, flow),
+        (outcomes): StagedRun => ({ flow: { ...flow, outcomes }, decision }),
+      )),
 })
 
 const stagedPublishCell = Cell.layer({
-  read: (staged: StagedRun) =>
+  read: (staged: StagedRun): Effect.Effect<StagedPublishRead, never, never> =>
     Effect.succeed({
-      command: new AssessStagedPublishCommand({ outcomes: [...staged.run.outcomes] }),
+      command: new AssessStagedPublishCommand({ outcomes: [...staged.flow.outcomes] }),
       decision: staged.decision,
     }),
-  decode: (
-    raw: { readonly command: AssessStagedPublishCommand; readonly decision: TrustIdle | TrustComplete },
-  ): Result.Result<AssessStagedPublishCommand, never> => Result.succeed(raw.command),
+  decode: (raw: StagedPublishRead): Result.Result<AssessStagedPublishCommand, never> => Result.succeed(raw.command),
   decide: assessStagedPublish,
   encode: (outcome) => outcome,
   write: (outcome, raw) => Effect.as(Effect.fromResult(outcome), raw.decision),
 })
 
-export const stageNpmTrustCell = Cell.andThen(
-  Cell.andThen(
-    Cell.andThen(
-      Cell.andThen(Cell.andThen(selectionCell, trustStateCell), stagedWorkCell),
-      launcherCell,
-    ),
-    stagingCell,
-  ),
-  stagedPublishCell,
+export const stageNpmTrustCell = pipe(
+  selectionCell,
+  Cell.andThen(trustStateCell),
+  Cell.andThen(stagedWorkCell),
+  Cell.andThen(launcherCell),
+  Cell.andThen(stagingCell),
+  Cell.andThen(stagedPublishCell),
 )

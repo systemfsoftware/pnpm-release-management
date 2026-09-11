@@ -1,6 +1,12 @@
 import { Cell, Wire } from '@systemfsoftware/effect-cell-types'
-import type { CycleEntry, MemberRefusal, PackageName, PlanDeferredUnknown } from '@systemfsoftware/release-language'
-import type { TagDecision, TagRefusal } from '@systemfsoftware/release-language'
+import type {
+  CycleEntry,
+  MemberRefusal,
+  PackageName,
+  PlanDeferredUnknown,
+  TagDecision,
+  TagRefusal,
+} from '@systemfsoftware/release-language'
 import {
   Count,
   CycleStore,
@@ -20,7 +26,7 @@ import { Effect } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import { computeCycle, dropExcluded, nonEmptyArray } from './cycle.js'
+import { cycleOf, dropExcluded } from './cycle.js'
 import {
   type CapturedListMalformed,
   type ExcludedListMalformed,
@@ -42,15 +48,84 @@ export const TagRequest = Wire.wire({
   changelogDir: Wire.mint(RelativePath),
 })
 
-class RawTag {
-  constructor(
-    readonly cycle: Array<CycleEntry>,
-    readonly remote: RemoteName,
-    readonly output: FsPath | undefined,
-    readonly preview: boolean,
-    readonly capturedIssue: FsPath | undefined,
-    readonly excludedIssue: FsPath | undefined,
-  ) {}
+interface ExclusionScan {
+  readonly names: ReadonlyArray<PackageName>
+  readonly issue: FsPath | undefined
+}
+
+interface CycleScan {
+  readonly entries: ReadonlyArray<CycleEntry>
+  readonly issue: FsPath | undefined
+}
+
+interface RawTag {
+  readonly cycle: ReadonlyArray<CycleEntry>
+  readonly remote: RemoteName
+  readonly output: FsPath | undefined
+  readonly preview: boolean
+  readonly capturedIssue: FsPath | undefined
+  readonly excludedIssue: FsPath | undefined
+}
+
+const readExclusion = (
+  cycles: CycleStore,
+  source: FsPath | undefined,
+): Effect.Effect<ExclusionScan, PlanDeferredUnknown, never> =>
+  Effect.matchEffect(cycles.readDeferred(source), {
+    onFailure: (refusal) =>
+      Match.value(refusal).pipe(
+        Match.tag('PlanCapturedMalformed', (malformed) => Effect.succeed({ names: [], issue: malformed.path })),
+        Match.tag('PlanDeferredUnknown', (unknown) => Effect.fail(unknown)),
+        Match.exhaustive,
+      ),
+    onSuccess: (names) => Effect.succeed({ names: [...names], issue: undefined }),
+  })
+
+const readCaptured = (
+  cycles: CycleStore,
+  path: FsPath,
+  excluded: ReadonlyArray<PackageName>,
+): Effect.Effect<CycleScan, PlanDeferredUnknown, never> =>
+  Effect.matchEffect(cycles.readCaptured(path), {
+    onFailure: (refusal) =>
+      Match.value(refusal).pipe(
+        Match.tag('PlanCapturedMalformed', (malformed) => Effect.succeed({ entries: [], issue: malformed.path })),
+        Match.tag('PlanDeferredUnknown', (unknown) => Effect.fail(unknown)),
+        Match.exhaustive,
+      ),
+    onSuccess: (entries) => Effect.succeed({ entries: dropExcluded(entries, excluded), issue: undefined }),
+  })
+
+const readLive = (input: {
+  readonly workspace: WorkspaceStore
+  readonly git: GitPort
+  readonly remote: RemoteName
+  readonly changelogDir: RelativePath
+  readonly excluded: ReadonlyArray<PackageName>
+}): Effect.Effect<CycleScan, MemberRefusal | TagRefusal, never> =>
+  Effect.gen(function*() {
+    const members = yield* input.workspace.listMembers()
+    const tags = yield* input.git.remoteTags(input.remote)
+    return {
+      entries: dropExcluded(cycleOf(members, tags, input.changelogDir), input.excluded),
+      issue: undefined,
+    }
+  })
+
+const readCycle = (input: {
+  readonly cycles: CycleStore
+  readonly workspace: WorkspaceStore
+  readonly git: GitPort
+  readonly remote: RemoteName
+  readonly capturedPath: FsPath | undefined
+  readonly changelogDir: RelativePath
+  readonly excluded: ReadonlyArray<PackageName>
+}): Effect.Effect<CycleScan, MemberRefusal | TagRefusal | PlanDeferredUnknown, never> => {
+  const capturedPath = input.capturedPath
+  if (capturedPath !== undefined) {
+    return readCaptured(input.cycles, capturedPath, input.excluded)
+  }
+  return readLive(input)
 }
 
 const read = (
@@ -62,96 +137,27 @@ const read = (
 > =>
   Effect.gen(function*() {
     const remote = request.remote ?? RemoteName.make('origin')
-    const capturedPath = request.captured ?? request.capturedFile
     const workspace = yield* WorkspaceStore
     const git = yield* GitPort
     const cycles = yield* CycleStore
-    const deferredOutcome = yield* Effect.match(cycles.readDeferred(request.exclude), {
-      onFailure: (refusal) => ({ _tag: 'DeferredFailed', refusal }) as const,
-      onSuccess: (entries) => ({ _tag: 'DeferredRead', entries }) as const,
-    })
-    const deferredResult: {
-      readonly excluded: Array<PackageName>
-      readonly excludedIssue: FsPath | undefined
-      readonly deferredFailure: PlanDeferredUnknown | undefined
-    } = Match.value(deferredOutcome).pipe(
-      Match.tag('DeferredRead', (read) => ({
-        excluded: [...read.entries],
-        excludedIssue: undefined,
-        deferredFailure: undefined,
-      })),
-      Match.tag('DeferredFailed', (failed) =>
-        Match.value(failed.refusal).pipe(
-          Match.tag('PlanCapturedMalformed', (malformed) => ({
-            excluded: [],
-            excludedIssue: malformed.path,
-            deferredFailure: undefined,
-          })),
-          Match.tag('PlanDeferredUnknown', (unknown) => ({
-            excluded: [],
-            excludedIssue: undefined,
-            deferredFailure: unknown,
-          })),
-          Match.exhaustive,
-        )),
-      Match.exhaustive,
-    )
-    const excluded = deferredResult.excluded
-    const excludedIssue = deferredResult.excludedIssue
-    if (deferredResult.deferredFailure !== undefined) {
-      return yield* Effect.fail(deferredResult.deferredFailure)
-    }
-    let cycle: Array<CycleEntry> = []
-    let capturedIssue: FsPath | undefined = undefined
-    if (capturedPath === undefined) {
-      const members = yield* workspace.listMembers()
-      const tags = yield* git.remoteTags(remote)
-      cycle = dropExcluded(computeCycle(members, tags, request.changelogDir), excluded)
-    } else {
-      const capturedOutcome = yield* Effect.match(cycles.readCaptured(capturedPath), {
-        onFailure: (refusal) => ({ _tag: 'CapturedFailed', refusal }) as const,
-        onSuccess: (entries) => ({ _tag: 'CapturedRead', entries }) as const,
-      })
-      const capturedResult: {
-        readonly cycle: Array<CycleEntry>
-        readonly capturedIssue: FsPath | undefined
-        readonly capturedFailure: PlanDeferredUnknown | undefined
-      } = Match.value(capturedOutcome).pipe(
-        Match.tag('CapturedRead', (read) => ({
-          cycle: dropExcluded([...read.entries], excluded),
-          capturedIssue: undefined,
-          capturedFailure: undefined,
-        })),
-        Match.tag('CapturedFailed', (failed) =>
-          Match.value(failed.refusal).pipe(
-            Match.tag('PlanCapturedMalformed', (malformed) => ({
-              cycle: [],
-              capturedIssue: malformed.path,
-              capturedFailure: undefined,
-            })),
-            Match.tag('PlanDeferredUnknown', (unknown) => ({
-              cycle: [],
-              capturedIssue: undefined,
-              capturedFailure: unknown,
-            })),
-            Match.exhaustive,
-          )),
-        Match.exhaustive,
-      )
-      cycle = capturedResult.cycle
-      capturedIssue = capturedResult.capturedIssue
-      if (capturedResult.capturedFailure !== undefined) {
-        return yield* Effect.fail(capturedResult.capturedFailure)
-      }
-    }
-    return new RawTag(
-      cycle,
+    const exclusion = yield* readExclusion(cycles, request.exclude)
+    const scan = yield* readCycle({
+      cycles,
+      workspace,
+      git,
       remote,
-      request.output,
-      request.dryRun || request.json || request.output !== undefined,
-      capturedIssue,
-      excludedIssue,
-    )
+      capturedPath: request.captured ?? request.capturedFile,
+      changelogDir: request.changelogDir,
+      excluded: exclusion.names,
+    })
+    return {
+      cycle: scan.entries,
+      remote,
+      output: request.output,
+      preview: request.dryRun || request.json || request.output !== undefined,
+      capturedIssue: scan.issue,
+      excludedIssue: exclusion.issue,
+    }
   })
 
 const decode = (raw: RawTag): Result.Result<TagCommand, never> =>
@@ -164,30 +170,29 @@ const decode = (raw: RawTag): Result.Result<TagCommand, never> =>
     }),
   )
 
-interface EncodedTag {
-  readonly decision: TagDecision
-  readonly tags: Array<ReleaseTag>
-}
-
-const toLanguage = (
-  decision: TagPackagesPreviewed | TagPackagesUpToDate | TagPackagesPushed,
-): TagDecision =>
-  Match.value(decision).pipe(
-    Match.tag('TagPackagesPreviewed', (previewed) =>
-      TagPreview.make({ tags: nonEmptyArray(previewed.tags.map((t) => ReleaseTag.make(t))) })),
-    Match.tag('TagPackagesUpToDate', (upToDate) =>
-      TagUpToDate.make({ tags: Count.make(upToDate.tags) })),
-    Match.tag('TagPackagesPushed', (pushed) =>
-      TagPushed.make({
-        tags: nonEmptyArray(pushed.tags.map((t) => ReleaseTag.make(t))),
-      })),
-    Match.exhaustive,
-  )
-
 const toRefusal = (bad: CapturedListMalformed | ExcludedListMalformed): TagRefusal =>
   Match.value(bad).pipe(
     Match.tag('CapturedListMalformed', (malformed) => TagCapturedMalformed.make({ path: malformed.path })),
     Match.tag('ExcludedListMalformed', (malformed) => TagExcludedMalformed.make({ path: malformed.path })),
+    Match.exhaustive,
+  )
+
+const releaseTagsOf = (
+  tags: readonly [string, ...Array<string>],
+): readonly [ReleaseTag, ...Array<ReleaseTag>] => {
+  const [first, ...rest] = tags
+  return [ReleaseTag.make(first), ...rest.map((tag) => ReleaseTag.make(tag))]
+}
+
+const toDecision = (
+  decision: TagPackagesPreviewed | TagPackagesUpToDate | TagPackagesPushed,
+): TagDecision =>
+  Match.value(decision).pipe(
+    Match.tag('TagPackagesPreviewed', (previewed) =>
+      TagPreview.make({ tags: previewed.tags.map((tag) => ReleaseTag.make(tag)) })),
+    Match.tag('TagPackagesUpToDate', (upToDate) =>
+      TagUpToDate.make({ tags: Count.make(upToDate.tags) })),
+    Match.tag('TagPackagesPushed', (pushed) => TagPushed.make({ tags: releaseTagsOf(pushed.tags) })),
     Match.exhaustive,
   )
 
@@ -196,49 +201,51 @@ const encode = (
     TagPackagesPreviewed | TagPackagesUpToDate | TagPackagesPushed,
     CapturedListMalformed | ExcludedListMalformed
   >,
-): Result.Result<EncodedTag, TagRefusal> =>
-  Result.mapError(outcome, toRefusal).pipe(Result.map((decision) => {
-    const converted = toLanguage(decision)
-    return {
-      decision: converted,
-      tags: Match.value(converted).pipe(
-        Match.tag('TagPushed', (pushed) => [...pushed.tags]),
-        Match.tag('TagPreview', (preview) => [...preview.tags]),
-        Match.tag('TagUpToDate', () => []),
+): Result.Result<TagDecision, TagRefusal> => Result.mapError(outcome, toRefusal).pipe(Result.map(toDecision))
+
+const captureCycle = (
+  raw: RawTag,
+): Effect.Effect<void, TagRefusal | PlanDeferredUnknown, CycleStore> => {
+  const output = raw.output
+  if (output === undefined) {
+    return Effect.void
+  }
+  return Effect.gen(function*() {
+    const cycles = yield* CycleStore
+    yield* Effect.mapError(cycles.writeCaptured(output, raw.cycle), (refusal) =>
+      Match.value(refusal).pipe(
+        Match.tag('PlanCapturedMalformed', (malformed) => TagCapturedMalformed.make({ path: malformed.path })),
+        Match.tag('PlanDeferredUnknown', (unknown) => unknown),
         Match.exhaustive,
-      ),
-    }
-  }))
+      ))
+  })
+}
+
+const pushTags = (raw: RawTag, pushed: TagPushed): Effect.Effect<TagPushed, TagRefusal, GitPort> =>
+  Effect.gen(function*() {
+    const git = yield* GitPort
+    const remote = yield* git.remoteTags(raw.remote)
+    yield* Effect.forEach(
+      pushed.tags.filter((tag) => remote.includes(tag) === false),
+      (tag) => git.writeTag(tag),
+      { discard: true },
+    )
+    yield* git.pushTags([...pushed.tags], raw.remote)
+    return pushed
+  })
 
 const write = (
-  output: Result.Result<EncodedTag, TagRefusal>,
+  output: Result.Result<TagDecision, TagRefusal>,
   raw: RawTag,
 ): Effect.Effect<TagDecision, TagRefusal | PlanDeferredUnknown, GitPort | CycleStore> => {
   if (Result.isFailure(output)) {
     return Effect.fail(output.failure)
   }
-  const encoded = output.success
+  const decision = output.success
   return Effect.gen(function*() {
-    const git = yield* GitPort
-    const cycles = yield* CycleStore
-    if (raw.output !== undefined) {
-      yield* Effect.catchTags(cycles.writeCaptured(raw.output, raw.cycle), {
-        PlanCapturedMalformed: (malformed) => Effect.fail(TagCapturedMalformed.make({ path: malformed.path })),
-        PlanDeferredUnknown: (unknown) => Effect.fail(unknown),
-      })
-    }
-    return yield* Match.value(encoded.decision).pipe(
-      Match.tag('TagPushed', (pushed) =>
-        Effect.gen(function*() {
-          const remote = yield* git.remoteTags(raw.remote)
-          for (const releaseTag of pushed.tags) {
-            if (!remote.includes(releaseTag)) {
-              yield* git.writeTag(releaseTag)
-            }
-          }
-          yield* git.pushTags([...pushed.tags], raw.remote)
-          return pushed
-        })),
+    yield* captureCycle(raw)
+    return yield* Match.value(decision).pipe(
+      Match.tag('TagPushed', (pushed) => pushTags(raw, pushed)),
       Match.tag('TagPreview', (preview) => Effect.succeed(preview)),
       Match.tag('TagUpToDate', (upToDate) => Effect.succeed(upToDate)),
       Match.exhaustive,

@@ -1,11 +1,13 @@
 import { Cell, Wire } from '@systemfsoftware/effect-cell-types'
-import type { CycleEntry, MemberRefusal, TagRefusal } from '@systemfsoftware/release-language'
 import type {
   CreatedRelease,
+  CycleEntry,
   GithubReleaseDecision,
   GithubReleaseRefusal,
+  MemberRefusal,
   PlanRefusal,
   RepoSlug,
+  TagRefusal,
 } from '@systemfsoftware/release-language'
 import {
   Count,
@@ -32,7 +34,7 @@ import { Effect } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import { computeCycle, nonEmptyArray } from './cycle.js'
+import { cycleOf } from './cycle.js'
 import {
   type ChangelogFileEmpty,
   type ChangelogFileMissing,
@@ -43,6 +45,7 @@ import {
   type GithubReleasesEmpty,
   type GithubReleasesPreviewed,
   type GithubReleasesSkipped,
+  type ReleaseItem,
 } from './github-release.workflow.js'
 
 export const GithubReleaseRequest = Wire.wire({
@@ -53,14 +56,29 @@ export const GithubReleaseRequest = Wire.wire({
   changelogDir: Wire.mint(RelativePath),
 })
 
-class RawRelease {
-  constructor(
-    readonly items: Array<{ readonly entry: CycleEntry; readonly body: string | undefined }>,
-    readonly assert: boolean,
-    readonly preview: boolean,
-    readonly existing: Array<ReleaseTag>,
-    readonly slug: RepoSlug,
-  ) {}
+interface RawRelease {
+  readonly items: ReadonlyArray<ReleaseItem>
+  readonly assert: boolean
+  readonly preview: boolean
+  readonly existing: ReadonlyArray<ReleaseTag>
+  readonly slug: RepoSlug
+}
+
+const readCycle = (
+  cycles: CycleStore,
+  workspace: WorkspaceStore,
+  git: GitPort,
+  capturedPath: FsPath | undefined,
+  changelogDir: RelativePath,
+): Effect.Effect<ReadonlyArray<CycleEntry>, PlanRefusal | MemberRefusal | TagRefusal, never> => {
+  if (capturedPath !== undefined) {
+    return cycles.readCaptured(capturedPath)
+  }
+  return Effect.gen(function*() {
+    const members = yield* workspace.listMembers()
+    const tags = yield* git.remoteTags(RemoteName.make('origin'))
+    return cycleOf(members, tags, changelogDir)
+  })
 }
 
 const read = (
@@ -71,40 +89,43 @@ const read = (
   WorkspaceStore | GitPort | CycleStore | ForgePort
 > =>
   Effect.gen(function*() {
-    const capturedPath = request.captured ?? request.capturedFile
     const workspace = yield* WorkspaceStore
     const git = yield* GitPort
     const cycles = yield* CycleStore
     const forge = yield* ForgePort
-    let cycle: Array<CycleEntry>
-    if (capturedPath === undefined) {
-      const members = yield* workspace.listMembers()
-      const tags = yield* git.remoteTags(RemoteName.make('origin'))
-      cycle = computeCycle(members, tags, request.changelogDir)
-    } else {
-      cycle = [...(yield* cycles.readCaptured(capturedPath))]
-    }
-    const items: Array<{ readonly entry: CycleEntry; readonly body: string | undefined }> = []
-    for (const entry of cycle) {
-      const body = yield* Effect.match(workspace.readFileFromRoot(entry.changelog), {
-        onFailure: () => undefined,
-        onSuccess: (file) => file.text,
-      })
-      items.push({ entry, body })
-    }
+    const cycle = yield* readCycle(
+      cycles,
+      workspace,
+      git,
+      request.captured ?? request.capturedFile,
+      request.changelogDir,
+    )
     const slug = yield* git.repoSlug()
-    const existing: Array<ReleaseTag> = []
-    for (const entry of cycle) {
-      const lookup = yield* forge.releaseByTag(slug, entry.tag)
-      Match.value(lookup).pipe(
-        Match.tag('ReleaseFound', () => {
-          existing.push(entry.tag)
+    const items = yield* Effect.forEach(cycle, (entry) =>
+      Effect.map(
+        Effect.match(workspace.readFileFromRoot(entry.changelog), {
+          onFailure: () => undefined,
+          onSuccess: (file) => file.text,
         }),
-        Match.tag('ReleaseAbsent', () => undefined),
-        Match.exhaustive,
-      )
+        (body) => ({ entry, body }),
+      ))
+    const released = yield* Effect.forEach(cycle, (entry) =>
+      Effect.map(
+        forge.releaseByTag(slug, entry.tag),
+        (lookup) =>
+          Match.value(lookup).pipe(
+            Match.tag('ReleaseFound', () => entry.tag),
+            Match.tag('ReleaseAbsent', () => undefined),
+            Match.exhaustive,
+          ),
+      ))
+    return {
+      items,
+      assert: request.assert,
+      preview: request.dryRun,
+      existing: released.filter((tag): tag is ReleaseTag => tag !== undefined),
+      slug,
     }
-    return new RawRelease(items, request.assert, request.dryRun, existing, slug)
   })
 
 const decode = (raw: RawRelease): Result.Result<GithubReleaseCommand, never> =>
@@ -117,12 +138,22 @@ const decode = (raw: RawRelease): Result.Result<GithubReleaseCommand, never> =>
     }),
   )
 
-interface EncodedRelease {
-  readonly decision: GithubReleaseDecision
-  readonly tags: Array<ReleaseTag>
+const createdReleaseOf = (entry: {
+  readonly tag: string
+  readonly id: number
+}): CreatedRelease => ({
+  tag: ReleaseTag.make(entry.tag),
+  id: ReleaseId.make(entry.id),
+})
+
+const releaseTagsOf = (
+  tags: readonly [string, ...Array<string>],
+): readonly [ReleaseTag, ...Array<ReleaseTag>] => {
+  const [first, ...rest] = tags
+  return [ReleaseTag.make(first), ...rest.map((tag) => ReleaseTag.make(tag))]
 }
 
-const toLanguage = (
+const toDecision = (
   decision:
     | GithubReleasesCreated
     | GithubReleasesSkipped
@@ -131,28 +162,22 @@ const toLanguage = (
     | GithubReleasesEmpty,
 ): GithubReleaseDecision =>
   Match.value(decision).pipe(
-    Match.tag('GithubReleasesCreated', (created) =>
-      GithubReleaseCreated.make({
-        created: nonEmptyArray(
-          created.created.map((release) => ({
-            tag: ReleaseTag.make(release.tag),
-            id: ReleaseId.make(release.id),
-          })),
-        ),
+    Match.tag('GithubReleasesCreated', (created) => {
+      const [first, ...rest] = created.created
+      return GithubReleaseCreated.make({
+        created: [createdReleaseOf(first), ...rest.map(createdReleaseOf)],
         skipped: Count.make(created.skipped),
-      })),
-    Match.tag('GithubReleasesSkipped', (skipped) =>
-      GithubReleaseSkipped.make({
-        tags: nonEmptyArray(skipped.tags.map((t) => ReleaseTag.make(t))),
-      })),
+      })
+    }),
+    Match.tag('GithubReleasesSkipped', (skipped) => GithubReleaseSkipped.make({ tags: releaseTagsOf(skipped.tags) })),
     Match.tag(
       'GithubReleasesAsserted',
       (asserted) => GithubReleaseAsserted.make({ count: Count.make(asserted.count) }),
     ),
-    Match.tag('GithubReleasesPreviewed', (previewed) =>
-      GithubReleasePreview.make({
-        tags: nonEmptyArray(previewed.tags.map((t) => ReleaseTag.make(t))),
-      })),
+    Match.tag(
+      'GithubReleasesPreviewed',
+      (previewed) => GithubReleasePreview.make({ tags: releaseTagsOf(previewed.tags) }),
+    ),
     Match.tag('GithubReleasesEmpty', (empty) => GithubReleaseEmpty.make({ cycle: Count.make(empty.cycle) })),
     Match.exhaustive,
   )
@@ -183,73 +208,74 @@ const encode = (
     | GithubReleasesEmpty,
     ChangelogFileMissing | ChangelogFileEmpty
   >,
-): Result.Result<EncodedRelease, GithubReleaseRefusal> =>
-  Result.mapError(outcome, toRefusal).pipe(Result.map((decision) => {
-    const converted = toLanguage(decision)
-    return {
-      decision: converted,
-      tags: Match.value(converted).pipe(
-        Match.tag('GithubReleaseCreated', (created) => created.created.map((r) => r.tag)),
-        Match.tag('GithubReleaseSkipped', (skipped) => [...skipped.tags]),
-        Match.tag('GithubReleaseAsserted', () => []),
-        Match.tag('GithubReleasePreview', (preview) => [...preview.tags]),
-        Match.tag('GithubReleaseEmpty', () => []),
-        Match.exhaustive,
-      ),
+): Result.Result<GithubReleaseDecision, GithubReleaseRefusal> =>
+  Result.mapError(outcome, toRefusal).pipe(Result.map(toDecision))
+
+const bodyOf = (raw: RawRelease, tag: ReleaseTag): string => {
+  const item = raw.items.find((candidate) => candidate.entry.tag === tag)
+  if (item === undefined) {
+    return ''
+  }
+  if (item.body === undefined) {
+    return ''
+  }
+  return item.body
+}
+
+const createMissing = (
+  forge: ForgePort,
+  raw: RawRelease,
+  tag: ReleaseTag,
+): Effect.Effect<CreatedRelease | undefined, GithubReleaseRefusal, never> =>
+  Effect.flatMap(forge.releaseByTag(raw.slug, tag), (lookup) =>
+    Match.value(lookup).pipe(
+      Match.tag('ReleaseFound', () => Effect.succeed(undefined)),
+      Match.tag('ReleaseAbsent', () =>
+        Effect.map(
+          forge.createRelease(raw.slug, tag, bodyOf(raw, tag)),
+          (id) => ({ tag, id }),
+        )),
+      Match.exhaustive,
+    ))
+
+const publishPreview = (
+  preview: GithubReleasePreview,
+  raw: RawRelease,
+): Effect.Effect<GithubReleaseDecision, GithubReleaseRefusal, ForgePort> => {
+  if (raw.preview) {
+    return Effect.succeed(preview)
+  }
+  return Effect.gen(function*() {
+    const forge = yield* ForgePort
+    const created = yield* Effect.forEach(preview.tags, (tag) => createMissing(forge, raw, tag))
+    const published = created.filter((entry): entry is CreatedRelease => entry !== undefined)
+    const [first, ...rest] = published
+    if (first === undefined) {
+      return GithubReleaseSkipped.make({ tags: preview.tags })
     }
-  }))
+    yield* forge.promoteLatest(raw.slug, first.id)
+    return GithubReleaseCreated.make({
+      created: [first, ...rest],
+      skipped: Count.make(preview.tags.length - published.length),
+    })
+  })
+}
 
 const write = (
-  output: Result.Result<EncodedRelease, GithubReleaseRefusal>,
+  output: Result.Result<GithubReleaseDecision, GithubReleaseRefusal>,
   raw: RawRelease,
 ): Effect.Effect<GithubReleaseDecision, GithubReleaseRefusal, ForgePort> => {
   if (Result.isFailure(output)) {
     return Effect.fail(output.failure)
   }
-  const encoded = output.success
-  return Effect.gen(function*() {
-    const forge = yield* ForgePort
-    return yield* Match.value(encoded.decision).pipe(
-      Match.tag('GithubReleasePreview', (preview) => {
-        if (raw.preview) {
-          return Effect.succeed(preview)
-        }
-        return Effect.gen(function*() {
-          const created: Array<CreatedRelease> = []
-          for (const tag of preview.tags) {
-            const item = raw.items.find((candidate) => candidate.entry.tag === tag)
-            const lookup = yield* forge.releaseByTag(raw.slug, tag)
-            yield* Match.value(lookup).pipe(
-              Match.tag('ReleaseAbsent', () =>
-                Effect.gen(function*() {
-                  let body = ''
-                  if (item?.body !== undefined) {
-                    body = item.body
-                  }
-                  created.push({ tag, id: yield* forge.createRelease(raw.slug, tag, body) })
-                })),
-              Match.tag('ReleaseFound', () => Effect.void),
-              Match.exhaustive,
-            )
-          }
-          if (created.length === 0) {
-            return GithubReleaseSkipped.make({ tags: nonEmptyArray(preview.tags) })
-          }
-          const first = nonEmptyArray(created)[0]
-          yield* forge.promoteLatest(raw.slug, first.id)
-          return GithubReleaseCreated.make({
-            created: nonEmptyArray(created),
-            skipped: Count.make(preview.tags.length - created.length),
-          })
-        })
-      }),
-      Match.tag('GithubReleaseCreated', (created) => Effect.succeed(created)),
-      Match.tag('GithubReleaseSkipped', (skipped) => Effect.succeed(skipped)),
-      Match.tag('GithubReleaseAsserted', (asserted) => Effect.succeed(asserted)),
-      Match.tag('GithubReleaseEmpty', (empty) => Effect.succeed(empty)),
-      Match.exhaustive,
-    )
-  })
+  return Match.value(output.success).pipe(
+    Match.tag('GithubReleasePreview', (preview) => publishPreview(preview, raw)),
+    Match.tag('GithubReleaseCreated', (created) => Effect.succeed(created)),
+    Match.tag('GithubReleaseSkipped', (skipped) => Effect.succeed(skipped)),
+    Match.tag('GithubReleaseAsserted', (asserted) => Effect.succeed(asserted)),
+    Match.tag('GithubReleaseEmpty', (empty) => Effect.succeed(empty)),
+    Match.exhaustive,
+  )
 }
 
 export const githubReleaseCell: Cell.Cell<

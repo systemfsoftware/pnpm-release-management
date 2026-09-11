@@ -3,8 +3,14 @@ import {
   type PackageVersion,
   type RelativePath,
   SurfaceStore,
-  SyncDecision,
+  type SyncActionUnknown,
+  SyncAligned,
+  type SyncDecision,
+  SyncRealigned,
   type SyncRefusal,
+  type SyncStrategyMismatch,
+  type SyncSurfacesDrifted,
+  type SyncVersionMissing,
   type VersionRefusal,
 } from '@systemfsoftware/release-language'
 import { Effect } from 'effect'
@@ -18,71 +24,89 @@ import {
 } from './sync-surfaces.workflow.js'
 import { SyncCommand, type SyncInput } from './sync.schema.js'
 
-type LocalSyncDecision = LocalSyncAligned | LocalSyncRealigned
-
-type SyncRaw = {
-  readonly input: SyncInput
-  readonly expected: PackageVersion
-  readonly entries: ReadonlyArray<{
-    readonly file: RelativePath
-    readonly found: PackageVersion
-  }>
-  readonly count: number
+class RawSync {
+  constructor(
+    readonly request: SyncInput,
+    readonly expected: PackageVersion,
+    readonly entries: ReadonlyArray<{
+      readonly file: RelativePath
+      readonly found: PackageVersion
+    }>,
+  ) {}
 }
 
 const read = (
-  input: SyncInput,
-): Effect.Effect<SyncRaw, VersionRefusal, SurfaceStore> =>
+  request: SyncInput,
+): Effect.Effect<RawSync, VersionRefusal, SurfaceStore> =>
   Effect.gen(function*() {
     const surfaces = yield* SurfaceStore
-    const expected = yield* surfaces.readSurface(input.manifest.file, input.manifest.surface)
-    const entries = yield* Effect.forEach(input.surfaces, (surface) =>
+    const expected = yield* surfaces.readSurface(request.manifest.file, request.manifest.surface)
+    const entries = yield* Effect.forEach(request.surfaces, (surface) =>
       Effect.map(
         surfaces.readSurface(surface.file, surface.surface),
         (found) => ({ file: surface.file, found }),
       ))
-    return { input, expected, entries, count: input.surfaces.length }
+    return new RawSync(request, expected, entries)
   })
 
-const decode = (raw: SyncRaw) =>
+const decode = (raw: RawSync) =>
   S.decodeUnknownResult(SyncCommand)({
     _tag: 'SyncCommand',
-    strategy: raw.input.strategy,
-    action: raw.input.action,
-    pinned: raw.input.version,
+    strategy: raw.request.strategy,
+    action: raw.request.action,
+    pinned: raw.request.version,
     expected: raw.expected,
-    manifestFile: raw.input.manifest.file,
-    entries: raw.entries,
-    count: raw.count,
+    manifestFile: raw.request.manifest.file,
+    entries: [...raw.entries],
+    count: raw.request.surfaces.length,
   })
 
+const toDecision = (decision: LocalSyncAligned | LocalSyncRealigned): SyncDecision =>
+  Match.value(decision).pipe(
+    Match.tag(
+      'SyncAligned',
+      (aligned) => SyncAligned.make({ version: aligned.version, surfaces: aligned.surfaces }),
+    ),
+    Match.tag(
+      'SyncRealigned',
+      (realigned) => SyncRealigned.make({ version: realigned.version, rewritten: [...realigned.rewritten] }),
+    ),
+    Match.exhaustive,
+  )
+
 const encode = (
-  outcome: Result.Result<LocalSyncDecision, SyncRefusal>,
-): Result.Result<LocalSyncDecision, SyncRefusal> => outcome
+  outcome: Result.Result<
+    LocalSyncAligned | LocalSyncRealigned,
+    SyncStrategyMismatch | SyncSurfacesDrifted | SyncVersionMissing | SyncActionUnknown
+  >,
+): Result.Result<
+  SyncDecision,
+  SyncStrategyMismatch | SyncSurfacesDrifted | SyncVersionMissing | SyncActionUnknown
+> => Result.map(outcome, toDecision)
 
 const write = (
-  output: Result.Result<LocalSyncDecision, SyncRefusal>,
-  raw: SyncRaw,
+  output: Result.Result<SyncDecision, SyncRefusal>,
+  raw: RawSync,
 ): Effect.Effect<SyncDecision, SyncRefusal | VersionRefusal, SurfaceStore> => {
   if (Result.isFailure(output)) return Effect.fail(output.failure)
-  return Effect.flatMap(
-    S.decodeUnknownEffect(SyncDecision)(output.success).pipe(Effect.orDie),
-    (decision) =>
-      Match.value(decision).pipe(
-        Match.tag('SyncAligned', (aligned) => Effect.succeed(aligned)),
-        Match.tag('SyncRealigned', (realigned) =>
-          Effect.gen(function*() {
-            const surfaces = yield* SurfaceStore
-            yield* surfaces.writeSurface(raw.input.manifest.file, raw.input.manifest.surface, realigned.version)
-            yield* Effect.forEach(
-              raw.input.surfaces,
-              (surface) => surfaces.writeSurface(surface.file, surface.surface, realigned.version),
-              { discard: true },
-            )
-            return realigned
-          })),
-        Match.exhaustive,
-      ),
+  return Match.value(output.success).pipe(
+    Match.tag('SyncAligned', (aligned) => Effect.succeed(aligned)),
+    Match.tag('SyncRealigned', (realigned) =>
+      Effect.gen(function*() {
+        const surfaces = yield* SurfaceStore
+        yield* surfaces.writeSurface(
+          raw.request.manifest.file,
+          raw.request.manifest.surface,
+          realigned.version,
+        )
+        yield* Effect.forEach(
+          raw.request.surfaces,
+          (surface) => surfaces.writeSurface(surface.file, surface.surface, realigned.version),
+          { discard: true },
+        )
+        return realigned
+      })),
+    Match.exhaustive,
   )
 }
 

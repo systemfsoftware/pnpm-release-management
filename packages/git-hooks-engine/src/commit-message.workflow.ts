@@ -1,9 +1,40 @@
 import { Workflow } from '@systemfsoftware/effect-cell-types'
-import { CommitShape } from '@systemfsoftware/release-language'
-import type { CommitIgnoreKind, CommitScope, CommitType } from '@systemfsoftware/release-language'
+import {
+  CommitAiAttribution,
+  CommitEmpty,
+  CommitHeaderMalformed,
+  CommitHeaderPunctuation,
+  CommitIgnoreKind,
+  CommitMessageRefusal,
+  CommitProductionUntouched,
+  CommitScope,
+  CommitScopeUnknown,
+  CommitShape,
+  CommitShapeMismatched,
+  CommitSubject,
+  CommitSubjectEmpty,
+  CommitType,
+  CommitTypeUnknown,
+  Count,
+} from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
+import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
+
+const AiAttributionRefusal = CommitAiAttribution
+const Counts = Count
+const EmptyRefusal = CommitEmpty
+const HeaderMalformedRefusal = CommitHeaderMalformed
+const HeaderPunctuationRefusal = CommitHeaderPunctuation
+const ProductionRefusal = CommitProductionUntouched
+const Scopes = CommitScope
+const ScopeUnknownRefusal = CommitScopeUnknown
+const ShapeMismatchRefusal = CommitShapeMismatched
+const Subjects = CommitSubject
+const SubjectEmptyRefusal = CommitSubjectEmpty
+const Types = CommitType
+const TypeUnknownRefusal = CommitTypeUnknown
 
 export class CommitMessageCommand extends S.TaggedClass<CommitMessageCommand>()(
   'CommitMessageCommand',
@@ -13,117 +44,76 @@ export class CommitMessageCommand extends S.TaggedClass<CommitMessageCommand>()(
   },
 ) {}
 
-const DecisionTypeId: unique symbol = Symbol.for(
+const CommitDecisionTypeId: unique symbol = Symbol.for(
   '@systemfsoftware/git-hooks-engine/CommitDecision',
 )
-type DecisionTypeId = typeof DecisionTypeId
+type CommitDecisionTypeId = typeof CommitDecisionTypeId
 
 export class CommitAllowed extends S.TaggedClass<CommitAllowed>()(
   'CommitAllowed',
   {
-    type: S.String,
-    scope: S.optional(S.String),
-    subject: S.String,
+    type: CommitType,
+    scope: S.optional(CommitScope),
+    subject: CommitSubject,
   },
 ) {
-  readonly [DecisionTypeId] = DecisionTypeId
+  readonly [CommitDecisionTypeId] = CommitDecisionTypeId
 }
 
 export class CommitWaived extends S.TaggedClass<CommitWaived>()(
   'CommitWaived',
   {
-    kind: S.String,
+    kind: CommitIgnoreKind,
   },
 ) {
-  readonly [DecisionTypeId] = DecisionTypeId
+  readonly [CommitDecisionTypeId] = CommitDecisionTypeId
 }
 
-const CommitEmpty = S.TaggedStruct('CommitEmpty', { staged: S.Finite })
-const CommitHeaderMalformed = S.TaggedStruct('CommitHeaderMalformed', {
-  header: S.String,
-})
-const CommitTypeUnknown = S.TaggedStruct('CommitTypeUnknown', {
-  type: S.String,
-})
-const CommitScopeUnknown = S.TaggedStruct('CommitScopeUnknown', {
-  scope: S.String,
-})
-const CommitSubjectEmpty = S.TaggedStruct('CommitSubjectEmpty', {
-  header: S.String,
-})
-const CommitHeaderPunctuation = S.TaggedStruct('CommitHeaderPunctuation', {
-  header: S.String,
-})
-const CommitAiAttribution = S.TaggedStruct('CommitAiAttribution', {
-  lines: S.Finite,
-})
-const CommitShapeMismatched = S.TaggedStruct('CommitShapeMismatched', {
-  type: S.String,
-  shape: CommitShape,
-  allowed: S.Array(S.String),
-})
-const CommitProductionUntouched = S.TaggedStruct('CommitProductionUntouched', {
-  type: S.Literals(['feat', 'fix']),
+export type CommitRefusal = CommitMessageRefusal
+
+const AcceptedCase = S.TaggedStruct('CommitAccepted', {
+  type: CommitType,
+  scope: S.optional(CommitScope),
+  subject: CommitSubject,
 })
 
-const CommitRefusal = S.Union([
-  CommitEmpty,
-  CommitHeaderMalformed,
-  CommitTypeUnknown,
-  CommitScopeUnknown,
-  CommitSubjectEmpty,
-  CommitHeaderPunctuation,
-  CommitAiAttribution,
-  CommitShapeMismatched,
-  CommitProductionUntouched,
-])
-export type CommitRefusal = S.Schema.Type<typeof CommitRefusal>
+const WaivedCase = S.TaggedStruct('CommitWaived', { kind: CommitIgnoreKind })
 
-const TYPES: Readonly<Record<string, true>> = {
-  ai: true,
-  api: true,
-  build: true,
-  chore: true,
-  ci: true,
-  deps: true,
-  docs: true,
-  e2e: true,
-  feat: true,
-  fix: true,
-  improvement: true,
-  perf: true,
-  refactor: true,
-  revert: true,
-  security: true,
-  style: true,
-  test: true,
+const RefusedCase = S.TaggedStruct('CommitRefused', { refusal: CommitMessageRefusal })
+
+const CommitCase = S.Union([AcceptedCase, WaivedCase, RefusedCase])
+type CommitCase = S.Schema.Type<typeof CommitCase>
+
+type ParsedHeader = {
+  readonly type: string
+  readonly scope: string | undefined
+  readonly subject: string
 }
 
-const SCOPES: Readonly<Record<string, true>> = {
-  ci: true,
-  deps: true,
-  docs: true,
-  e2e: true,
-  gate: true,
-  global: true,
-  nix: true,
-  plan: true,
-  publish: true,
-  release: true,
-  repo: true,
-  solutions: true,
-  tag: true,
-  version: true,
+type CommitHeaderStage = {
+  readonly command: CommitMessageCommand
+  readonly header: string
+  readonly parsed: ParsedHeader
 }
 
-const HEADER = /^(?<type>[a-z]+)(?:\((?<scope>[^()]*)\))?(?<breaking>!)?: (?<subject>.+)$/
+type CommitTypeStage = CommitHeaderStage & { readonly type: CommitType }
+type CommitScopeStage = CommitTypeStage & { readonly scope: CommitScope | undefined }
+type CommitSubjectStage = CommitScopeStage & { readonly subject: CommitSubject }
 
-type IgnoreEntry = {
+type IgnoreRule = {
   readonly pattern: RegExp
   readonly kind: CommitIgnoreKind
 }
 
-const DEFAULT_IGNORES: ReadonlyArray<IgnoreEntry> = [
+type ShapeRule = {
+  readonly shape: CommitShape
+  readonly matches: (path: string) => boolean
+  readonly allowed: readonly [CommitType, ...CommitType[]]
+}
+
+const HEADER = /^(?<type>[a-z]+)(?:\((?<scope>[^()]*)\))?(?<breaking>!)?: (?<subject>.+)$/
+
+const IGNORE_RULES: ReadonlyArray<IgnoreRule> = [
   { pattern: /^Merge pull request/, kind: 'merge' },
   { pattern: /^Merge (branch|remote-tracking branch)/, kind: 'merge' },
   { pattern: /^Automatic merge/, kind: 'merge' },
@@ -134,7 +124,50 @@ const DEFAULT_IGNORES: ReadonlyArray<IgnoreEntry> = [
   { pattern: /^chore\(release\)/, kind: 'release' },
 ]
 
-const AI_EMAILS = [
+const DOC_PATTERNS: ReadonlyArray<RegExp> = [
+  /\.mdx?$/,
+  /^docs\//,
+  /(^|\/)README\.md$/i,
+  /(^|\/)AGENTS\.md$/i,
+  /(^|\/)CLAUDE\.md$/i,
+]
+
+const TEST_PATTERNS: ReadonlyArray<RegExp> = [
+  /\.(test|spec)\.(ts|mjs|cjs)$/,
+  /(^|\/)__tests__\//,
+  /(^|\/)tests\//,
+  /(^|\/)e2e\//,
+  /(^|\/)fixtures\//,
+]
+
+const CI_PATTERNS: ReadonlyArray<RegExp> = [
+  /^\.github\/workflows\//,
+  /^\.github\/actions\//,
+  /^\.github\/dependabot\.ya?ml$/,
+]
+
+const LOCKFILE_PATTERNS: ReadonlyArray<RegExp> = [
+  /(^|\/)deno\.lock$/,
+  /(^|\/)pnpm-lock\.yaml$/,
+  /(^|\/)flake\.lock$/,
+]
+
+const TOOLING_PATTERNS: ReadonlyArray<RegExp> = [
+  /^\.claude\//,
+  /^\.githooks\//,
+  /^nix\//,
+  /^bin\//,
+  /^flake\.nix$/,
+  /^flake\.lock$/,
+  /(^|\/)dprint\.json$/,
+  /(^|\/)\.envrc$/,
+  /(^|\/)\.gitignore$/,
+  /(^|\/)deno\.json[c]?$/,
+  /(^|\/)package\.json$/,
+  /^scripts\/checks\//,
+]
+
+const AI_EMAILS: ReadonlyArray<RegExp> = [
   /noreply@anthropic\.com/i,
   /cursoragent@cursor\.com/i,
   /noreply@aider\.dev/i,
@@ -144,147 +177,296 @@ const AI_EMAILS = [
   /factory-droid\[bot\]@users\.noreply\.github\.com/i,
 ]
 
-const AI_MODELS = [/\b(Claude\s+)?(Opus|Sonnet|Haiku)\b/i, /\bgpt-4o\b/i, /\bClaude\b.*\b3\.\d+\b/i]
+const AI_MODELS: ReadonlyArray<RegExp> = [
+  /\b(Claude\s+)?(Opus|Sonnet|Haiku)\b/i,
+  /\bgpt-4o\b/i,
+  /\bClaude\b.*\b3\.\d+\b/i,
+]
 
 const COAUTHOR_LINE = /^Co-?-?[Aa]uthored-by:.*$/
+const COAUTHOR_LINES = /^Co-?-?[Aa]uthored-by:.*$/gmi
 
-const isDoc = (path: string): boolean =>
-  /\.mdx?$/.test(path) || path.startsWith('docs/') || /(^|\/)README\.md$/i.test(path) ||
-  /(^|\/)AGENTS\.md$/i.test(path) || /(^|\/)CLAUDE\.md$/i.test(path)
+const PRODUCTION_TYPES: readonly ['feat', 'fix'] = ['feat', 'fix']
 
-const isTest = (path: string): boolean =>
-  /\.(test|spec)\.(ts|mjs|cjs)$/.test(path) || /(^|\/)__tests__\//.test(path) ||
-  /(^|\/)tests\//.test(path) || /(^|\/)e2e\//.test(path) || /(^|\/)fixtures\//.test(path)
+const matchesAny = (patterns: ReadonlyArray<RegExp>, path: string): boolean =>
+  patterns.some((pattern) => pattern.test(path))
 
-const isCI = (path: string): boolean =>
-  path.startsWith('.github/workflows/') || path.startsWith('.github/actions/') ||
-  /^\.github\/dependabot\.ya?ml$/.test(path)
+const isDoc = (path: string): boolean => matchesAny(DOC_PATTERNS, path)
+const isTest = (path: string): boolean => matchesAny(TEST_PATTERNS, path)
+const isCiPath = (path: string): boolean => matchesAny(CI_PATTERNS, path)
+const isLockfile = (path: string): boolean => matchesAny(LOCKFILE_PATTERNS, path)
+const isTooling = (path: string): boolean => matchesAny(TOOLING_PATTERNS, path)
 
-const isLockfile = (path: string): boolean =>
-  /(^|\/)deno\.lock$/.test(path) || /(^|\/)pnpm-lock\.yaml$/.test(path) || /(^|\/)flake\.lock$/.test(path)
+const NON_PRODUCTION_SHAPES: ReadonlyArray<(path: string) => boolean> = [
+  isDoc,
+  isTest,
+  isCiPath,
+  isLockfile,
+  isTooling,
+]
 
-const isTooling = (path: string): boolean =>
-  path.startsWith('.claude/') || path.startsWith('.githooks/') || path.startsWith('nix/') ||
-  path.startsWith('bin/') ||
-  /^flake\.nix$/.test(path) || /^flake\.lock$/.test(path) || /(^|\/)dprint\.json$/.test(path) ||
-  /(^|\/)\.envrc$/.test(path) || /(^|\/)\.gitignore$/.test(path) || /(^|\/)deno\.json[c]?$/.test(path) ||
-  /(^|\/)package\.json$/.test(path) || path.startsWith('scripts/checks/')
-
-type ShapeEntry = {
-  readonly name: string
-  readonly shape: CommitShape
-  readonly match: (path: string) => boolean
-  readonly allowed: Readonly<Record<string, true>>
-}
-
-const SHAPES: ReadonlyArray<ShapeEntry> = [
-  { name: 'docs', shape: 'docs', match: isDoc, allowed: { docs: true, chore: true, ai: true } },
-  { name: 'test', shape: 'test', match: isTest, allowed: { test: true, chore: true, e2e: true } },
-  { name: 'CI', shape: 'CI', match: isCI, allowed: { ci: true, chore: true } },
-  { name: 'lockfile', shape: 'lockfile', match: isLockfile, allowed: { deps: true, chore: true } },
+const STAGED_SHAPES: ReadonlyArray<ShapeRule> = [
+  { shape: 'docs', matches: isDoc, allowed: ['docs', 'chore', 'ai'] },
+  { shape: 'test', matches: isTest, allowed: ['test', 'chore', 'e2e'] },
+  { shape: 'CI', matches: isCiPath, allowed: ['ci', 'chore'] },
+  { shape: 'lockfile', matches: isLockfile, allowed: ['deps', 'chore'] },
   {
-    name: 'tooling',
     shape: 'tooling',
-    match: isTooling,
-    allowed: { chore: true, build: true, ci: true, deps: true, ai: true, security: true },
+    matches: isTooling,
+    allowed: ['chore', 'build', 'ci', 'deps', 'ai', 'security'],
   },
 ]
 
-const isCommitType = (value: string): value is CommitType => Object.prototype.hasOwnProperty.call(TYPES, value)
+const CREDIT_PROBES: ReadonlyArray<(raw: string) => boolean> = [
+  (raw) => AI_EMAILS.some((pattern) => pattern.test(raw)),
+  (raw) => coauthorLinesOf(raw).some((line) => AI_MODELS.some((pattern) => pattern.test(line))),
+]
 
-const isCommitScope = (value: string): value is CommitScope => Object.prototype.hasOwnProperty.call(SCOPES, value)
+const CREDITED_LINE_PROBES: ReadonlyArray<(line: string) => boolean> = [
+  (line) => AI_EMAILS.some((pattern) => pattern.test(line)),
+  (line) =>
+    [line]
+      .filter((value) => COAUTHOR_LINE.test(value))
+      .some((value) => AI_MODELS.some((pattern) => pattern.test(value))),
+]
 
-const isFeatFix = (value: CommitType): value is 'feat' | 'fix' => value === 'feat' || value === 'fix'
+const countOf = (value: number): Count => Option.getOrThrow(Option.getSuccess(S.decodeUnknownResult(Counts)(value)))
 
-const headerOf = (message: string): string =>
-  message.split('\n').find((line) => line.trim().length > 0 && !line.startsWith('#'))?.trim() ?? ''
+const typeOf = (value: string): Option.Option<CommitType> => Option.getSuccess(S.decodeUnknownResult(Types)(value))
 
-const coauthorLinesOf = (raw: string): ReadonlyArray<string> => raw.match(/^Co-?-?[Aa]uthored-by:.*$/gmi) ?? []
+const scopeOf = (value: string): Option.Option<CommitScope> => Option.getSuccess(S.decodeUnknownResult(Scopes)(value))
 
-const hasAiCredit = (raw: string): boolean => {
-  const coauthorLines = coauthorLinesOf(raw)
-  return AI_EMAILS.some((pattern) => pattern.test(raw)) ||
-    coauthorLines.some((line) => AI_MODELS.some((pattern) => pattern.test(line)))
-}
+const subjectOf = (value: string): Option.Option<CommitSubject> =>
+  Option.filter(
+    Option.getSuccess(S.decodeUnknownResult(Subjects)(value)),
+    (subject) => subject.trim().length > 0,
+  )
 
-const aiEvidenceLines = (raw: string): number =>
-  raw.split('\n').filter((line) =>
-    AI_EMAILS.some((pattern) => pattern.test(line)) ||
-    (COAUTHOR_LINE.test(line) && AI_MODELS.some((pattern) => pattern.test(line)))
-  ).length
+const coauthorLinesOf = (raw: string): ReadonlyArray<string> =>
+  Option.getOrElse(Option.fromNullishOr(raw.match(COAUTHOR_LINES)), () => [])
 
-const hasProductionSource = (files: ReadonlyArray<string>): boolean =>
-  files.some((file) => !isDoc(file) && !isTest(file) && !isCI(file) && !isLockfile(file) && !isTooling(file))
+const hasAiCredit = (raw: string): boolean => CREDIT_PROBES.some((probe) => probe(raw))
 
-type CommitVerdict = CommitAllowed | CommitWaived | CommitRefusal
+const isCreditedLine = (line: string): boolean => CREDITED_LINE_PROBES.some((probe) => probe(line))
 
-const classifyIgnored = (raw: string): CommitWaived | undefined => {
-  const ignored = DEFAULT_IGNORES.find((entry) => entry.pattern.test(raw.trimStart()))
-  if (ignored === undefined) return undefined
-  return CommitWaived.make({ kind: ignored.kind })
-}
+const aiEvidenceOf = (raw: string): Option.Option<Count> =>
+  Match.value(hasAiCredit(raw)).pipe(
+    Match.when(true, () => Option.some(countOf(raw.split('\n').filter(isCreditedLine).length))),
+    Match.when(false, () => Option.none<Count>()),
+    Match.exhaustive,
+  )
 
-const classifyStaged = (
-  type: CommitType,
+const waiverOf = (raw: string): Option.Option<CommitIgnoreKind> =>
+  Option.map(
+    Option.fromNullishOr(
+      IGNORE_RULES.find((rule) => rule.pattern.test(raw.trimStart())),
+    ),
+    (rule) => rule.kind,
+  )
+
+const headerOf = (raw: string): string =>
+  Option.getOrElse(
+    Option.map(
+      Option.fromNullishOr(
+        raw.split('\n').filter((line) => line.trim().length > 0).find((line) => !line.startsWith('#')),
+      ),
+      (line) => line.trim(),
+    ),
+    () => '',
+  )
+
+const parsedOf = (header: string): Option.Option<ParsedHeader> =>
+  Option.flatMap(
+    Option.fromNullishOr(HEADER.exec(header)),
+    (match) =>
+      Option.flatMap(Option.fromNullishOr(match.groups), (groups) =>
+        Option.map(
+          Option.all({
+            type: Option.fromNullishOr(groups['type']),
+            subject: Option.fromNullishOr(groups['subject']),
+          }),
+          (required) => ({
+            type: required.type,
+            scope: groups['scope'],
+            subject: required.subject,
+          }),
+        )),
+  )
+
+const headerRefusalOf = (
+  command: CommitMessageCommand,
+  header: string,
+): CommitMessageRefusal =>
+  Match.value(Option.fromNullishOr(header[0])).pipe(
+    Match.tag('None', () => EmptyRefusal.make({ staged: countOf(command.staged.length) })),
+    Match.tag('Some', () => HeaderMalformedRefusal.make({ header })),
+    Match.exhaustive,
+  )
+
+const stagedPathsOf = (
   staged: ReadonlyArray<string>,
-): CommitVerdict | undefined => {
-  if (staged.length === 0) return undefined
-  const shape = SHAPES.find((entry) => staged.every(entry.match) && !(type in entry.allowed))
-  if (shape !== undefined) {
-    return {
-      _tag: 'CommitShapeMismatched',
-      type,
-      shape: shape.shape,
-      allowed: Object.keys(shape.allowed),
-    }
-  }
-  if (isFeatFix(type) && !hasProductionSource(staged)) {
-    return { _tag: 'CommitProductionUntouched', type }
-  }
-  return undefined
+): Option.Option<ReadonlyArray<string>> => Option.liftPredicate(staged, (values) => values.length > 0)
+
+const shapeRuleOf = (
+  staged: ReadonlyArray<string>,
+  type: CommitType,
+): Option.Option<ShapeRule> =>
+  Option.flatMap(stagedPathsOf(staged), (values) =>
+    Option.fromNullishOr(
+      STAGED_SHAPES
+        .filter((rule) => values.every(rule.matches))
+        .find((rule) => !rule.allowed.includes(type)),
+    ))
+
+const productionTypeOf = (
+  staged: ReadonlyArray<string>,
+  type: CommitType,
+): Option.Option<'feat' | 'fix'> =>
+  Option.flatMap(stagedPathsOf(staged), (values) =>
+    Option.flatMap(
+      Option.fromNullishOr(PRODUCTION_TYPES.find((candidate) => candidate === type)),
+      (candidate) => Option.liftPredicate(candidate, () => !values.some(isProductionSource)),
+    ))
+
+const isProductionSource = (path: string): boolean => !NON_PRODUCTION_SHAPES.some((matches) => matches(path))
+
+const headerStageOf = (
+  command: CommitMessageCommand,
+): Result.Result<CommitHeaderStage, CommitMessageRefusal> => {
+  const header = headerOf(command.raw)
+  return Match.value(parsedOf(header)).pipe(
+    Match.tag('None', () => Result.fail(headerRefusalOf(command, header))),
+    Match.tag('Some', (parsed) => Result.succeed({ command, header, parsed: parsed.value })),
+    Match.exhaustive,
+  )
 }
 
-const classify = (command: CommitMessageCommand): CommitVerdict => {
-  const waived = classifyIgnored(command.raw)
-  if (waived !== undefined) return waived
-  const raw = command.raw
-  const staged = command.staged
-  const header = headerOf(raw)
-  if (header.length === 0) return { _tag: 'CommitEmpty', staged: staged.length }
-  const match = HEADER.exec(header)
-  if (match?.groups === undefined) return { _tag: 'CommitHeaderMalformed', header }
-  const { type, scope, subject } = match.groups
-  if (typeof type !== 'string' || typeof subject !== 'string') {
-    return { _tag: 'CommitHeaderMalformed', header }
-  }
-  if (!isCommitType(type)) return { _tag: 'CommitTypeUnknown', type }
-  if (scope !== undefined && !isCommitScope(scope)) return { _tag: 'CommitScopeUnknown', scope }
-  if (subject.trim().length === 0) return { _tag: 'CommitSubjectEmpty', header }
-  if (header.endsWith('.') || subject.trimEnd().endsWith('.')) {
-    return { _tag: 'CommitHeaderPunctuation', header }
-  }
-  if (hasAiCredit(raw)) return { _tag: 'CommitAiAttribution', lines: aiEvidenceLines(raw) }
-  const stagedVerdict = classifyStaged(type, staged)
-  if (stagedVerdict !== undefined) return stagedVerdict
-  if (scope === undefined) return CommitAllowed.make({ type, subject })
-  return CommitAllowed.make({ type, scope, subject })
-}
+const typedStageOf = (
+  stage: CommitHeaderStage,
+): Result.Result<CommitTypeStage, CommitMessageRefusal> =>
+  Match.value(typeOf(stage.parsed.type)).pipe(
+    Match.tag('None', () => Result.fail(TypeUnknownRefusal.make({ type: stage.parsed.type }))),
+    Match.tag('Some', (type) => Result.succeed({ ...stage, type: type.value })),
+    Match.exhaustive,
+  )
+
+const scopedStageOf = (
+  stage: CommitTypeStage,
+): Result.Result<CommitScopeStage, CommitMessageRefusal> =>
+  Match.value(Option.fromNullishOr(stage.parsed.scope)).pipe(
+    Match.tag('None', () => Result.succeed({ ...stage, scope: undefined })),
+    Match.tag('Some', (scope) =>
+      Match.value(scopeOf(scope.value)).pipe(
+        Match.tag('None', () => Result.fail(ScopeUnknownRefusal.make({ scope: scope.value }))),
+        Match.tag('Some', (valid) => Result.succeed({ ...stage, scope: valid.value })),
+        Match.exhaustive,
+      )),
+    Match.exhaustive,
+  )
+
+const subjectStageOf = (
+  stage: CommitScopeStage,
+): Result.Result<CommitSubjectStage, CommitMessageRefusal> =>
+  Match.value(subjectOf(stage.parsed.subject)).pipe(
+    Match.tag('None', () => Result.fail(SubjectEmptyRefusal.make({ header: stage.header }))),
+    Match.tag('Some', (subject) => Result.succeed({ ...stage, subject: subject.value })),
+    Match.exhaustive,
+  )
+
+const punctuatedStageOf = (
+  stage: CommitSubjectStage,
+): Result.Result<CommitSubjectStage, CommitMessageRefusal> =>
+  Match.value(
+    Option.fromNullishOr(
+      [stage.header, stage.subject.trimEnd()].find((value) => value.endsWith('.')),
+    ),
+  ).pipe(
+    Match.tag('Some', () => Result.fail(HeaderPunctuationRefusal.make({ header: stage.header }))),
+    Match.tag('None', () => Result.succeed(stage)),
+    Match.exhaustive,
+  )
+
+const attributedStageOf = (
+  stage: CommitSubjectStage,
+): Result.Result<CommitSubjectStage, CommitMessageRefusal> =>
+  Match.value(aiEvidenceOf(stage.command.raw)).pipe(
+    Match.tag('Some', (lines) => Result.fail(AiAttributionRefusal.make({ lines: lines.value }))),
+    Match.tag('None', () => Result.succeed(stage)),
+    Match.exhaustive,
+  )
+
+const shapedStageOf = (
+  stage: CommitSubjectStage,
+): Result.Result<CommitSubjectStage, CommitMessageRefusal> =>
+  Match.value(shapeRuleOf(stage.command.staged, stage.type)).pipe(
+    Match.tag('Some', (rule) =>
+      Result.fail(
+        ShapeMismatchRefusal.make({
+          type: stage.type,
+          shape: rule.value.shape,
+          allowed: rule.value.allowed,
+        }),
+      )),
+    Match.tag('None', () => Result.succeed(stage)),
+    Match.exhaustive,
+  )
+
+const producedStageOf = (
+  stage: CommitSubjectStage,
+): Result.Result<CommitSubjectStage, CommitMessageRefusal> =>
+  Match.value(productionTypeOf(stage.command.staged, stage.type)).pipe(
+    Match.tag('Some', (candidate) => Result.fail(ProductionRefusal.make({ type: candidate.value }))),
+    Match.tag('None', () => Result.succeed(stage)),
+    Match.exhaustive,
+  )
+
+const verdictOf = (
+  command: CommitMessageCommand,
+): Result.Result<CommitSubjectStage, CommitMessageRefusal> =>
+  Result.gen(function*() {
+    const header = yield* headerStageOf(command)
+    const typed = yield* typedStageOf(header)
+    const scoped = yield* scopedStageOf(typed)
+    const subjected = yield* subjectStageOf(scoped)
+    const punctuated = yield* punctuatedStageOf(subjected)
+    const attributed = yield* attributedStageOf(punctuated)
+    const shaped = yield* shapedStageOf(attributed)
+    return yield* producedStageOf(shaped)
+  })
+
+const verdictCaseOf = (command: CommitMessageCommand): CommitCase =>
+  Match.value(verdictOf(command)).pipe(
+    Match.tag('Success', (success) =>
+      AcceptedCase.make({
+        type: success.success.type,
+        scope: success.success.scope,
+        subject: success.success.subject,
+      })),
+    Match.tag('Failure', (failure) => RefusedCase.make({ refusal: failure.failure })),
+    Match.exhaustive,
+  )
+
+const classifyCommitMessage = (command: CommitMessageCommand): CommitCase =>
+  Match.value(waiverOf(command.raw)).pipe(
+    Match.tag('Some', (kind) => WaivedCase.make({ kind: kind.value })),
+    Match.tag('None', () => verdictCaseOf(command)),
+    Match.exhaustive,
+  )
 
 export const commitMessage = Workflow.make(
   CommitMessageCommand,
-  (command: CommitMessageCommand): Result.Result<CommitAllowed | CommitWaived, CommitRefusal> =>
-    Match.value(classify(command)).pipe(
-      Match.tag('CommitWaived', (decision) => Result.succeed(decision)),
-      Match.tag('CommitAllowed', (decision) => Result.succeed(decision)),
-      Match.tag('CommitEmpty', (refusal) => Result.fail(refusal)),
-      Match.tag('CommitHeaderMalformed', (refusal) => Result.fail(refusal)),
-      Match.tag('CommitTypeUnknown', (refusal) => Result.fail(refusal)),
-      Match.tag('CommitScopeUnknown', (refusal) => Result.fail(refusal)),
-      Match.tag('CommitSubjectEmpty', (refusal) => Result.fail(refusal)),
-      Match.tag('CommitHeaderPunctuation', (refusal) => Result.fail(refusal)),
-      Match.tag('CommitAiAttribution', (refusal) => Result.fail(refusal)),
-      Match.tag('CommitShapeMismatched', (refusal) => Result.fail(refusal)),
-      Match.tag('CommitProductionUntouched', (refusal) => Result.fail(refusal)),
+  (command): Result.Result<CommitAllowed | CommitWaived, CommitRefusal> =>
+    Match.value(classifyCommitMessage(command)).pipe(
+      Match.tag('CommitWaived', (waived) => Result.succeed(CommitWaived.make({ kind: waived.kind }))),
+      Match.tag('CommitAccepted', (accepted) =>
+        Result.succeed(
+          CommitAllowed.make({
+            type: accepted.type,
+            scope: accepted.scope,
+            subject: accepted.subject,
+          }),
+        )),
+      Match.tag('CommitRefused', (refused) => Result.fail(refused.refusal)),
       Match.exhaustive,
     ),
 )

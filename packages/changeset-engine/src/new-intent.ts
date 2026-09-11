@@ -1,5 +1,4 @@
 import { Cell, Wire } from '@systemfsoftware/effect-cell-types'
-
 import {
   Bump,
   ChangesetStore,
@@ -10,20 +9,21 @@ import {
   type MemberRefusal,
   type NewIntentDecision,
   NewIntentInvalidBump,
-  NewIntentPackageNameMalformed as NewIntentPackageNameMalformedSchema,
+  NewIntentPackageNameMalformed,
   NewIntentPackagesEmpty,
   type NewIntentRefusal,
+  type NewIntentRequest,
   NewIntentSummaryMissing,
   PackageName,
   WorkspaceStore,
 } from '@systemfsoftware/release-language'
 import { Effect } from 'effect'
 import * as Array from 'effect/Array'
+import * as Match from 'effect/Match'
 import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import type { IntentDerivedStaged, IntentNamedStaged } from './new-intent.workflow.js'
-import { newIntent, NewIntentCommand } from './new-intent.workflow.js'
+import { IntentDerivedStaged, IntentNamedStaged, newIntent, NewIntentCommand } from './new-intent.workflow.js'
 
 export const NewIntentInput = Wire.wire({
   packages: Wire.mint(S.Array(S.String)),
@@ -32,101 +32,126 @@ export const NewIntentInput = Wire.wire({
   slug: Wire.mint(S.optional(S.String)),
 })
 
+type NewIntentRequestInput = S.Schema.Type<typeof NewIntentInput>
+
 type RawNewIntent = {
-  readonly request: S.Schema.Type<typeof NewIntentInput>
+  readonly request: NewIntentRequestInput
   readonly members: ReadonlyArray<Member>
 }
 
 type NewIntentReadError = MemberRefusal
 
 const read = (
-  request: S.Schema.Type<typeof NewIntentInput>,
+  request: NewIntentRequestInput,
 ): Effect.Effect<RawNewIntent, NewIntentReadError, WorkspaceStore> =>
-  Effect.map(
-    Effect.flatMap(WorkspaceStore, (workspace) => workspace.listMembers()),
-    (members) => ({ request, members }),
-  )
-const normalizeSlug = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+  Effect.gen(function*() {
+    const workspace = yield* WorkspaceStore
+    const members = yield* workspace.listMembers()
+    return { request, members }
+  })
 
-const slugOf = (given: string | undefined) =>
-  Option.flatMap(
-    Option.fromNullishOr(given),
-    (value) => Option.getSuccess(S.decodeUnknownResult(IntentSlug)(normalizeSlug(value))),
+const decodeBump = (given: string | undefined): Result.Result<Bump, NewIntentRefusal> =>
+  Result.mapError(
+    S.decodeUnknownResult(Bump)(given),
+    () => NewIntentInvalidBump.make({ given: given ?? '' }),
   )
 
-const decodeNames = (raw: RawNewIntent) => {
-  const names = raw.request.packages.map(
-    (given) => ({ given, decoded: S.decodeUnknownResult(PackageName)(given) }),
+const decodePackages = (
+  given: ReadonlyArray<string>,
+): Result.Result<ReadonlyArray<PackageName>, NewIntentRefusal> => {
+  const [malformed, valid] = Array.separate(
+    Array.map(given, (name) => Result.mapError(S.decodeUnknownResult(PackageName)(name), () => name)),
   )
-  const malformed = names.filter((name) => Result.isFailure(name.decoded))
-  const valid = names.flatMap((name) => Option.toArray(Option.getSuccess(name.decoded)))
-  return { malformed, valid }
-}
-
-const decode = (
-  raw: RawNewIntent,
-): Result.Result<InstanceType<typeof NewIntentCommand>, NewIntentRefusal> => {
-  const names = decodeNames(raw)
-  const bump = S.decodeUnknownResult(Bump)(raw.request.bump)
-  if (Result.isFailure(bump)) {
-    return Result.fail(NewIntentInvalidBump.make({ given: raw.request.bump ?? '' }))
-  }
-  if (names.malformed.length > 0) {
-    const first = names.malformed[0]
-    if (first !== undefined) {
-      return Result.fail(
-        NewIntentPackageNameMalformedSchema.make({ given: first.given }),
-      )
-    }
-  }
-  const summary = S.decodeUnknownResult(IntentSummary)(raw.request.summary)
-  if (Result.isFailure(summary)) {
-    return Result.fail(NewIntentSummaryMissing.make({ packages: names.valid }))
-  }
-  if (names.valid.length === 0) {
-    return Result.fail(
-      NewIntentPackagesEmpty.make({ bump: bump.success, summary: summary.success }),
-    )
-  }
-  return Result.succeed(
-    NewIntentCommand.make({
-      members: [...raw.members],
-      packages: names.valid,
-      bump: bump.success,
-      summary: summary.success,
-      slug: Option.getOrUndefined(slugOf(raw.request.slug)),
-    }),
-  )
-}
-
-const encode = (
-  outcome: Result.Result<IntentNamedStaged | IntentDerivedStaged, IntentUnknownPackage>,
-): Result.Result<IntentNamedStaged | IntentDerivedStaged, IntentUnknownPackage> => outcome
-const write = (
-  outcome: Result.Result<IntentNamedStaged | IntentDerivedStaged, IntentUnknownPackage>,
-  raw: RawNewIntent,
-): Effect.Effect<NewIntentDecision, NewIntentRefusal, ChangesetStore> => {
-  if (Result.isFailure(outcome)) return Effect.fail(outcome.failure)
-  const staged = outcome.success
-  return Array.match(staged.packages, {
-    onEmpty: () => Effect.die(new Error('a staged intent names at least one package')),
-    onNonEmpty: (entries) => {
-      const [head, ...tail] = entries
-      const request: {
-        packages: [PackageName, ...PackageName[]]
-        bump: Bump
-        summary: IntentSummary
-        slug?: IntentSlug | undefined
-      } = {
-        packages: [head.name, ...tail.map((entry) => entry.name)],
-        bump: staged.bump,
-        summary: staged.summary,
-        slug: Option.getOrUndefined(slugOf(raw.request.slug)),
-      }
-      return Effect.flatMap(ChangesetStore, (store) => store.writeIntent(request))
-    },
+  return Option.match(Array.head(malformed), {
+    onNone: () => Result.succeed(valid),
+    onSome: (first) => Result.fail(NewIntentPackageNameMalformed.make({ given: first })),
   })
 }
+
+const decodeSummary = (
+  given: string | undefined,
+  packages: ReadonlyArray<PackageName>,
+): Result.Result<IntentSummary, NewIntentRefusal> =>
+  Result.mapError(
+    S.decodeUnknownResult(IntentSummary)(given),
+    () => NewIntentSummaryMissing.make({ packages }),
+  )
+
+const normalizeSlug = (given: string): string => given.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+
+const requestedSlug = (given: string | undefined): Option.Option<IntentSlug> =>
+  Option.flatMap(
+    Option.fromNullishOr(given),
+    (text) => Option.getSuccess(S.decodeUnknownResult(IntentSlug)(normalizeSlug(text))),
+  )
+
+const commandOf = (
+  raw: RawNewIntent,
+  bump: Bump,
+  packages: ReadonlyArray<PackageName>,
+  summary: IntentSummary,
+): Result.Result<NewIntentCommand, NewIntentRefusal> =>
+  Array.match(packages, {
+    onEmpty: () => Result.fail(NewIntentPackagesEmpty.make({ bump, summary })),
+    onNonEmpty: (named) =>
+      Result.succeed(
+        NewIntentCommand.make({
+          members: raw.members,
+          packages: named,
+          bump,
+          summary,
+          slug: Option.getOrUndefined(requestedSlug(raw.request.slug)),
+        }),
+      ),
+  })
+
+const decode = (raw: RawNewIntent): Result.Result<NewIntentCommand, NewIntentRefusal> =>
+  Result.flatMap(
+    decodeBump(raw.request.bump),
+    (bump) =>
+      Result.flatMap(decodePackages(raw.request.packages), (packages) =>
+        Result.flatMap(decodeSummary(raw.request.summary, packages), (summary) =>
+          commandOf(raw, bump, packages, summary))),
+  )
+
+type NewIntentStaging = Result.Result<
+  IntentNamedStaged | IntentDerivedStaged,
+  IntentUnknownPackage
+>
+
+type NewIntentDocument = Result.Result<NewIntentRequest, IntentUnknownPackage>
+
+const documentOf = (staged: IntentNamedStaged | IntentDerivedStaged): NewIntentRequest =>
+  Match.value(staged).pipe(
+    Match.tag(
+      'IntentNamedStaged',
+      (named): NewIntentRequest => ({
+        packages: named.packages,
+        bump: named.bump,
+        summary: named.summary,
+        slug: named.slug,
+      }),
+    ),
+    Match.tag(
+      'IntentDerivedStaged',
+      (derived): NewIntentRequest => ({
+        packages: derived.packages,
+        bump: derived.bump,
+        summary: derived.summary,
+      }),
+    ),
+    Match.exhaustive,
+  )
+
+const encode = (outcome: NewIntentStaging): NewIntentDocument => Result.map(outcome, documentOf)
+
+const write = (
+  document: NewIntentDocument,
+): Effect.Effect<NewIntentDecision, NewIntentRefusal, ChangesetStore> =>
+  Result.match(document, {
+    onFailure: (refusal) => Effect.fail(refusal),
+    onSuccess: (request) => Effect.flatMap(ChangesetStore, (store) => store.writeIntent(request)),
+  })
 
 export const newIntentCell = Cell.layer({
   read,

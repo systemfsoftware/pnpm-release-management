@@ -1,16 +1,27 @@
-import { ForgePort, GitRef, PullRequestNumber, PullRequestSummary, ReleaseId } from '@systemfsoftware/release-language'
+import { ForgePort } from '@systemfsoftware/release-language'
 import type {
-  PrTitle,
   PullRequestLookup,
+  PullRequestNumber,
+  PullRequestSummary,
   ReleaseLabel,
   ReleaseLookup,
-  ReleaseTag,
   RepoSlug,
 } from '@systemfsoftware/release-language'
 import { Context, Effect, Layer } from 'effect'
-import type * as Result from 'effect/Result'
+import * as Array from 'effect/Array'
+import * as Option from 'effect/Option'
+import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import { Octokit, RequestError } from 'octokit'
+import { Octokit } from 'octokit'
+import {
+  DefaultBranchAnswer,
+  LabelAnswers,
+  PullRequestAnswer,
+  PullRequestAnswers,
+  PullSummaryAnswers,
+  ReleaseAnswer,
+  ThrownHost,
+} from './ForgeWire.schema.js'
 
 export interface ForgeConfig {
   readonly token: string | undefined
@@ -22,333 +33,233 @@ export const ForgeConfig: Context.Service<ForgeConfig, ForgeConfig> = Context.Se
   ForgeConfig
 >('ForgeConfig')
 
-const message = (error: unknown): string => {
-  if (error instanceof Error) {
-    return error.message
+const NOT_FOUND = 404
+
+const absenceOrDie = <A>(
+  asked: string,
+  thrown: unknown,
+): Effect.Effect<Option.Option<A>> => {
+  const host = S.decodeUnknownResult(ThrownHost)(thrown)
+  if (Result.isFailure(host)) {
+    return Effect.die(
+      new Error(`${asked} failed: the host threw a value that is not an error`),
+    )
   }
-  if (typeof error === 'string') {
-    return error
+  if (host.success.status === NOT_FOUND) {
+    return Effect.succeed(Option.none<A>())
   }
-  return 'unknown error'
+  return Effect.die(
+    new Error(`${asked} failed: ${host.success.message ?? 'the host gave no detail'}`),
+  )
 }
 
-const isAlreadyExists = (error: unknown): boolean =>
-  error instanceof RequestError &&
-  (error.status === 409 ||
-    (error.status === 422 && error.message.includes('already_exists')))
+const askOrAbsent = <A>(
+  asked: string,
+  wire: S.ConstraintDecoder<A>,
+  send: () => Promise<unknown>,
+): Effect.Effect<Option.Option<A>> =>
+  Effect.tryPromise({ try: send, catch: (thrown: unknown) => thrown }).pipe(
+    Effect.matchEffect({
+      onFailure: (thrown: unknown): Effect.Effect<Option.Option<A>> => absenceOrDie<A>(asked, thrown),
+      onSuccess: (answer: unknown): Effect.Effect<Option.Option<A>> =>
+        S.decodeUnknownEffect(S.Struct({ data: wire }))(answer).pipe(
+          Effect.orDie,
+          Effect.map((envelope): Option.Option<A> => Option.some(envelope.data)),
+        ),
+    }),
+  )
 
-const decodeOrDie = <A, E>(result: Result.Result<A, E>): Effect.Effect<A> =>
-  Effect.fromResult(result).pipe(Effect.orDie)
+const ask = <A>(
+  asked: string,
+  wire: S.ConstraintDecoder<A>,
+  send: () => Promise<unknown>,
+): Effect.Effect<A> =>
+  askOrAbsent(asked, wire, send).pipe(
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.die(new Error(`${asked} failed: the host answered ${String(NOT_FOUND)}`)),
+        onSome: (answer: A) => Effect.succeed(answer),
+      }),
+    ),
+  )
+
+const slugOf = (repo: RepoSlug): string => `${repo.owner}/${repo.repo}`
 
 const makeForge = (config: ForgeConfig): ForgePort => {
-  let octokitOptions: { readonly auth?: string; readonly baseUrl?: string } = {}
+  const options: { auth?: string; baseUrl?: string } = {}
   if (config.token !== undefined) {
-    octokitOptions = { ...octokitOptions, auth: config.token }
+    options.auth = config.token
   }
   if (config.baseUrl !== undefined) {
-    octokitOptions = { ...octokitOptions, baseUrl: config.baseUrl }
+    options.baseUrl = config.baseUrl
   }
-  const client = new Octokit(octokitOptions)
+  const client = new Octokit(options)
 
-  const addLabels = (
+  const attachLabels = (
     repo: RepoSlug,
     number: PullRequestNumber,
-    labels: ReadonlyArray<ReleaseLabel>,
+    attached: ReadonlyArray<ReleaseLabel>,
   ): Effect.Effect<void> =>
-    Effect.matchEffect(
-      Effect.tryPromise({
-        try: () =>
-          client.rest.issues.addLabels({
-            owner: repo.owner,
-            repo: repo.repo,
-            issue_number: number,
-            labels: [...labels],
-          }),
-        catch: (error) => error,
-      }),
-      {
-        onFailure: (error: unknown) =>
-          Effect.die(
-            new Error(
-              `adding labels to pull request #${String(number)} failed: ${message(error)}`,
-            ),
-          ),
-        onSuccess: (_res) => Effect.void,
-      },
-    )
+    Array.match(attached, {
+      onEmpty: () => Effect.void,
+      onNonEmpty: () =>
+        ask(
+          `adding labels to pull request #${String(number)} in ${slugOf(repo)}`,
+          LabelAnswers,
+          () =>
+            client.rest.issues.addLabels({
+              owner: repo.owner,
+              repo: repo.repo,
+              issue_number: number,
+              labels: [...attached],
+            }),
+        ).pipe(Effect.asVoid),
+    })
 
   return {
-    releaseByTag: (repo: RepoSlug, tag: ReleaseTag) =>
-      Effect.matchEffect(
-        Effect.tryPromise({
-          try: () =>
-            client.rest.repos.getReleaseByTag({
-              owner: repo.owner,
-              repo: repo.repo,
-              tag,
+    releaseByTag: (repo, tag) =>
+      askOrAbsent(
+        `looking up ${tag} in ${slugOf(repo)}`,
+        ReleaseAnswer,
+        () =>
+          client.rest.repos.getReleaseByTag({
+            owner: repo.owner,
+            repo: repo.repo,
+            tag,
+          }),
+      ).pipe(
+        Effect.map(
+          Option.match({
+            onNone: (): ReleaseLookup => ({ _tag: 'ReleaseAbsent', tag }),
+            onSome: (release): ReleaseLookup => ({
+              _tag: 'ReleaseFound',
+              id: release.id,
             }),
-          catch: (error) => error,
-        }),
-        {
-          onFailure: (error: unknown) => {
-            if (error instanceof RequestError && error.status === 404) {
-              return Effect.succeed<ReleaseLookup>({ _tag: 'ReleaseAbsent', tag })
-            }
-            return Effect.die(
-              new Error(
-                `looking up ${tag} in ${repo.owner}/${repo.repo} failed: ${message(error)}`,
-              ),
-            )
-          },
-          onSuccess: (res) =>
-            decodeOrDie(S.decodeUnknownResult(ReleaseId)(res.data.id)).pipe(
-              Effect.map((id): ReleaseLookup => ({ _tag: 'ReleaseFound', id })),
-            ),
-        },
+          }),
+        ),
       ),
-    createRelease: (repo: RepoSlug, tag: ReleaseTag, body: string) =>
-      Effect.matchEffect(
-        Effect.tryPromise({
-          try: () =>
-            client.rest.repos.createRelease({
-              owner: repo.owner,
-              repo: repo.repo,
-              tag_name: tag,
-              body,
-              prerelease: false,
-              make_latest: 'false',
+    createRelease: (repo, tag, body) =>
+      ask(
+        `creating release ${tag} in ${slugOf(repo)}`,
+        ReleaseAnswer,
+        () =>
+          client.rest.repos.createRelease({
+            owner: repo.owner,
+            repo: repo.repo,
+            tag_name: tag,
+            body,
+            prerelease: false,
+            make_latest: 'false',
+          }),
+      ).pipe(Effect.map((release) => release.id)),
+    promoteLatest: (repo, id) =>
+      ask(
+        `reconciling make_latest for release ${String(id)} in ${slugOf(repo)}`,
+        ReleaseAnswer,
+        () =>
+          client.rest.repos.updateRelease({
+            owner: repo.owner,
+            repo: repo.repo,
+            release_id: id,
+            make_latest: 'true',
+          }),
+      ).pipe(Effect.asVoid),
+    openPullRequest: (repo, head) =>
+      ask(
+        `looking up pull request for ${head} in ${slugOf(repo)}`,
+        PullRequestAnswers,
+        () =>
+          client.rest.pulls.list({
+            owner: repo.owner,
+            repo: repo.repo,
+            head,
+            state: 'open',
+            per_page: 100,
+          }),
+      ).pipe(
+        Effect.map((pulls) =>
+          Option.match(Array.head(pulls), {
+            onNone: (): PullRequestLookup => ({ _tag: 'PullRequestAbsent', head }),
+            onSome: (pull): PullRequestLookup => ({
+              _tag: 'PullRequestFound',
+              number: pull.number,
             }),
-          catch: (error) => error,
-        }),
-        {
-          onFailure: (error: unknown) => {
-            if (isAlreadyExists(error)) {
-              return Effect.die(
-                new Error(
-                  `release ${tag} already exists in ${repo.owner}/${repo.repo}`,
-                ),
-              )
-            }
-            return Effect.die(
-              new Error(`creating release ${tag} failed: ${message(error)}`),
-            )
-          },
-          onSuccess: (res) => decodeOrDie(S.decodeUnknownResult(ReleaseId)(res.data.id)),
-        },
+          })
+        ),
       ),
-    promoteLatest: (repo: RepoSlug, id: ReleaseId) =>
-      Effect.matchEffect(
-        Effect.tryPromise({
-          try: () =>
-            client.rest.repos.updateRelease({
-              owner: repo.owner,
-              repo: repo.repo,
-              release_id: id,
-              make_latest: 'true',
+    listPullRequests: (repo) =>
+      ask(
+        `listing pull requests in ${slugOf(repo)}`,
+        PullSummaryAnswers,
+        () =>
+          client.rest.pulls.list({
+            owner: repo.owner,
+            repo: repo.repo,
+            state: 'open',
+            per_page: 100,
+          }),
+      ).pipe(
+        Effect.map((pulls) =>
+          pulls.map(
+            (pull): PullRequestSummary => ({
+              number: pull.number,
+              title: pull.title,
+              head: pull.head.ref,
             }),
-          catch: (error) => error,
-        }),
-        {
-          onFailure: (error: unknown) =>
-            Effect.die(
-              new Error(
-                `reconciling make_latest for ${String(id)} failed: ${message(error)}`,
-              ),
-            ),
-          onSuccess: (_res) => Effect.void,
-        },
+          )
+        ),
       ),
-    openPullRequest: (repo: RepoSlug, head: GitRef) =>
-      Effect.matchEffect(
-        Effect.tryPromise({
-          try: () =>
-            client.rest.pulls.list({
-              owner: repo.owner,
-              repo: repo.repo,
-              head,
-              state: 'open',
-              per_page: 100,
-            }),
-          catch: (error) => error,
-        }),
-        {
-          onFailure: (error: unknown) =>
-            Effect.die(
-              new Error(
-                `looking up pull request for ${head} in ${repo.owner}/${repo.repo} failed: ${message(error)}`,
-              ),
-            ),
-          onSuccess: (res) => {
-            const first = res.data.at(0)
-            if (first === undefined) {
-              return Effect.succeed<PullRequestLookup>({
-                _tag: 'PullRequestAbsent',
-                head,
-              })
-            }
-            return decodeOrDie(
-              S.decodeUnknownResult(PullRequestNumber)(first.number),
-            ).pipe(
-              Effect.map((number): PullRequestLookup => ({
-                _tag: 'PullRequestFound',
-                number,
-              })),
-            )
-          },
-        },
+    createPullRequest: (repo, base, head, title, body, attached) =>
+      ask(
+        `creating pull request for ${head} into ${base} in ${slugOf(repo)}`,
+        PullRequestAnswer,
+        () =>
+          client.rest.pulls.create({
+            owner: repo.owner,
+            repo: repo.repo,
+            base,
+            head,
+            title,
+            body,
+          }),
+      ).pipe(
+        Effect.flatMap((created) => attachLabels(repo, created.number, attached).pipe(Effect.as(created.number))),
       ),
-    listPullRequests: (repo: RepoSlug) =>
-      Effect.matchEffect(
-        Effect.tryPromise({
-          try: () =>
-            client.rest.pulls.list({
-              owner: repo.owner,
-              repo: repo.repo,
-              state: 'open',
-              per_page: 100,
-            }),
-          catch: (error) => error,
-        }),
-        {
-          onFailure: (error: unknown) =>
-            Effect.die(
-              new Error(
-                `listing pull requests in ${repo.owner}/${repo.repo} failed: ${message(error)}`,
-              ),
-            ),
-          onSuccess: (res) =>
-            Effect.forEach(res.data, (pr) =>
-              decodeOrDie(
-                S.decodeUnknownResult(PullRequestSummary)({
-                  number: pr.number,
-                  title: pr.title,
-                  head: pr.head.ref,
-                }),
-              )),
-        },
-      ),
-    createPullRequest: (
-      repo: RepoSlug,
-      base: GitRef,
-      head: GitRef,
-      title: PrTitle,
-      body: string,
-      labels: ReadonlyArray<ReleaseLabel>,
-    ) =>
-      Effect.matchEffect(
-        Effect.tryPromise({
-          try: () =>
-            client.rest.pulls.create({
-              owner: repo.owner,
-              repo: repo.repo,
-              base,
-              head,
-              title,
-              body,
-            }),
-          catch: (error) => error,
-        }),
-        {
-          onFailure: (error: unknown) =>
-            Effect.die(
-              new Error(
-                `creating pull request for ${head} into ${base} failed: ${message(error)}`,
-              ),
-            ),
-          onSuccess: (res) =>
-            decodeOrDie(
-              S.decodeUnknownResult(PullRequestNumber)(res.data.number),
-            ).pipe(
-              Effect.flatMap((number) => {
-                if (labels.length === 0) {
-                  return Effect.succeed(number)
-                }
-                return addLabels(repo, number, labels).pipe(
-                  Effect.map((_void): PullRequestNumber => number),
-                )
-              }),
-            ),
-        },
-      ),
-    updatePullRequest: (
-      repo: RepoSlug,
-      number: PullRequestNumber,
-      title: PrTitle,
-      body: string,
-      labels: ReadonlyArray<ReleaseLabel>,
-    ) =>
-      Effect.matchEffect(
-        Effect.tryPromise({
-          try: () =>
-            client.rest.pulls.update({
-              owner: repo.owner,
-              repo: repo.repo,
-              pull_number: number,
-              title,
-              body,
-            }),
-          catch: (error) => error,
-        }),
-        {
-          onFailure: (error: unknown) =>
-            Effect.die(
-              new Error(
-                `updating pull request #${String(number)} failed: ${message(error)}`,
-              ),
-            ),
-          onSuccess: (_res) => {
-            if (labels.length === 0) {
-              return Effect.void
-            }
-            return addLabels(repo, number, labels)
-          },
-        },
-      ),
-    closePullRequest: (repo: RepoSlug, number: PullRequestNumber) =>
-      Effect.matchEffect(
-        Effect.tryPromise({
-          try: () =>
-            client.rest.pulls.update({
-              owner: repo.owner,
-              repo: repo.repo,
-              pull_number: number,
-              state: 'closed',
-            }),
-          catch: (error) => error,
-        }),
-        {
-          onFailure: (error: unknown) =>
-            Effect.die(
-              new Error(
-                `closing pull request #${String(number)} failed: ${message(error)}`,
-              ),
-            ),
-          onSuccess: (_res) => Effect.void,
-        },
-      ),
-    defaultBranch: (repo: RepoSlug) =>
-      Effect.matchEffect(
-        Effect.tryPromise({
-          try: () => client.rest.repos.get({ owner: repo.owner, repo: repo.repo }),
-          catch: (error) => error,
-        }),
-        {
-          onFailure: (error: unknown) =>
-            Effect.die(
-              new Error(
-                `looking up default branch for ${repo.owner}/${repo.repo} failed: ${message(error)}`,
-              ),
-            ),
-          onSuccess: (res) =>
-            decodeOrDie(
-              S.decodeUnknownResult(GitRef)(res.data.default_branch),
-            ),
-        },
-      ),
+    updatePullRequest: (repo, number, title, body, attached) =>
+      ask(
+        `updating pull request #${String(number)} in ${slugOf(repo)}`,
+        PullRequestAnswer,
+        () =>
+          client.rest.pulls.update({
+            owner: repo.owner,
+            repo: repo.repo,
+            pull_number: number,
+            title,
+            body,
+          }),
+      ).pipe(Effect.flatMap(() => attachLabels(repo, number, attached))),
+    closePullRequest: (repo, number) =>
+      ask(
+        `closing pull request #${String(number)} in ${slugOf(repo)}`,
+        PullRequestAnswer,
+        () =>
+          client.rest.pulls.update({
+            owner: repo.owner,
+            repo: repo.repo,
+            pull_number: number,
+            state: 'closed',
+          }),
+      ).pipe(Effect.asVoid),
+    defaultBranch: (repo) =>
+      ask(
+        `looking up the default branch of ${slugOf(repo)}`,
+        DefaultBranchAnswer,
+        () => client.rest.repos.get({ owner: repo.owner, repo: repo.repo }),
+      ).pipe(Effect.map((answer) => answer.default_branch)),
   }
 }
 
 export const ForgeLive: Layer.Layer<ForgePort, never, ForgeConfig> = Layer.effect(
   ForgePort,
-  Effect.flatMap(ForgeConfig, (config) => Effect.sync(() => makeForge(config))),
+  Effect.map(ForgeConfig, makeForge),
 )

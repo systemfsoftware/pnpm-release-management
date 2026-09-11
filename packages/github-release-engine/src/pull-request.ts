@@ -53,19 +53,39 @@ export const PullRequestRequest = Wire.wire({
   labels: Wire.mint(S.Array(ReleaseLabel)),
 })
 
-class RawPullRequest {
-  constructor(
-    readonly pending: Count,
-    readonly existing: PullRequestLookup,
-    readonly branch: GitRef,
-    readonly base: GitRef,
-    readonly title: PrTitle,
-    readonly body: string,
-    readonly bodyIssue: FsPath | undefined,
-    readonly slug: RepoSlug,
-    readonly remote: RemoteName,
-    readonly labels: Array<ReleaseLabel>,
-  ) {}
+interface RawPullRequest {
+  readonly pending: Count
+  readonly existing: PullRequestLookup
+  readonly branch: GitRef
+  readonly base: GitRef
+  readonly title: PrTitle
+  readonly body: string
+  readonly bodyIssue: FsPath | undefined
+  readonly slug: RepoSlug
+  readonly remote: RemoteName
+  readonly labels: ReadonlyArray<ReleaseLabel>
+}
+
+interface BodyScan {
+  readonly text: string
+  readonly issue: FsPath | undefined
+}
+
+const readBody = (
+  workspace: WorkspaceStore,
+  body: string | undefined,
+  bodyFile: RelativePath | undefined,
+): Effect.Effect<BodyScan, never, never> => {
+  if (body !== undefined) {
+    return Effect.succeed({ text: body, issue: undefined })
+  }
+  if (bodyFile === undefined) {
+    return Effect.succeed({ text: '', issue: undefined })
+  }
+  return Effect.match(workspace.readFileFromRoot(bodyFile), {
+    onFailure: () => ({ text: '', issue: FsPath.make(bodyFile) }),
+    onSuccess: (file) => ({ text: file.text, issue: undefined }),
+  })
 }
 
 const read = (
@@ -84,31 +104,19 @@ const read = (
     const intents = yield* changesets.listIntents()
     const slug = yield* git.repoSlug()
     const existing = yield* forge.openPullRequest(slug, request.branch)
-    let body = request.body ?? ''
-    let bodyIssue: FsPath | undefined = undefined
-    if (request.body === undefined && request.bodyFile !== undefined) {
-      const file = yield* Effect.match(workspace.readFileFromRoot(request.bodyFile), {
-        onFailure: () => undefined,
-        onSuccess: (root) => root.text,
-      })
-      if (file === undefined) {
-        bodyIssue = FsPath.make(request.bodyFile)
-      } else {
-        body = file
-      }
-    }
-    return new RawPullRequest(
-      Count.make(intents.length),
+    const body = yield* readBody(workspace, request.body, request.bodyFile)
+    return {
+      pending: Count.make(intents.length),
       existing,
-      request.branch,
-      request.base,
-      request.title,
-      body,
-      bodyIssue,
+      branch: request.branch,
+      base: request.base,
+      title: request.title,
+      body: body.text,
+      bodyIssue: body.issue,
       slug,
       remote,
-      [...request.labels],
-    )
+      labels: [...request.labels],
+    }
   })
 
 const decode = (raw: RawPullRequest): Result.Result<PullRequestCommand, never> =>
@@ -124,12 +132,14 @@ const decode = (raw: RawPullRequest): Result.Result<PullRequestCommand, never> =
     }),
   )
 
-interface EncodedPullRequest {
-  readonly decision: PullRequestDecision
-  readonly number: PullRequestNumber | undefined
-}
+const toRefusal = (bad: BodyFileUnreadable | HeadRefInvalid): PullRequestRefusal =>
+  Match.value(bad).pipe(
+    Match.tag('BodyFileUnreadable', (unreadable) => PullRequestBodyUnreadable.make({ path: unreadable.path })),
+    Match.tag('HeadRefInvalid', (invalid) => PullRequestHeadInvalid.make({ branch: invalid.branch })),
+    Match.exhaustive,
+  )
 
-const toLanguage = (
+const toDecision = (
   decision:
     | PullRequestReleaseOpened
     | PullRequestReleaseRefreshed
@@ -151,13 +161,6 @@ const toLanguage = (
     Match.exhaustive,
   )
 
-const toRefusal = (bad: BodyFileUnreadable | HeadRefInvalid): PullRequestRefusal =>
-  Match.value(bad).pipe(
-    Match.tag('BodyFileUnreadable', (unreadable) => PullRequestBodyUnreadable.make({ path: unreadable.path })),
-    Match.tag('HeadRefInvalid', (invalid) => PullRequestHeadInvalid.make({ branch: invalid.branch })),
-    Match.exhaustive,
-  )
-
 const encode = (
   outcome: Result.Result<
     | PullRequestReleaseOpened
@@ -166,68 +169,62 @@ const encode = (
     | PullRequestReleaseVacant,
     BodyFileUnreadable | HeadRefInvalid
   >,
-): Result.Result<EncodedPullRequest, PullRequestRefusal> =>
-  Result.mapError(outcome, toRefusal).pipe(Result.map((decision) => {
-    const converted = toLanguage(decision)
-    return {
-      decision: converted,
-      number: Match.value(converted).pipe(
-        Match.tag('PullRequestCreated', (created) => created.number),
-        Match.tag('PullRequestUpdated', (updated) => updated.number),
-        Match.tag('PullRequestClosed', (closed) => closed.number),
-        Match.tag('PullRequestVacant', () => undefined),
-        Match.exhaustive,
-      ),
-    }
-  }))
+): Result.Result<PullRequestDecision, PullRequestRefusal> =>
+  Result.mapError(outcome, toRefusal).pipe(Result.map(toDecision))
+
+const openRequest = (
+  raw: RawPullRequest,
+  vacant: PullRequestVacant,
+): Effect.Effect<PullRequestDecision, PullRequestRefusal, GitPort | ForgePort> => {
+  if (raw.pending <= 0) {
+    return Effect.succeed(vacant)
+  }
+  return Effect.gen(function*() {
+    const git = yield* GitPort
+    const forge = yield* ForgePort
+    yield* git.commitAll(raw.title)
+    yield* git.pushBranch(raw.branch, raw.remote)
+    const number = yield* forge.createPullRequest(
+      raw.slug,
+      raw.base,
+      raw.branch,
+      raw.title,
+      raw.body,
+      raw.labels,
+    )
+    return PullRequestCreated.make({ number })
+  })
+}
 
 const write = (
-  output: Result.Result<EncodedPullRequest, PullRequestRefusal>,
+  output: Result.Result<PullRequestDecision, PullRequestRefusal>,
   raw: RawPullRequest,
 ): Effect.Effect<PullRequestDecision, PullRequestRefusal, GitPort | ForgePort> => {
   if (Result.isFailure(output)) {
     return Effect.fail(output.failure)
   }
-  const encoded = output.success
-  return Effect.gen(function*() {
-    const git = yield* GitPort
-    const forge = yield* ForgePort
-    return yield* Match.value(encoded.decision).pipe(
-      Match.tag('PullRequestClosed', (closed) =>
-        Effect.gen(function*() {
-          yield* forge.closePullRequest(raw.slug, closed.number)
-          const branch = yield* git.deleteRemoteBranch(raw.branch, raw.remote)
-          return PullRequestClosed.make({ number: closed.number, branch })
-        })),
-      Match.tag('PullRequestUpdated', (updated) =>
-        Effect.gen(function*() {
-          yield* git.commitAll(raw.title)
-          yield* git.pushBranch(raw.branch, raw.remote)
-          yield* forge.updatePullRequest(raw.slug, updated.number, raw.title, raw.body, raw.labels)
-          return updated
-        })),
-      Match.tag('PullRequestVacant', (vacant) => {
-        if (raw.pending > 0) {
-          return Effect.gen(function*() {
-            yield* git.commitAll(raw.title)
-            yield* git.pushBranch(raw.branch, raw.remote)
-            const number = yield* forge.createPullRequest(
-              raw.slug,
-              raw.base,
-              raw.branch,
-              raw.title,
-              raw.body,
-              raw.labels,
-            )
-            return PullRequestCreated.make({ number })
-          })
-        }
-        return Effect.succeed(vacant)
-      }),
-      Match.tag('PullRequestCreated', (created) => Effect.succeed(created)),
-      Match.exhaustive,
-    )
-  })
+  return Match.value(output.success).pipe(
+    Match.tag('PullRequestClosed', (closed) =>
+      Effect.gen(function*() {
+        const git = yield* GitPort
+        const forge = yield* ForgePort
+        yield* forge.closePullRequest(raw.slug, closed.number)
+        const branch = yield* git.deleteRemoteBranch(raw.branch, raw.remote)
+        return PullRequestClosed.make({ number: closed.number, branch })
+      })),
+    Match.tag('PullRequestUpdated', (updated) =>
+      Effect.gen(function*() {
+        const git = yield* GitPort
+        const forge = yield* ForgePort
+        yield* git.commitAll(raw.title)
+        yield* git.pushBranch(raw.branch, raw.remote)
+        yield* forge.updatePullRequest(raw.slug, updated.number, raw.title, raw.body, raw.labels)
+        return updated
+      })),
+    Match.tag('PullRequestVacant', (vacant) => openRequest(raw, vacant)),
+    Match.tag('PullRequestCreated', (created) => Effect.succeed(created)),
+    Match.exhaustive,
+  )
 }
 
 export const pullRequestCell: Cell.Cell<

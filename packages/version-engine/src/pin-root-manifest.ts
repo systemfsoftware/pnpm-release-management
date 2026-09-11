@@ -3,15 +3,19 @@ import {
   FsPath,
   type MemberRefusal,
   PackageVersion,
-  PinDecision,
+  type PinDecision,
+  type PinDistributionMissing,
   type PinManifestInvalid,
   PinName,
   type PinRefusal,
+  type PinVersionUnusable,
   type RepoRoot,
   SurfaceStore,
   type TargetSuffix,
   type VersionRefusal,
   WorkspaceStore,
+  WorkspaceVersionAlreadyCurrent,
+  WorkspaceVersionRepinned,
 } from '@systemfsoftware/release-language'
 import { Effect } from 'effect'
 import * as Match from 'effect/Match'
@@ -26,59 +30,28 @@ import {
 
 const INDENT = /^(\s+)"/m
 
-type LocalPinDecision = LocalRepinned | LocalAlreadyCurrent
-
-type PinRaw = {
-  readonly input: PinRootManifestInput
-  readonly text: string
-  readonly parsed: unknown
-  readonly root: RepoRoot
-}
-
-const mustBrand = <C extends S.Constraint>(schema: C, input: unknown) =>
-  S.decodeUnknownEffect(schema)(input).pipe(Effect.orDie)
-
-const pinIndentOf = (text: string): string | number => text.match(INDENT)?.[1] ?? 2
-
-const describeCause = (cause: unknown): string => {
-  if (cause instanceof Error) return cause.message
-  return 'unparseable JSON'
+class RawPin {
+  constructor(
+    readonly request: PinRootManifestInput,
+    readonly text: string,
+    readonly root: RepoRoot,
+  ) {}
 }
 
 const read = (
-  input: PinRootManifestInput,
-): Effect.Effect<PinRaw, MemberRefusal | PinManifestInvalid, WorkspaceStore> =>
+  request: PinRootManifestInput,
+): Effect.Effect<RawPin, MemberRefusal, WorkspaceStore> =>
   Effect.gen(function*() {
     const workspace = yield* WorkspaceStore
-    const file = yield* workspace.readFileFromRoot(input.manifest)
-    const path: FsPath = yield* mustBrand(FsPath, input.manifest)
-    const parsed: unknown = yield* Effect.try({
-      try: (): unknown => JSON.parse(file.text),
-      catch: (cause): PinManifestInvalid => ({
-        _tag: 'PinManifestInvalid',
-        path,
-        reason: describeCause(cause),
-      }),
-    })
-    return { input, text: file.text, parsed, root: workspace.root }
+    const file = yield* workspace.readFileFromRoot(request.manifest)
+    return new RawPin(request, file.text, workspace.root)
   })
 
-const suffixNamesOf = (
-  suffixes: ReadonlyArray<string> | undefined,
-  name: string,
-): ReadonlyArray<string> => {
-  if (suffixes === undefined) return []
-  return suffixes.map((suffix) => `${name}-${suffix}`)
-}
+const pinIndentOf = (text: string): string | number => text.match(INDENT)?.[1] ?? 2
 
-const requestedUsableOf = (requestedVersion: string | undefined): PackageVersion | undefined => {
-  if (requestedVersion === undefined) return undefined
-  return Result.getOrUndefined(S.decodeUnknownResult(PackageVersion)(requestedVersion))
-}
-
-const declaredUsableOf = (declaredVersion: string | undefined): PackageVersion | undefined => {
-  if (declaredVersion === undefined) return undefined
-  return Result.getOrUndefined(S.decodeUnknownResult(PackageVersion)(declaredVersion))
+const availableVersionOf = (given: string | undefined): PackageVersion | undefined => {
+  if (given === undefined) return undefined
+  return Result.getOrUndefined(S.decodeUnknownResult(PackageVersion)(given))
 }
 
 const suffixesCopyOf = (
@@ -88,57 +61,101 @@ const suffixesCopyOf = (
   return [...suffixes]
 }
 
-const decode = (raw: PinRaw) =>
+const suffixNamesOf = (
+  suffixes: ReadonlyArray<TargetSuffix> | undefined,
+  name: string,
+): ReadonlyArray<string> => {
+  if (suffixes === undefined) return []
+  return suffixes.map((suffix) => `${name}-${suffix}`)
+}
+
+const decode = (raw: RawPin) =>
   Result.flatMap(
-    S.decodeUnknownResult(S.Record(S.String, S.Unknown))(raw.parsed),
-    (manifest) =>
+    Result.mapError(
+      S.decodeUnknownResult(S.fromJsonString(S.Unknown))(raw.text),
+      (error): PinManifestInvalid => ({
+        _tag: 'PinManifestInvalid',
+        path: FsPath.make(raw.request.manifest),
+        reason: error.message,
+      }),
+    ),
+    (parsed) =>
       Result.flatMap(
-        S.decodeUnknownResult(PinnedManifest)(manifest),
-        (pinned) =>
-          Result.map(
-            S.decodeUnknownResult(S.Array(PinName))(suffixNamesOf(raw.input.suffixes, pinned.name)),
-            (pinNames) =>
-              PinRootManifestCommand.make({
-                _tag: 'PinRootManifestCommand',
-                manifestText: raw.text,
-                manifest,
-                packageName: pinned.name,
-                indent: pinIndentOf(raw.text),
-                trailingNewline: raw.text.endsWith('\n'),
-                requestedVersion: raw.input.requestedVersion,
-                requestedUsable: requestedUsableOf(raw.input.requestedVersion),
-                declaredVersion: pinned.version,
-                declaredUsable: declaredUsableOf(pinned.version),
-                suffixes: suffixesCopyOf(raw.input.suffixes),
-                pinNames,
-                repoRoot: raw.root,
-              }),
+        S.decodeUnknownResult(S.Record(S.String, S.Unknown))(parsed),
+        (manifest) =>
+          Result.flatMap(
+            S.decodeUnknownResult(PinnedManifest)(manifest),
+            (pinned) =>
+              Result.map(
+                S.decodeUnknownResult(S.Array(PinName))(
+                  suffixNamesOf(raw.request.suffixes, pinned.name),
+                ),
+                (pinNames) =>
+                  PinRootManifestCommand.make({
+                    _tag: 'PinRootManifestCommand',
+                    manifestText: raw.text,
+                    manifest,
+                    packageName: pinned.name,
+                    indent: pinIndentOf(raw.text),
+                    trailingNewline: raw.text.endsWith('\n'),
+                    requestedVersion: raw.request.requestedVersion,
+                    requestedUsable: availableVersionOf(raw.request.requestedVersion),
+                    declaredVersion: pinned.version,
+                    declaredUsable: availableVersionOf(pinned.version),
+                    suffixes: suffixesCopyOf(raw.request.suffixes),
+                    pinNames,
+                    repoRoot: raw.root,
+                  }),
+              ),
           ),
       ),
   )
+
+const toDecision = (decision: LocalRepinned | LocalAlreadyCurrent): PinDecision =>
+  Match.value(decision).pipe(
+    Match.tag(
+      'WorkspaceVersionRepinned',
+      (repinned) =>
+        WorkspaceVersionRepinned.make({
+          version: repinned.version,
+          pins: [...repinned.pins],
+          text: repinned.text,
+        }),
+    ),
+    Match.tag(
+      'WorkspaceVersionAlreadyCurrent',
+      (current) =>
+        WorkspaceVersionAlreadyCurrent.make({
+          version: current.version,
+          pins: [...current.pins],
+          text: current.text,
+        }),
+    ),
+    Match.exhaustive,
+  )
+
 const encode = (
-  outcome: Result.Result<LocalPinDecision, PinRefusal>,
-): Result.Result<LocalPinDecision, PinRefusal> => outcome
+  outcome: Result.Result<
+    LocalRepinned | LocalAlreadyCurrent,
+    PinVersionUnusable | PinDistributionMissing
+  >,
+): Result.Result<PinDecision, PinVersionUnusable | PinDistributionMissing> => Result.map(outcome, toDecision)
 
 const write = (
-  output: Result.Result<LocalPinDecision, PinRefusal>,
-  raw: PinRaw,
+  output: Result.Result<PinDecision, PinRefusal>,
+  raw: RawPin,
 ): Effect.Effect<PinDecision, PinRefusal | VersionRefusal, SurfaceStore> => {
   if (Result.isFailure(output)) return Effect.fail(output.failure)
-  return Effect.flatMap(
-    S.decodeUnknownEffect(PinDecision)(output.success).pipe(Effect.orDie),
-    (decision) =>
-      Match.value(decision).pipe(
-        Match.tag('WorkspaceVersionAlreadyCurrent', (current) => Effect.succeed(current)),
-        Match.tag('WorkspaceVersionRepinned', (repinned) =>
-          Effect.gen(function*() {
-            if (raw.input.dryRun === true) return repinned
-            const surfaces = yield* SurfaceStore
-            yield* surfaces.writeRootManifest(raw.input.manifest, repinned.text)
-            return repinned
-          })),
-        Match.exhaustive,
-      ),
+  return Match.value(output.success).pipe(
+    Match.tag('WorkspaceVersionAlreadyCurrent', (current) => Effect.succeed(current)),
+    Match.tag('WorkspaceVersionRepinned', (repinned) =>
+      Effect.gen(function*() {
+        if (raw.request.dryRun === true) return repinned
+        const surfaces = yield* SurfaceStore
+        yield* surfaces.writeRootManifest(raw.request.manifest, repinned.text)
+        return repinned
+      })),
+    Match.exhaustive,
   )
 }
 

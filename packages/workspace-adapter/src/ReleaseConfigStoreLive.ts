@@ -11,14 +11,17 @@ import { Effect, Layer } from 'effect'
 import { FileSystem } from 'effect/FileSystem'
 import { Path } from 'effect/Path'
 import * as S from 'effect/Schema'
+import { ConfigDocument } from './ReleaseConfig.schema.js'
+import { readTextFile } from './StoreFile.js'
 
-const REQUIRED_FIELDS = [
-  'base',
-  'branch',
-  'versioning',
-  'gate',
-] as const
 const CONFIG_FILE = 'release.jsonc'
+const REQUIRED_FIELDS = ['base', 'branch', 'versioning', 'gate'] as const
+
+const describeCause = (cause: unknown): string => {
+  if (cause instanceof Error) return cause.message
+  if (typeof cause === 'string') return cause
+  return 'unknown error'
+}
 
 export const ReleaseConfigStoreLive: Layer.Layer<ReleaseConfigStore, never, FileSystem | Path> = Layer.effect(
   ReleaseConfigStore,
@@ -28,41 +31,28 @@ export const ReleaseConfigStoreLive: Layer.Layer<ReleaseConfigStore, never, File
 
     const loadConfig = (root: RepoRoot): Effect.Effect<ReleaseConfig, ConfigRefusal> =>
       Effect.gen(function*() {
-        const full = path.join(root, CONFIG_FILE)
-        const configFs = yield* S.decodeUnknownEffect(FsPath)(full).pipe(Effect.orDie)
-        const text = yield* fs.readFileString(full).pipe(
-          Effect.catchTag(
-            'PlatformError',
-            (): Effect.Effect<never, ConfigRefusal> =>
-              Effect.fail({ _tag: 'ConfigUnreadable', path: configFs } as const),
-          ),
+        const file = FsPath.make(path.join(root, CONFIG_FILE))
+        const text = yield* readTextFile(fs, file).pipe(
+          Effect.mapError((): ConfigRefusal => ({ _tag: 'ConfigUnreadable', path: file })),
         )
-        let parsed: unknown
-        try {
-          parsed = parseJsonc(text)
-        } catch (error) {
-          if (error instanceof Error) {
-            return yield* Effect.fail({ _tag: 'ConfigMalformed', path: configFs, reason: error.message } as const)
-          }
-          return yield* Effect.fail({ _tag: 'ConfigMalformed', path: configFs, reason: 'unknown error' } as const)
-        }
-        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-          return yield* Effect.fail(
-            { _tag: 'ConfigMalformed', path: configFs, reason: 'expected a JSON object' } as const,
-          )
-        }
-        for (const key of REQUIRED_FIELDS) {
-          if (!(key in parsed)) {
-            const field = yield* S.decodeUnknownEffect(ConfigField)(key).pipe(Effect.orDie)
-            return yield* Effect.fail({ _tag: 'ConfigFieldMissing', path: configFs, field } as const)
+        const parsed = yield* Effect.try({
+          try: () => parseJsonc(text),
+          catch: (cause): ConfigRefusal => ({ _tag: 'ConfigMalformed', path: file, reason: describeCause(cause) }),
+        })
+        const document = yield* S.decodeUnknownEffect(ConfigDocument)(parsed).pipe(
+          Effect.mapError((error): ConfigRefusal => ({ _tag: 'ConfigMalformed', path: file, reason: error.message })),
+        )
+        for (const field of REQUIRED_FIELDS) {
+          if (!Object.hasOwn(document, field)) {
+            return yield* Effect.fail<ConfigRefusal>({
+              _tag: 'ConfigFieldMissing',
+              path: file,
+              field: ConfigField.make(field),
+            })
           }
         }
-        return yield* S.decodeUnknownEffect(ReleaseConfig)(parsed).pipe(
-          Effect.mapError((error): ConfigRefusal => ({
-            _tag: 'ConfigMalformed',
-            path: configFs,
-            reason: error.message,
-          })),
+        return yield* S.decodeUnknownEffect(ReleaseConfig)(document).pipe(
+          Effect.mapError((error): ConfigRefusal => ({ _tag: 'ConfigMalformed', path: file, reason: error.message })),
         )
       })
 

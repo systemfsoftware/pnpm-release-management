@@ -16,7 +16,9 @@ import * as Match from 'effect/Match'
 import * as Option from 'effect/Option'
 import { Path } from 'effect/Path'
 import * as S from 'effect/Schema'
-import { PackageSection, WorkspaceSection } from './Surface.schema.js'
+import { readTextFile, writeTextFile } from './StoreFile.js'
+import type { StoreFault } from './StoreFile.schema.js'
+import { JsonDocument, JsonVersion, PackageSection, WorkspaceSection } from './Surface.schema.js'
 
 const NIX_BINDING = /^\s*version\s*=\s*"(\d+\.\d+\.\d+)"\s*;?\s*$/gm
 const TOML_SECTION = /^\s*\[(.+?)\]\s*$/
@@ -25,49 +27,163 @@ const JSON_INDENT = /^(\s+)"/m
 
 type LocatedToml = { readonly sections: ReadonlyArray<string>; readonly version: unknown }
 
-const locateToml = (parsed: unknown): LocatedToml | undefined => {
+const malformed = (file: RelativePath): VersionRefusal => ({ _tag: 'VersionIntentMalformed', path: file })
+
+const versionOf = (raw: unknown, file: RelativePath): Effect.Effect<PackageVersion, VersionRefusal> =>
+  S.decodeUnknownEffect(PackageVersion)(raw).pipe(Effect.mapError(() => malformed(file)))
+
+const surfaceFault = (file: RelativePath, fault: StoreFault): VersionRefusal =>
+  Match.value(fault).pipe(
+    Match.tag('Missing', (): VersionRefusal => ({ _tag: 'VersionSurfaceMissing', path: file })),
+    Match.orElse((): VersionRefusal => malformed(file)),
+  )
+
+const parseTomlText = (text: string, file: RelativePath): Effect.Effect<Record<string, unknown>, VersionRefusal> =>
+  Effect.try({
+    try: () => parseToml(text),
+    catch: () => malformed(file),
+  })
+
+const locateToml = (parsed: Record<string, unknown>): Option.Option<LocatedToml> => {
   const pkg = S.decodeUnknownOption(PackageSection)(parsed)
   const workspace = S.decodeUnknownOption(WorkspaceSection)(parsed)
   if (Option.isSome(pkg) && Option.isNone(workspace)) {
-    return { sections: ['package'], version: pkg.value.package.version }
+    return Option.some({ sections: ['package'], version: pkg.value.package.version })
   }
   if (Option.isNone(pkg) && Option.isSome(workspace)) {
-    return { sections: ['workspace.package'], version: workspace.value.workspace.package.version }
+    return Option.some({ sections: ['workspace.package'], version: workspace.value.workspace.package.version })
   }
   if (Option.isSome(pkg) && Option.isSome(workspace)) {
-    const found: unknown = pkg.value.package.version
-    const other: unknown = workspace.value.workspace.package.version
-    if (typeof found === 'string' && typeof other === 'string' && found === other) {
-      return { sections: ['package', 'workspace.package'], version: found }
+    const version = pkg.value.package.version
+    if (version === workspace.value.workspace.package.version) {
+      return Option.some({ sections: ['package', 'workspace.package'], version })
     }
-    return undefined
   }
-  return undefined
+  return Option.none()
 }
 
-const spliceToml = (text: string, sections: ReadonlyArray<string>, version: PackageVersion): string | undefined => {
+const nixBinding = (text: string): Option.Option<RegExpExecArray> => {
+  const hits = [...text.matchAll(NIX_BINDING)]
+  if (hits.length !== 1) return Option.none()
+  return Option.fromNullishOr(hits.at(0))
+}
+
+const spliceToml = (
+  text: string,
+  sections: ReadonlyArray<string>,
+  version: PackageVersion,
+): Option.Option<string> => {
+  const lines: Array<string> = []
   let current: string | undefined
   let spliced = 0
-  const out = text.split('\n').map((line) => {
-    const section = TOML_SECTION.exec(line)?.[1]?.trim()
+  for (const line of text.split('\n')) {
+    const section = TOML_SECTION.exec(line)?.at(1)?.trim()
     if (section !== undefined) {
       current = section
-      return line
+      lines.push(line)
+      continue
     }
-    if (current !== undefined && sections.includes(current)) {
-      const match = TOML_VERSION.exec(line)
-      if (match !== null) {
-        spliced += 1
-        return `${match.at(1) ?? ''}${version}${match.at(3) ?? ''}`
-      }
+    if (current === undefined || !sections.includes(current)) {
+      lines.push(line)
+      continue
     }
-    return line
-  })
-  if (spliced === sections.length) {
-    return out.join('\n')
+    const match = TOML_VERSION.exec(line)
+    if (match === null) {
+      lines.push(line)
+      continue
+    }
+    spliced += 1
+    lines.push(`${match.at(1) ?? ''}${version}${match.at(3) ?? ''}`)
   }
-  return undefined
+  if (spliced === sections.length) return Option.some(lines.join('\n'))
+  return Option.none()
 }
+
+const extractJson = (text: string, file: RelativePath): Effect.Effect<PackageVersion, VersionRefusal> =>
+  Effect.gen(function*() {
+    const document = yield* S.decodeUnknownEffect(JsonVersion)(text).pipe(Effect.mapError(() => malformed(file)))
+    return yield* versionOf(document.version, file)
+  })
+
+const extractToml = (
+  text: string,
+  file: RelativePath,
+  header: TomlHeader | undefined,
+): Effect.Effect<PackageVersion, VersionRefusal> =>
+  Effect.gen(function*() {
+    const parsed = yield* parseTomlText(text, file)
+    if (header === '[workspace.package]') {
+      const section = yield* S.decodeUnknownEffect(WorkspaceSection)(parsed).pipe(
+        Effect.mapError(() => malformed(file)),
+      )
+      return yield* versionOf(section.workspace.package.version, file)
+    }
+    if (header === '[package]') {
+      const section = yield* S.decodeUnknownEffect(PackageSection)(parsed).pipe(Effect.mapError(() => malformed(file)))
+      return yield* versionOf(section.package.version, file)
+    }
+    const located = locateToml(parsed)
+    if (Option.isNone(located)) return yield* Effect.fail(malformed(file))
+    return yield* versionOf(located.value.version, file)
+  })
+
+const extractNix = (text: string, file: RelativePath): Effect.Effect<PackageVersion, VersionRefusal> =>
+  Effect.gen(function*() {
+    const hit = nixBinding(text)
+    if (Option.isNone(hit)) return yield* Effect.fail(malformed(file))
+    const raw = hit.value.at(1)
+    if (raw === undefined) return yield* Effect.fail(malformed(file))
+    return yield* versionOf(raw, file)
+  })
+
+const rewriteJson = (
+  text: string,
+  file: RelativePath,
+  version: PackageVersion,
+): Effect.Effect<string, VersionRefusal> =>
+  Effect.gen(function*() {
+    const document = yield* S.decodeUnknownEffect(JsonDocument)(text).pipe(Effect.mapError(() => malformed(file)))
+    const indent = text.match(JSON_INDENT)?.at(1) ?? 2
+    const encoded = JSON.stringify({ ...document, version }, null, indent)
+    if (text.endsWith('\n')) return `${encoded}\n`
+    return encoded
+  })
+
+const rewriteToml = (
+  text: string,
+  file: RelativePath,
+  header: TomlHeader | undefined,
+  version: PackageVersion,
+): Effect.Effect<string, VersionRefusal> =>
+  Effect.gen(function*() {
+    const parsed = yield* parseTomlText(text, file)
+    let sections: ReadonlyArray<string>
+    if (header === undefined) {
+      const located = locateToml(parsed)
+      if (Option.isNone(located)) return yield* Effect.fail(malformed(file))
+      sections = located.value.sections
+    } else {
+      sections = [header.slice(1, -1)]
+    }
+    const spliced = spliceToml(text, sections, version)
+    if (Option.isNone(spliced)) return yield* Effect.fail(malformed(file))
+    return spliced.value
+  })
+
+const rewriteNix = (
+  text: string,
+  file: RelativePath,
+  version: PackageVersion,
+  current: PackageVersion,
+): Effect.Effect<string, VersionRefusal> =>
+  Effect.gen(function*() {
+    const hit = nixBinding(text)
+    if (Option.isNone(hit)) return yield* Effect.fail(malformed(file))
+    const matched = hit.value.at(0)
+    if (matched === undefined) return yield* Effect.fail(malformed(file))
+    const { index } = hit.value
+    return `${text.slice(0, index)}${matched.replace(current, version)}${text.slice(index + matched.length)}`
+  })
 
 export const SurfaceStoreLive = (root: RepoRoot): Layer.Layer<SurfaceStore, never, FileSystem | Path> =>
   Layer.effect(
@@ -76,145 +192,30 @@ export const SurfaceStoreLive = (root: RepoRoot): Layer.Layer<SurfaceStore, neve
       const fs = yield* FileSystem
       const path = yield* Path
 
-      const extractJson = (text: string, file: RelativePath): Effect.Effect<PackageVersion, VersionRefusal> =>
-        Effect.gen(function*() {
-          const fail = (): VersionRefusal => ({ _tag: 'VersionIntentMalformed', path: file })
-          let parsed: unknown
-          try {
-            parsed = JSON.parse(text)
-          } catch {
-            return yield* Effect.fail(fail())
-          }
-          if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed) || !('version' in parsed)) {
-            return yield* Effect.fail(fail())
-          }
-          const raw: unknown = parsed.version
-          if (typeof raw !== 'string') return yield* Effect.fail(fail())
-          return yield* S.decodeUnknownEffect(PackageVersion)(raw).pipe(Effect.mapError(fail))
-        })
+      const readFile = (file: RelativePath): Effect.Effect<string, VersionRefusal> =>
+        readTextFile(fs, path.join(root, file)).pipe(Effect.mapError((fault) => surfaceFault(file, fault)))
 
-      const extractToml = (
+      const currentVersionOf = (
         text: string,
         file: RelativePath,
-        header: TomlHeader | undefined,
-      ): Effect.Effect<PackageVersion, VersionRefusal> =>
-        Effect.gen(function*() {
-          const fail = (): VersionRefusal => ({ _tag: 'VersionIntentMalformed', path: file })
-          let parsed: unknown
-          try {
-            parsed = parseToml(text)
-          } catch {
-            return yield* Effect.fail(fail())
-          }
-          let raw: unknown
-          if (header === '[workspace.package]') {
-            const doc = yield* S.decodeUnknownEffect(WorkspaceSection)(parsed).pipe(Effect.mapError(fail))
-            raw = doc.workspace.package.version
-          } else if (header === '[package]') {
-            const doc = yield* S.decodeUnknownEffect(PackageSection)(parsed).pipe(Effect.mapError(fail))
-            raw = doc.package.version
-          } else {
-            const located = locateToml(parsed)
-            if (located === undefined) return yield* Effect.fail(fail())
-            raw = located.version
-          }
-          if (typeof raw !== 'string') return yield* Effect.fail(fail())
-          return yield* S.decodeUnknownEffect(PackageVersion)(raw).pipe(Effect.mapError(fail))
-        })
+        surface: VersionSurface,
+      ): Effect.Effect<PackageVersion, VersionRefusal> => {
+        if (surface.kind === 'json') return extractJson(text, file)
+        if (surface.kind === 'toml') return extractToml(text, file, surface.header)
+        return extractNix(text, file)
+      }
 
-      const extractNix = (text: string, file: RelativePath): Effect.Effect<PackageVersion, VersionRefusal> =>
-        Effect.gen(function*() {
-          const fail = (): VersionRefusal => ({ _tag: 'VersionIntentMalformed', path: file })
-          const hits = [...text.matchAll(NIX_BINDING)]
-          if (hits.length !== 1) return yield* Effect.fail(fail())
-          const hit = hits.at(0)
-          if (hit === undefined || hit.at(1) === undefined) return yield* Effect.fail(fail())
-          const raw: unknown = hit.at(1)
-          if (typeof raw !== 'string') return yield* Effect.fail(fail())
-          return yield* S.decodeUnknownEffect(PackageVersion)(raw).pipe(Effect.mapError(fail))
-        })
-
-      const rewriteJson = (
+      const rewritten = (
         text: string,
         file: RelativePath,
-        version: PackageVersion,
-      ): Effect.Effect<string, VersionRefusal> =>
-        Effect.gen(function*() {
-          let doc: unknown
-          try {
-            doc = JSON.parse(text)
-          } catch {
-            return yield* Effect.fail({ _tag: 'VersionIntentMalformed', path: file } as const)
-          }
-          if (typeof doc !== 'object' || doc === null || Array.isArray(doc)) {
-            return yield* Effect.fail({ _tag: 'VersionIntentMalformed', path: file } as const)
-          }
-          const indent = text.match(JSON_INDENT)?.[1] ?? 2
-          const encoded = JSON.stringify({ ...doc, version }, null, indent)
-          if (text.endsWith('\n')) {
-            return `${encoded}\n`
-          }
-          return encoded
-        })
-
-      const rewriteToml = (
-        text: string,
-        file: RelativePath,
-        header: TomlHeader | undefined,
-        version: PackageVersion,
-      ): Effect.Effect<string, VersionRefusal> =>
-        Effect.gen(function*() {
-          const fail = (): VersionRefusal => ({ _tag: 'VersionIntentMalformed', path: file })
-          let parsed: unknown
-          try {
-            parsed = parseToml(text)
-          } catch {
-            return yield* Effect.fail(fail())
-          }
-          let sections: ReadonlyArray<string>
-          if (header === undefined) {
-            const located = locateToml(parsed)
-            if (located === undefined) return yield* Effect.fail(fail())
-            sections = located.sections
-          } else {
-            sections = [header.slice(1, -1)]
-          }
-          const spliced = spliceToml(text, sections, version)
-          if (spliced === undefined) return yield* Effect.fail(fail())
-          return spliced
-        })
-
-      const rewriteNix = (
-        text: string,
-        file: RelativePath,
+        surface: VersionSurface,
         version: PackageVersion,
         current: PackageVersion,
-      ): Effect.Effect<string, VersionRefusal> =>
-        Effect.gen(function*() {
-          const fail = (): VersionRefusal => ({ _tag: 'VersionIntentMalformed', path: file })
-          const hits = [...text.matchAll(NIX_BINDING)]
-          if (hits.length !== 1) return yield* Effect.fail(fail())
-          const hit = hits.at(0)
-          if (hit === undefined || hit.at(0) === undefined) {
-            return yield* Effect.fail(fail())
-          }
-          const matched: string = hit[0]
-          return `${text.slice(0, hit.index)}${matched.replace(current, version)}${
-            text.slice(hit.index + matched.length)
-          }`
-        })
-
-      const readFile = (file: RelativePath): Effect.Effect<string, VersionRefusal> =>
-        Effect.gen(function*() {
-          const full = path.join(root, file)
-          return yield* fs.readFileString(full).pipe(
-            Effect.catchTag('PlatformError', (error) =>
-              Match.value(error.reason).pipe(
-                Match.tag('NotFound', () => Effect.fail({ _tag: 'VersionSurfaceMissing', path: file } as const)),
-                Match.orElse(() => Effect.die(error)),
-              )),
-          )
-        })
+      ): Effect.Effect<string, VersionRefusal> => {
+        if (surface.kind === 'json') return rewriteJson(text, file, version)
+        if (surface.kind === 'toml') return rewriteToml(text, file, surface.header, version)
+        return rewriteNix(text, file, version, current)
+      }
 
       const readSurface = (
         file: RelativePath,
@@ -222,9 +223,7 @@ export const SurfaceStoreLive = (root: RepoRoot): Layer.Layer<SurfaceStore, neve
       ): Effect.Effect<PackageVersion, VersionRefusal> =>
         Effect.gen(function*() {
           const text = yield* readFile(file)
-          if (surface.kind === 'json') return yield* extractJson(text, file)
-          if (surface.kind === 'toml') return yield* extractToml(text, file, surface.header)
-          return yield* extractNix(text, file)
+          return yield* currentVersionOf(text, file, surface)
         })
 
       const writeSurface = (
@@ -233,46 +232,21 @@ export const SurfaceStoreLive = (root: RepoRoot): Layer.Layer<SurfaceStore, neve
         version: PackageVersion,
       ): Effect.Effect<SurfaceWrite, VersionRefusal> =>
         Effect.gen(function*() {
-          const full = path.join(root, file)
           const text = yield* readFile(file)
-          let current: PackageVersion
-          if (surface.kind === 'json') {
-            current = yield* extractJson(text, file)
-          } else if (surface.kind === 'toml') {
-            current = yield* extractToml(text, file, surface.header)
-          } else {
-            current = yield* extractNix(text, file)
-          }
+          const current = yield* currentVersionOf(text, file, surface)
           if (current === version) return { path: file, moved: false }
-          let next: string
-          if (surface.kind === 'json') {
-            next = yield* rewriteJson(text, file, version)
-          } else if (surface.kind === 'toml') {
-            next = yield* rewriteToml(text, file, surface.header, version)
-          } else {
-            next = yield* rewriteNix(text, file, version, current)
-          }
-          yield* fs.writeFileString(full, next).pipe(
-            Effect.catchTag('PlatformError', (error) =>
-              Match.value(error.reason).pipe(
-                Match.tag('NotFound', () => Effect.fail({ _tag: 'VersionSurfaceMissing', path: file } as const)),
-                Match.orElse(() => Effect.die(error)),
-              )),
+          const next = yield* rewritten(text, file, surface, version, current)
+          yield* writeTextFile(fs, path.join(root, file), next, 'overwrite').pipe(
+            Effect.mapError((fault) => surfaceFault(file, fault)),
           )
           return { path: file, moved: true }
         })
 
-      const writeRootManifest = (manifestPath: RelativePath, text: string): Effect.Effect<RootFile, VersionRefusal> =>
-        Effect.gen(function*() {
-          yield* fs.writeFileString(path.join(root, manifestPath), text).pipe(
-            Effect.catchTag(
-              'PlatformError',
-              (): Effect.Effect<never, VersionRefusal> =>
-                Effect.fail({ _tag: 'RootManifestUnwritable', path: manifestPath } as const),
-            ),
-          )
-          return { path: manifestPath, text }
-        })
+      const writeRootManifest = (file: RelativePath, text: string): Effect.Effect<RootFile, VersionRefusal> =>
+        writeTextFile(fs, path.join(root, file), text, 'overwrite').pipe(
+          Effect.mapError((): VersionRefusal => ({ _tag: 'RootManifestUnwritable', path: file })),
+          Effect.as({ path: file, text }),
+        )
 
       return { readSurface, writeSurface, writeRootManifest }
     }),

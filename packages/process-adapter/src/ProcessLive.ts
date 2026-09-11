@@ -1,51 +1,37 @@
 import { NodeServices } from '@effect/platform-node'
 import {
-  type ProcessCompleted,
+  ProcessCompleted,
   ProcessPort,
   type PublishRefusal,
   type WorkspaceCommand,
 } from '@systemfsoftware/release-language'
 import { Effect, Layer } from 'effect'
-import { ChildProcess } from 'effect/unstable/process'
+import { runProcess } from './ProcessRun.js'
 
-const describeCause = (cause: unknown): string => {
-  if (cause instanceof Error) {
-    return cause.message
-  }
-  if (typeof cause === 'string') {
-    return cause
-  }
-  return 'unknown error'
-}
-
-const startRefusal = (command: WorkspaceCommand, cause: unknown): PublishRefusal => ({
+const refusal = (command: WorkspaceCommand, reason: string): PublishRefusal => ({
   _tag: 'PublishCommandRefused',
   command,
-  reason: `${command.program} ${command.args.join(' ')} failed to start: ${describeCause(cause)}`,
+  reason,
 })
 
-const runCommand: ProcessPort['runCommand'] = (command: WorkspaceCommand) =>
-  Effect.scoped(
-    Effect.gen(function*() {
-      const handle = yield* ChildProcess.make(command.program, [...command.args], {
-        cwd: command.cwd,
-        stdin: 'inherit',
-        stdout: 'inherit',
-        stderr: 'inherit',
-      }).pipe(Effect.mapError((cause) => startRefusal(command, cause)))
-      const code = yield* handle.exitCode.pipe(Effect.mapError((cause) => startRefusal(command, cause)))
-      if (code === 0) {
-        const done: ProcessCompleted = { _tag: 'ProcessCompleted', command }
-        return done
-      }
-      const refused: PublishRefusal = {
-        _tag: 'PublishCommandRefused',
-        command,
-        reason: `${command.program} ${command.args.join(' ')} failed (exit ${code})`,
-      }
-      return yield* Effect.fail(refused)
-    }),
-  ).pipe(Effect.provide(NodeServices.layer))
+const runCommand: ProcessPort['runCommand'] = (command) =>
+  Effect.gen(function*() {
+    const described = `${command.program} ${command.args.join(' ')}`
+    const outcome = yield* runProcess({
+      program: command.program,
+      args: command.args,
+      cwd: command.cwd,
+      stdio: 'streamed',
+    }).pipe(
+      Effect.mapError((fault) => refusal(command, `${described} failed to start: ${fault.reason}`)),
+    )
+    if (outcome.code !== 0) {
+      return yield* Effect.fail(
+        refusal(command, `${described} failed (exit ${outcome.code})`),
+      )
+    }
+    return ProcessCompleted.make({ command })
+  }).pipe(Effect.provide(NodeServices.layer))
 
 export const ProcessLive: Layer.Layer<ProcessPort, never, never> = Layer.succeed(
   ProcessPort,

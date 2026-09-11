@@ -2,6 +2,7 @@ import { Cell, Wire } from '@systemfsoftware/effect-cell-types'
 import * as Lang from '@systemfsoftware/release-language'
 import { Effect } from 'effect'
 import * as Match from 'effect/Match'
+import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import {
@@ -24,52 +25,18 @@ interface StatusItem {
   readonly snapshot: Lang.TrustSnapshot
 }
 
-class StatusRaw {
-  constructor(
-    readonly request: StatusRequest,
-    readonly items: ReadonlyArray<StatusItem>,
-  ) {}
+interface StatusRead {
+  readonly request: StatusRequest
+  readonly items: ReadonlyArray<StatusItem>
 }
-
-const StatusReportTag = { _tag: 'Report' } as const
-type StatusReportTag = typeof StatusReportTag
-interface StatusReportPlan extends StatusReportTag {
-  readonly healthy: boolean
-  readonly unpublished: number
-  readonly untrusted: number
-  readonly stuck: number
-  readonly total: number
-  readonly evaluations: ReadonlyArray<ScoredEvaluation>
-}
-const StatusRefusedUnpublishedTag = { _tag: 'RefusedUnpublished' } as const
-type StatusRefusedUnpublishedTag = typeof StatusRefusedUnpublishedTag
-interface StatusRefusedUnpublishedPlan extends StatusRefusedUnpublishedTag {
-  readonly packages: ReadonlyArray<Lang.PackageName>
-}
-const StatusRefusedUnattestedTag = { _tag: 'RefusedUnattested' } as const
-type StatusRefusedUnattestedTag = typeof StatusRefusedUnattestedTag
-interface StatusRefusedUnattestedPlan extends StatusRefusedUnattestedTag {
-  readonly packages: ReadonlyArray<Lang.PackageName>
-}
-const StatusRefusedUnreadableTag = { _tag: 'RefusedUnreadable' } as const
-type StatusRefusedUnreadableTag = typeof StatusRefusedUnreadableTag
-interface StatusRefusedUnreadablePlan extends StatusRefusedUnreadableTag {
-  readonly packages: ReadonlyArray<Lang.PackageName>
-}
-const StatusVacantTag = { _tag: 'Vacant' } as const
-type StatusVacantTag = typeof StatusVacantTag
-interface StatusVacantPlan extends StatusVacantTag {
-}
-type StatusPlan =
-  | StatusReportPlan
-  | StatusRefusedUnpublishedPlan
-  | StatusRefusedUnattestedPlan
-  | StatusRefusedUnreadablePlan
-  | StatusVacantPlan
 
 const read = (
   request: StatusRequest,
-): Effect.Effect<StatusRaw, Lang.MemberRefusal | Lang.TrustRefusal, Lang.WorkspaceStore | Lang.RegistryPort> =>
+): Effect.Effect<
+  StatusRead,
+  Lang.MemberRefusal | Lang.TrustRefusal,
+  Lang.WorkspaceStore | Lang.RegistryPort
+> =>
   Effect.gen(function*() {
     const workspace = yield* Lang.WorkspaceStore
     const registry = yield* Lang.RegistryPort
@@ -80,10 +47,10 @@ const read = (
         const snapshot = yield* registry.queryPackage(member.name)
         return { member, manifest, snapshot }
       }))
-    return new StatusRaw(request, items)
+    return { request, items }
   })
 
-const decode = (raw: StatusRaw): Result.Result<StatusCommand, never> =>
+const decode = (raw: StatusRead): Result.Result<StatusCommand, never> =>
   Result.succeed(
     new StatusCommand({
       mode: raw.request.mode,
@@ -98,152 +65,104 @@ const decode = (raw: StatusRaw): Result.Result<StatusCommand, never> =>
     }),
   )
 
-const encode = (
-  outcome: Result.Result<PublishStatusWorkflowDecision, PublishStatusWorkflowRefusal>,
-): StatusPlan => {
-  if (Result.isFailure(outcome)) {
-    return Match.value(outcome.failure).pipe(
-      Match.tag(
-        'PublishStatusUnpublished',
-        (unpublished) => ({ _tag: 'RefusedUnpublished' as const, packages: [...unpublished.packages] }),
-      ),
-      Match.tag(
-        'PublishStatusUnattested',
-        (unattested) => ({ _tag: 'RefusedUnattested' as const, packages: [...unattested.packages] }),
-      ),
-      Match.tag(
-        'PublishStatusUnreadable',
-        (unreadable) => ({ _tag: 'RefusedUnreadable' as const, packages: [...unreadable.packages] }),
-      ),
-      Match.tag('PublishStatusEmpty', () => ({ _tag: 'Vacant' as const })),
-      Match.exhaustive,
-    )
-  }
-  return Match.value(outcome.success).pipe(
-    Match.tag('PublishStatusHealthy', (healthy) => ({
-      _tag: 'Report' as const,
-      healthy: true,
-      unpublished: 0,
-      untrusted: 0,
-      stuck: 0,
-      total: healthy.packages,
-      evaluations: [...healthy.evaluations],
+const yesNoOf = (value: boolean): 'yes' | 'no' =>
+  Match.value(value).pipe(
+    Match.when(true, (): 'yes' | 'no' => 'yes'),
+    Match.when(false, (): 'yes' | 'no' => 'no'),
+    Match.exhaustive,
+  )
+
+const rowOf = (evaluation: ScoredEvaluation): StatusRow => ({
+  name: evaluation.name,
+  local_version: evaluation.localVersion,
+  npm_latest: Match.value(evaluation.class).pipe(
+    Match.when('unpublished', (): string => '—'),
+    Match.when('error', (): string => '?'),
+    Match.orElse(() => evaluation.npmLatest ?? '?'),
+  ),
+  class: evaluation.class,
+  attested: yesNoOf(evaluation.attested),
+  publishConfig_provenance: yesNoOf(evaluation.provenanceConfig),
+})
+
+const deferredOf = (
+  evaluations: ReadonlyArray<ScoredEvaluation>,
+): ReadonlyArray<Lang.PackageName> =>
+  evaluations
+    .filter((evaluation) => evaluation.class === 'unpublished')
+    .map((evaluation) => evaluation.name)
+    .sort()
+
+const nonEmptyOf = <A>(values: ReadonlyArray<A>): readonly [A, ...Array<A>] =>
+  Option.getOrThrow(
+    Option.map(
+      Option.fromNullishOr(values[0]),
+      (head): readonly [A, ...Array<A>] => [head, ...values.slice(1)],
+    ),
+  )
+
+const refusalOf = (refusal: PublishStatusWorkflowRefusal): Lang.PublishStatusRefusal =>
+  Match.value(refusal).pipe(
+    Match.tag(
+      'PublishStatusEmpty',
+      (empty) => Lang.PublishStatusEmpty.make({ members: Lang.Count.make(empty.members) }),
+    ),
+    Match.tag(
+      'PublishStatusUnreadable',
+      (unreadable) => Lang.PublishStatusUnreadable.make({ packages: nonEmptyOf(unreadable.packages) }),
+    ),
+    Match.tag(
+      'PublishStatusUnpublished',
+      (unpublished) => Lang.PublishStatusUnpublished.make({ packages: nonEmptyOf(unpublished.packages) }),
+    ),
+    Match.tag(
+      'PublishStatusUnattested',
+      (unattested) => Lang.PublishStatusUnattested.make({ packages: nonEmptyOf(unattested.packages) }),
+    ),
+    Match.exhaustive,
+  )
+
+const reportOf = (decision: PublishStatusWorkflowDecision): StatusReport =>
+  Match.value(decision).pipe(
+    Match.tag('PublishStatusHealthy', (healthy): StatusReport => ({
+      decision: Lang.PublishStatusHealthy.make({ packages: Lang.Count.make(healthy.packages) }),
+      rows: healthy.evaluations.map((evaluation) => rowOf(evaluation)),
+      deferred: [...deferredOf(healthy.evaluations)],
     })),
-    Match.tag('PublishStatusOwed', (owed) => ({
-      _tag: 'Report' as const,
-      healthy: false,
-      unpublished: owed.unpublished,
-      untrusted: owed.untrusted,
-      stuck: owed.stuck,
-      total: owed.evaluations.length,
-      evaluations: [...owed.evaluations],
+    Match.tag('PublishStatusOwed', (owed): StatusReport => ({
+      decision: Lang.PublishStatusOwed.make({
+        unpublished: Lang.Count.make(owed.unpublished),
+        untrusted: Lang.Count.make(owed.untrusted),
+        stuck: Lang.Count.make(owed.stuck),
+      }),
+      rows: owed.evaluations.map((evaluation) => rowOf(evaluation)),
+      deferred: [...deferredOf(owed.evaluations)],
     })),
     Match.exhaustive,
   )
-}
 
-const refusedOf = (
-  packages: ReadonlyArray<Lang.PackageName>,
-  kind: 'unpublished' | 'unattested' | 'unreadable',
-): Effect.Effect<Lang.PublishStatusRefusal, never, never> =>
-  Match.value(kind).pipe(
-    Match.when('unpublished', () =>
-      S.decodeUnknownEffect(Lang.PublishStatusUnpublished)({
-        _tag: 'PublishStatusUnpublished',
-        packages: [...packages],
-      }).pipe(Effect.orDie)),
-    Match.when('unattested', () =>
-      S.decodeUnknownEffect(Lang.PublishStatusUnattested)({
-        _tag: 'PublishStatusUnattested',
-        packages: [...packages],
-      }).pipe(Effect.orDie)),
-    Match.when('unreadable', () =>
-      S.decodeUnknownEffect(Lang.PublishStatusUnreadable)({
-        _tag: 'PublishStatusUnreadable',
-        packages: [...packages],
-      }).pipe(Effect.orDie)),
-    Match.exhaustive,
+const encode = (
+  outcome: Result.Result<PublishStatusWorkflowDecision, PublishStatusWorkflowRefusal>,
+): Result.Result<StatusReport, Lang.PublishStatusRefusal> =>
+  outcome.pipe(
+    Result.mapError((refusal) => refusalOf(refusal)),
+    Result.map((decision) => reportOf(decision)),
   )
 
 const write = (
-  plan: StatusPlan,
-  _raw: StatusRaw,
-): Effect.Effect<StatusReport, Lang.PublishStatusRefusal, never> =>
-  Match.value(plan).pipe(
-    Match.tag('Vacant', () =>
-      Effect.flatMap(
-        S.decodeEffect(Lang.PublishStatusEmpty)({ _tag: 'PublishStatusEmpty', members: 0 }).pipe(
-          Effect.orDie,
-        ),
-        (empty): Effect.Effect<StatusReport, Lang.PublishStatusRefusal, never> => Effect.fail(empty),
-      )),
-    Match.tag('RefusedUnpublished', (refused) =>
-      Effect.flatMap(
-        refusedOf(refused.packages, 'unpublished'),
-        (refusal) => Effect.fail(refusal),
-      )),
-    Match.tag('RefusedUnattested', (refused) =>
-      Effect.flatMap(
-        refusedOf(refused.packages, 'unattested'),
-        (refusal) => Effect.fail(refusal),
-      )),
-    Match.tag('RefusedUnreadable', (refused) =>
-      Effect.flatMap(
-        refusedOf(refused.packages, 'unreadable'),
-        (refusal) => Effect.fail(refusal),
-      )),
-    Match.tag('Report', (report) =>
-      Effect.gen(function*() {
-        const rows = report.evaluations.map((evaluation): StatusRow => {
-          let latest = evaluation.npmLatest ?? '?'
-          if (evaluation.class === 'unpublished') {
-            latest = '—'
-          } else if (evaluation.class === 'error') {
-            latest = '?'
-          }
-          let attested: 'yes' | 'no' = 'no'
-          if (evaluation.attested === true) {
-            attested = 'yes'
-          }
-          let provenance: 'yes' | 'no' = 'no'
-          if (evaluation.provenanceConfig === true) {
-            provenance = 'yes'
-          }
-          return {
-            name: evaluation.name,
-            local_version: evaluation.localVersion,
-            npm_latest: latest,
-            class: evaluation.class,
-            attested,
-            publishConfig_provenance: provenance,
-          }
-        })
-        const deferred = report.evaluations.filter((evaluation) => evaluation.class === 'unpublished').map((
-          evaluation,
-        ) => evaluation.name).sort()
-        if (report.healthy === true) {
-          const decision = yield* S.decodeEffect(Lang.PublishStatusHealthy)({
-            _tag: 'PublishStatusHealthy',
-            packages: report.total,
-          }).pipe(Effect.orDie)
-          const healthy: StatusReport = { decision, rows, deferred }
-          return healthy
-        }
-        const decision = yield* S.decodeEffect(Lang.PublishStatusOwed)({
-          _tag: 'PublishStatusOwed',
-          unpublished: report.unpublished,
-          untrusted: report.untrusted,
-          stuck: report.stuck,
-        }).pipe(Effect.orDie)
-        const owed: StatusReport = { decision, rows, deferred }
-        return owed
-      })),
-    Match.exhaustive,
-  )
+  output: Result.Result<StatusReport, Lang.PublishStatusRefusal>,
+  _raw: StatusRead,
+): Effect.Effect<StatusReport, Lang.PublishStatusRefusal, never> => Effect.fromResult(output)
 
 export const publishStatusCell: Cell.Cell<
   StatusRequest,
   StatusReport,
   Lang.MemberRefusal | Lang.TrustRefusal | Lang.PublishStatusRefusal,
   Lang.WorkspaceStore | Lang.RegistryPort
-> = Cell.layer({ read, decode, decide: publishStatus, encode, write })
+> = Cell.layer({
+  read,
+  decode,
+  decide: publishStatus,
+  encode,
+  write,
+})

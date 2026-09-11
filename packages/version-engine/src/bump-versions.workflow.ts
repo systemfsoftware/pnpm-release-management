@@ -1,31 +1,11 @@
 import { Workflow } from '@systemfsoftware/effect-cell-types'
+import type { VersionIntentMalformed, VersionUnknownPackage } from '@systemfsoftware/release-language'
 import { Count, PackageName, PackageVersion, RelativePath } from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
+import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import { BumpCommand } from './bump.schema.js'
-
-const CORE_PATTERN = /^(\d+)\.(\d+)\.(\d+)/
-
-const tupleOf = (version: string): readonly [number, number, number] => {
-  const hit = CORE_PATTERN.exec(version)
-  return [Number(hit?.[1] ?? '0'), Number(hit?.[2] ?? '0'), Number(hit?.[3] ?? '0')]
-}
-
-const compareTuples = (
-  left: readonly [number, number, number],
-  right: readonly [number, number, number],
-): number => left[0] - right[0] || left[1] - right[1] || left[2] - right[2]
-
-const maxVersion = (
-  versions: ReadonlyArray<PackageVersion>,
-): PackageVersion | undefined =>
-  versions.reduce<PackageVersion | undefined>((top, version) => {
-    if (top === undefined || compareTuples(tupleOf(version), tupleOf(top)) > 0) {
-      return version
-    }
-    return top
-  }, undefined)
 
 const VersionDecisionTypeId: unique symbol = Symbol.for(
   '@systemfsoftware/pnpm-release-management/VersionDecision',
@@ -74,37 +54,84 @@ const BumpCase = S.Union([
 ])
 type BumpCase = S.Schema.Type<typeof BumpCase>
 
-const classify = (command: BumpCommand): BumpCase => {
-  if (command.intents.length === 0) return { _tag: 'NoIntents' }
-  if (command.unknownPackage !== undefined) {
-    return { _tag: 'UnknownPackage', package: command.unknownPackage }
-  }
-  if (command.malformedPath !== undefined) {
-    return { _tag: 'IntentMalformed', path: command.malformedPath }
-  }
-  if (command.consolidated === 'none') return { _tag: 'OnlyNone', count: command.intentCount }
-  const version = maxVersion(command.nexts.map((entry) => entry.next))
-  if (command.strategy === 'surfaces') {
-    return {
-      _tag: 'Bumped',
-      version: command.consolidatedNext,
-      moved: command.moved,
-      changelogs: command.changelogPaths.map((entry) => entry.path),
-    }
-  }
-  return {
-    _tag: 'Bumped',
-    version: version ?? command.consolidatedNext,
-    moved: command.moved,
-    changelogs: command.changelogPaths.map((entry) => entry.path),
-  }
-}
+const CORE_PATTERN = /^(\d+)\.(\d+)\.(\d+)/
+const CORE_WIDTH = 12
+
+const coreKeyOf = (version: string): string =>
+  Option.match(Option.fromNullishOr(CORE_PATTERN.exec(version)), {
+    onNone: () => '0'.repeat(CORE_WIDTH * 3),
+    onSome: (hit) => hit.slice(1, 4).map((part) => part.padStart(CORE_WIDTH, '0')).join(''),
+  })
+
+const highestCoreOf = (
+  versions: ReadonlyArray<PackageVersion>,
+): PackageVersion | undefined => [...versions].sort((left, right) => coreKeyOf(right).localeCompare(coreKeyOf(left)))[0]
+
+const surfacesNextOf = (command: BumpCommand): Option.Option<PackageVersion> =>
+  Option.map(
+    Option.filter(Option.some(command.strategy), (strategy) => strategy === 'surfaces'),
+    () => command.consolidatedNext,
+  )
+
+const highestNextOf = (command: BumpCommand): PackageVersion =>
+  Option.getOrElse(
+    Option.fromNullishOr(highestCoreOf(command.nexts.map((entry) => entry.next))),
+    () => command.consolidatedNext,
+  )
+
+const versionOf = (command: BumpCommand): PackageVersion =>
+  Option.getOrElse(surfacesNextOf(command), () => highestNextOf(command))
+
+const bumpedCaseOf = (command: BumpCommand): BumpCase => ({
+  _tag: 'Bumped',
+  version: versionOf(command),
+  moved: [...command.moved],
+  changelogs: command.changelogPaths.map((entry) => entry.path),
+})
+
+const onlyNoneOf = (command: BumpCommand): Option.Option<Count> =>
+  Option.map(
+    Option.filter(Option.some(command.consolidated), (consolidated) => consolidated === 'none'),
+    () => command.intentCount,
+  )
+
+const consolidatedCaseOf = (command: BumpCommand): BumpCase =>
+  Option.match(onlyNoneOf(command), {
+    onNone: (): BumpCase => bumpedCaseOf(command),
+    onSome: (count): BumpCase => ({ _tag: 'OnlyNone', count }),
+  })
+
+const malformedPathCaseOf = (command: BumpCommand): BumpCase =>
+  Option.match(Option.fromNullishOr(command.malformedPath), {
+    onNone: (): BumpCase => consolidatedCaseOf(command),
+    onSome: (path): BumpCase => ({ _tag: 'IntentMalformed', path }),
+  })
+
+const unknownPackageCaseOf = (command: BumpCommand): BumpCase =>
+  Option.match(Option.fromNullishOr(command.unknownPackage), {
+    onNone: (): BumpCase => malformedPathCaseOf(command),
+    onSome: (unknown): BumpCase => ({ _tag: 'UnknownPackage', package: unknown }),
+  })
+
+const caseOf = (command: BumpCommand): BumpCase =>
+  Option.match(Option.fromNullishOr(command.intents[0]), {
+    onNone: (): BumpCase => ({ _tag: 'NoIntents' }),
+    onSome: (): BumpCase => unknownPackageCaseOf(command),
+  })
 
 export const bumpVersions = Workflow.make(
   BumpCommand,
-  (command) =>
-    Match.value(classify(command)).pipe(
-      Match.tag('NoIntents', () => Result.succeed(VersionIdle.make({ pending: command.intentCount }))),
+  (
+    command,
+  ): Result.Result<
+    VersionBumped | VersionConsumed | VersionIdle,
+    VersionUnknownPackage | VersionIntentMalformed
+  > =>
+    Match.value(caseOf(command)).pipe(
+      Match.tag(
+        'NoIntents',
+        () => Result.succeed(VersionIdle.make({ pending: command.intentCount })),
+      ),
       Match.tag(
         'UnknownPackage',
         (unknown) => Result.fail({ _tag: 'VersionUnknownPackage' as const, package: unknown.package }),
@@ -113,7 +140,10 @@ export const bumpVersions = Workflow.make(
         'IntentMalformed',
         (malformed) => Result.fail({ _tag: 'VersionIntentMalformed' as const, path: malformed.path }),
       ),
-      Match.tag('OnlyNone', (idle) => Result.succeed(VersionConsumed.make({ consumed: idle.count }))),
+      Match.tag(
+        'OnlyNone',
+        (idle) => Result.succeed(VersionConsumed.make({ consumed: idle.count })),
+      ),
       Match.tag(
         'Bumped',
         (bumped) =>

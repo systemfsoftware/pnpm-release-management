@@ -1,71 +1,71 @@
 import { Cell, Wire } from '@systemfsoftware/effect-cell-types'
-import { GitPort, ProcessPort, StagedChecksDecision, WorkspaceCommand } from '@systemfsoftware/release-language'
-import type { CheckKind, PublishRefusal, StagedChecksRefusal, StagedPath } from '@systemfsoftware/release-language'
+import {
+  FormatRefused,
+  GitPort,
+  LintRefused,
+  MergeChecksSkipped,
+  ProcessPort,
+  StagedChecksPassed,
+  StagedVacant,
+  TypecheckRefused,
+  WorkspaceCommand,
+} from '@systemfsoftware/release-language'
+import type {
+  CheckKind,
+  PublishRefusal,
+  StagedChecksDecision,
+  StagedChecksRefusal,
+  StagedPath,
+} from '@systemfsoftware/release-language'
 import { Effect } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import { MergeChecksSkippedWire, StagedChecksPassedWire, StagedVacantWire } from './staged-checks.schema.js'
-import type { DecisionWire } from './staged-checks.schema.js'
-import type { StagedChecksIdle, StagedChecksRan, StagedChecksSkipped } from './staged-checks.workflow.js'
 import { stagedChecks, StagedChecksCommand } from './staged-checks.workflow.js'
-
-const FORMATTABLE = /\.(ts|mjs|cjs|js|json|jsonc|md|ya?ml|toml)$/
-
-const formattablePaths = (
-  staged: ReadonlyArray<StagedPath>,
-): ReadonlyArray<StagedPath> => staged.filter((path) => FORMATTABLE.test(path) && !path.endsWith('deno.lock'))
+import type { StagedChecksIdle, StagedChecksRan, StagedChecksSkipped } from './staged-checks.workflow.js'
 
 export const StagedChecksInput = Wire.wire({
   scripts: Wire.mint(S.Array(S.String)),
 })
 
-class StagedSnapshot {
-  constructor(
-    readonly staged: ReadonlyArray<StagedPath>,
-    readonly merge: boolean,
-    readonly scripts: ReadonlyArray<string>,
-  ) {}
+type StagedChecksRequest = S.Schema.Type<typeof StagedChecksInput>
+
+type StagedChecksSnapshot = {
+  readonly staged: ReadonlyArray<StagedPath>
+  readonly merge: boolean
+  readonly scripts: ReadonlyArray<string>
 }
 
-const read = (
-  input: S.Schema.Type<typeof StagedChecksInput>,
-): Effect.Effect<StagedSnapshot, StagedChecksRefusal, GitPort> =>
-  Effect.gen(function*() {
-    const git = yield* GitPort
-    const staged = yield* git.stagedPaths()
-    const merge = yield* git.mergeInProgress()
-    return new StagedSnapshot(staged, merge, [...input.scripts])
-  })
+type StagedChecksDocument = {
+  readonly decision: StagedChecksDecision
+  readonly formattable: ReadonlyArray<StagedPath>
+}
 
-const decode = (
-  raw: StagedSnapshot,
-): Result.Result<StagedChecksCommand, S.SchemaError> =>
-  S.decodeUnknownResult(StagedChecksCommand)({
-    _tag: 'StagedChecksCommand',
-    staged: [...raw.staged],
-    merge: raw.merge,
-    scripts: [...raw.scripts],
-  })
+type CheckProgram = {
+  readonly program: string
+  readonly args: ReadonlyArray<string>
+}
 
-const decisionWire = (
-  decision: StagedChecksRan | StagedChecksIdle | StagedChecksSkipped,
-): DecisionWire =>
-  Match.value(decision).pipe(
-    Match.tag(
-      'StagedChecksRan',
-      (ran) => StagedChecksPassedWire.make({ staged: ran.staged, checks: [...ran.checks] }),
-    ),
-    Match.tag('StagedChecksIdle', (idle) => StagedVacantWire.make({ staged: idle.staged })),
-    Match.tag('StagedChecksSkipped', (skipped) => MergeChecksSkippedWire.make({ staged: skipped.staged })),
-    Match.exhaustive,
-  )
+const CHECK_PROGRAMS: Record<
+  CheckKind,
+  (raw: StagedChecksSnapshot, formattable: ReadonlyArray<StagedPath>) => CheckProgram
+> = {
+  format: (_raw, formattable) => ({
+    program: './bin/dprint',
+    args: ['fmt', '--allow-no-files', '--', ...formattable],
+  }),
+  typecheck: (raw) => ({ program: 'deno', args: ['check', ...raw.scripts] }),
+  lint: () => ({ program: 'deno', args: ['lint', '--quiet'] }),
+}
 
-const encode = (
-  outcome: Result.Result<StagedChecksRan | StagedChecksIdle | StagedChecksSkipped, StagedChecksRefusal>,
-): Result.Result<DecisionWire, StagedChecksRefusal> => Result.map(outcome, decisionWire)
-
-const stateUnreadable = (reason: string): StagedChecksRefusal => ({ _tag: 'StagedStateUnreadable', reason } as const)
+const CHECK_REFUSALS: Record<
+  CheckKind,
+  (command: WorkspaceCommand, reason: string) => StagedChecksRefusal
+> = {
+  format: (command, reason) => FormatRefused.make({ command: { kind: 'format', command }, reason }),
+  typecheck: (command, reason) => TypecheckRefused.make({ command: { kind: 'typecheck', command }, reason }),
+  lint: (command, reason) => LintRefused.make({ command: { kind: 'lint', command }, reason }),
+}
 
 const publishReason = (refusal: PublishRefusal): string =>
   Match.value(refusal).pipe(
@@ -75,70 +75,93 @@ const publishReason = (refusal: PublishRefusal): string =>
     Match.exhaustive,
   )
 
-const refusedAs = (
+const read = (
+  request: StagedChecksRequest,
+): Effect.Effect<StagedChecksSnapshot, StagedChecksRefusal, GitPort> =>
+  Effect.gen(function*() {
+    const git = yield* GitPort
+    const staged = yield* git.stagedPaths()
+    const merge = yield* git.mergeInProgress()
+    return { staged: [...staged], merge, scripts: [...request.scripts] }
+  })
+
+const decode = (
+  raw: StagedChecksSnapshot,
+): Result.Result<StagedChecksCommand, S.SchemaError> =>
+  S.decodeUnknownResult(StagedChecksCommand)({
+    _tag: 'StagedChecksCommand',
+    staged: [...raw.staged],
+    merge: raw.merge,
+    scripts: [...raw.scripts],
+  })
+
+const encode = (
+  outcome: Result.Result<
+    StagedChecksRan | StagedChecksIdle | StagedChecksSkipped,
+    StagedChecksRefusal
+  >,
+): Result.Result<StagedChecksDocument, StagedChecksRefusal> =>
+  Result.map(outcome, (decision) =>
+    Match.value(decision).pipe(
+      Match.tag('StagedChecksRan', (ran) => ({
+        decision: StagedChecksPassed.make({ staged: ran.staged, checks: ran.checks }),
+        formattable: ran.formattable,
+      })),
+      Match.tag('StagedChecksIdle', (idle): StagedChecksDocument => ({
+        decision: StagedVacant.make({ staged: idle.staged }),
+        formattable: [],
+      })),
+      Match.tag('StagedChecksSkipped', (skipped): StagedChecksDocument => ({
+        decision: MergeChecksSkipped.make({ staged: skipped.staged }),
+        formattable: [],
+      })),
+      Match.exhaustive,
+    ))
+
+const runCheck = (
   kind: CheckKind,
-  command: WorkspaceCommand,
-  reason: string,
-): StagedChecksRefusal => {
-  if (kind === 'format') return { _tag: 'FormatRefused', command: { kind, command }, reason } as const
-  if (kind === 'typecheck') {
-    return { _tag: 'TypecheckRefused', command: { kind, command }, reason } as const
-  }
-  return { _tag: 'LintRefused', command: { kind, command }, reason } as const
-}
+  raw: StagedChecksSnapshot,
+  formattable: ReadonlyArray<StagedPath>,
+): Effect.Effect<void, S.SchemaError | StagedChecksRefusal, ProcessPort> =>
+  Effect.gen(function*() {
+    const process = yield* ProcessPort
+    const program = CHECK_PROGRAMS[kind](raw, formattable)
+    const command = yield* S.decodeUnknownEffect(WorkspaceCommand)({
+      program: program.program,
+      args: [...program.args],
+    })
+    yield* process.runCommand(command).pipe(
+      Effect.mapError((refusal) => CHECK_REFUSALS[kind](command, publishReason(refusal))),
+    )
+  })
 
-const programOf = (kind: CheckKind): string => {
-  if (kind === 'format') return './bin/dprint'
-  return 'deno'
-}
-
-const argsOf = (kind: CheckKind, raw: StagedSnapshot): ReadonlyArray<string> => {
-  if (kind === 'format') return ['fmt', '--allow-no-files', '--', ...formattablePaths(raw.staged)]
-  if (kind === 'typecheck') return ['check', ...raw.scripts]
-  return ['lint', '--quiet']
-}
-
-const workspaceCommand = (
-  kind: CheckKind,
-  raw: StagedSnapshot,
-): Effect.Effect<WorkspaceCommand, StagedChecksRefusal> =>
-  Effect.mapError(
-    S.decodeUnknownEffect(WorkspaceCommand)({ program: programOf(kind), args: [...argsOf(kind, raw)] }),
-    (error): StagedChecksRefusal => stateUnreadable(error.message),
+const runChecks = (
+  document: StagedChecksDocument,
+  raw: StagedChecksSnapshot,
+): Effect.Effect<StagedChecksDecision, S.SchemaError | StagedChecksRefusal, ProcessPort> =>
+  Match.value(document.decision).pipe(
+    Match.tag('StagedChecksPassed', (passed) =>
+      Effect.gen(function*() {
+        yield* Effect.forEach(passed.checks, (kind) => runCheck(kind, raw, document.formattable))
+        return document.decision
+      })),
+    Match.tag('StagedVacant', () => Effect.succeed(document.decision)),
+    Match.tag('MergeChecksSkipped', () => Effect.succeed(document.decision)),
+    Match.exhaustive,
   )
 
 const write = (
-  output: Result.Result<DecisionWire, StagedChecksRefusal>,
-  raw: StagedSnapshot,
-): Effect.Effect<StagedChecksDecision, S.SchemaError | StagedChecksRefusal, ProcessPort> => {
-  if (Result.isFailure(output)) return Effect.fail(output.failure)
-  return Effect.flatMap(
-    S.decodeUnknownEffect(StagedChecksDecision)(output.success),
-    (decision): Effect.Effect<StagedChecksDecision, S.SchemaError | StagedChecksRefusal, ProcessPort> =>
-      Match.value(decision).pipe(
-        Match.tag('StagedVacant', (vacant) => Effect.succeed(vacant)),
-        Match.tag('MergeChecksSkipped', (skipped) => Effect.succeed(skipped)),
-        Match.tag('StagedChecksPassed', (passed) =>
-          Effect.gen(function*() {
-            const process = yield* ProcessPort
-            yield* Effect.forEach(passed.checks, (kind) =>
-              Effect.flatMap(
-                workspaceCommand(kind, raw),
-                (command) =>
-                  Effect.mapError(
-                    process.runCommand(command),
-                    (refusal) => refusedAs(kind, command, publishReason(refusal)),
-                  ),
-              ))
-            return passed
-          })),
-        Match.exhaustive,
-      ),
+  output: Result.Result<StagedChecksDocument, StagedChecksRefusal>,
+  raw: StagedChecksSnapshot,
+): Effect.Effect<StagedChecksDecision, S.SchemaError | StagedChecksRefusal, ProcessPort> =>
+  Match.value(output).pipe(
+    Match.tag('Failure', (failure) => Effect.fail(failure.failure)),
+    Match.tag('Success', (success) => runChecks(success.success, raw)),
+    Match.exhaustive,
   )
-}
 
 export const stagedChecksCell: Cell.Cell<
-  S.Schema.Type<typeof StagedChecksInput>,
+  StagedChecksRequest,
   StagedChecksDecision,
   S.SchemaError | StagedChecksRefusal,
   GitPort | ProcessPort

@@ -1,6 +1,7 @@
 import { Workflow } from '@systemfsoftware/effect-cell-types'
 import { Count, CycleEntry, PackageName } from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
+import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 
@@ -35,26 +36,6 @@ export class DeferredPackagesUnknown extends S.TaggedError<DeferredPackagesUnkno
   { packages: S.Array(PackageName) },
 ) {}
 
-const PlanCase = S.Union([
-  S.TaggedStruct('PlanDeferredBad', { unknown: S.Array(PackageName) }),
-  S.TaggedStruct('PlanOwed', {}),
-  S.TaggedStruct('PlanPending', {}),
-  S.TaggedStruct('PlanClear', {}),
-])
-
-type PlanCase = S.Schema.Type<typeof PlanCase>
-
-const nonEmpty = <A>(list: ReadonlyArray<A>): [A, ...Array<A>] => {
-  const [first, ...rest] = list
-  if (first === undefined) {
-    throw new Error('nonEmpty: empty list')
-  }
-  return [first, ...rest]
-}
-
-const deferredPackagesUnknown = (packages: ReadonlyArray<PackageName>) =>
-  DeferredPackagesUnknown.make({ packages: nonEmpty(packages) })
-
 export class PlanCommand extends S.TaggedClass<PlanCommand>()('PlanCommand', {
   pending: Count,
   cycle: S.Array(CycleEntry),
@@ -62,18 +43,35 @@ export class PlanCommand extends S.TaggedClass<PlanCommand>()('PlanCommand', {
   unknownDeferred: S.Array(PackageName),
 }) {}
 
-const classify = (command: PlanCommand): PlanCase => {
-  if (command.unknownDeferred.length > 0) {
-    return { _tag: 'PlanDeferredBad', unknown: command.unknownDeferred }
-  }
-  if (command.cycle.length > 0) {
-    return { _tag: 'PlanOwed' }
-  }
-  if (command.pending > 0) {
-    return { _tag: 'PlanPending' }
-  }
-  return { _tag: 'PlanClear' }
-}
+const UnknownDeferredCase = S.TaggedStruct('PlanUnknownDeferred', {
+  unknown: S.Array(PackageName),
+})
+const OwedCase = S.TaggedStruct('PlanOwed', { cycle: S.Array(CycleEntry) })
+const PendingCase = S.TaggedStruct('PlanPending', {})
+const ClearCase = S.TaggedStruct('PlanClear', {})
+const PlanCase = S.Union([UnknownDeferredCase, OwedCase, PendingCase, ClearCase])
+type PlanCase = S.Schema.Type<typeof PlanCase>
+
+const pendingCaseOf = (command: PlanCommand): PlanCase =>
+  Match.value(command.pending > 0).pipe(
+    Match.when(true, () => PendingCase.make({})),
+    Match.when(false, () => ClearCase.make({})),
+    Match.exhaustive,
+  )
+
+const owedCaseOf = (command: PlanCommand): PlanCase =>
+  Match.value(Option.fromNullishOr(command.cycle[0])).pipe(
+    Match.tag('Some', () => OwedCase.make({ cycle: [...command.cycle] })),
+    Match.tag('None', () => pendingCaseOf(command)),
+    Match.exhaustive,
+  )
+
+const classify = (command: PlanCommand): PlanCase =>
+  Match.value(Option.fromNullishOr(command.unknownDeferred[0])).pipe(
+    Match.tag('Some', () => UnknownDeferredCase.make({ unknown: [...command.unknownDeferred] })),
+    Match.tag('None', () => owedCaseOf(command)),
+    Match.exhaustive,
+  )
 
 export const planRelease = Workflow.make(
   PlanCommand,
@@ -84,25 +82,21 @@ export const planRelease = Workflow.make(
     DeferredPackagesUnknown
   > =>
     Match.value(classify(command)).pipe(
-      Match.tag('PlanDeferredBad', (bad) => Result.fail(deferredPackagesUnknown(bad.unknown))),
-      Match.tag(
-        'PlanOwed',
-        () => Result.succeed(PlanReleasePublish.make({ cycle: [...command.cycle] })),
-      ),
-      Match.tag(
-        'PlanPending',
-        () =>
-          Result.succeed(
-            PlanReleaseVersion.make({ pending: command.pending, cycle: [...command.cycle] }),
-          ),
-      ),
-      Match.tag(
-        'PlanClear',
-        () =>
-          Result.succeed(
-            PlanReleaseSettled.make({ pending: command.pending, cycleCount: command.cycle.length }),
-          ),
-      ),
+      Match.tag('PlanUnknownDeferred', (bad) =>
+        Result.fail(DeferredPackagesUnknown.make({ packages: [...bad.unknown] }))),
+      Match.tag('PlanOwed', (owed) =>
+        Result.succeed(PlanReleasePublish.make({ cycle: [...owed.cycle] }))),
+      Match.tag('PlanPending', () =>
+        Result.succeed(
+          PlanReleaseVersion.make({ pending: command.pending, cycle: [...command.cycle] }),
+        )),
+      Match.tag('PlanClear', () =>
+        Result.succeed(
+          PlanReleaseSettled.make({
+            pending: command.pending,
+            cycleCount: command.cycle.length,
+          }),
+        )),
       Match.exhaustive,
     ),
 )

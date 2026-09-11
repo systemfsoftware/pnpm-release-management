@@ -14,8 +14,11 @@ import { Path } from 'effect/Path'
 import * as S from 'effect/Schema'
 import * as Stream from 'effect/Stream'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
+import { readTextFile } from './StoreFile.js'
+import { ManifestText, WorkspaceListing } from './Workspace.schema.js'
 
 const MANIFEST_FILE = 'package.json'
+const LIST_ARGS = ['ls', '-r', '--json', '--depth=-1']
 
 export const WorkspaceStoreLive = (
   root: RepoRoot,
@@ -26,111 +29,66 @@ export const WorkspaceStoreLive = (
       const fs = yield* FileSystem
       const path = yield* Path
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+      const rootFs = FsPath.make(root)
 
       const readManifest = (dir: RelativePath): Effect.Effect<PackageManifest, MemberRefusal> =>
         Effect.gen(function*() {
-          const full = path.join(root, dir, MANIFEST_FILE)
-          const manifestFs = yield* S.decodeUnknownEffect(FsPath)(full).pipe(Effect.orDie)
-          const text = yield* fs.readFileString(full).pipe(
-            Effect.catchTag(
-              'PlatformError',
-              (): Effect.Effect<never, MemberRefusal> =>
-                Effect.fail({ _tag: 'ManifestUnreadable', path: manifestFs } as const),
-            ),
+          const file = FsPath.make(path.join(root, dir, MANIFEST_FILE))
+          const text = yield* readTextFile(fs, file).pipe(
+            Effect.mapError((): MemberRefusal => ({ _tag: 'ManifestUnreadable', path: file })),
           )
-          let parsed: unknown
-          try {
-            parsed = JSON.parse(text)
-          } catch (error) {
-            if (error instanceof Error) {
-              return yield* Effect.fail({ _tag: 'ManifestInvalid', path: manifestFs, reason: error.message } as const)
-            }
-            return yield* Effect.fail({ _tag: 'ManifestInvalid', path: manifestFs, reason: 'unknown error' } as const)
-          }
-          return yield* S.decodeUnknownEffect(PackageManifest)(parsed).pipe(
-            Effect.mapError((error): MemberRefusal => ({
-              _tag: 'ManifestInvalid',
-              path: manifestFs,
-              reason: error.message,
-            })),
+          return yield* S.decodeUnknownEffect(ManifestText)(text).pipe(
+            Effect.mapError((error): MemberRefusal => ({ _tag: 'ManifestInvalid', path: file, reason: error.message })),
           )
         })
 
       const listMembers = (): Effect.Effect<ReadonlyArray<Member>, MemberRefusal> =>
         Effect.gen(function*() {
-          const rootFs = yield* S.decodeUnknownEffect(FsPath)(root).pipe(Effect.orDie)
-          const unreadable = { _tag: 'ManifestUnreadable', path: rootFs } as const
-          const command = ChildProcess.make('pnpm', ['ls', '-r', '--json', '--depth=-1'], { cwd: root })
-          const spawned = yield* Effect.scoped(
+          const [code, stdout] = yield* Effect.scoped(
             Effect.flatMap(
-              spawner.spawn(command),
+              spawner.spawn(ChildProcess.make('pnpm', [...LIST_ARGS], { cwd: root })),
               (handle) => Effect.all([handle.exitCode, Stream.mkString(Stream.decodeText(handle.stdout))]),
             ),
-          ).pipe(
-            Effect.catchTag(
-              'PlatformError',
-              (): Effect.Effect<never, MemberRefusal> => Effect.fail(unreadable),
-            ),
-          )
-          const [code, stdout] = spawned
+          ).pipe(Effect.mapError((): MemberRefusal => ({ _tag: 'ManifestUnreadable', path: rootFs })))
           if (code !== 0) {
-            return yield* Effect.fail(unreadable)
+            return yield* Effect.fail<MemberRefusal>({ _tag: 'ManifestUnreadable', path: rootFs })
           }
-          let rows: unknown
-          try {
-            rows = JSON.parse(stdout)
-          } catch (error) {
-            if (error instanceof Error) {
-              return yield* Effect.fail({ _tag: 'ManifestInvalid', path: rootFs, reason: error.message } as const)
-            }
-            return yield* Effect.fail({ _tag: 'ManifestInvalid', path: rootFs, reason: 'unknown error' } as const)
-          }
-          if (!Array.isArray(rows)) {
-            return yield* Effect.fail(
-              { _tag: 'ManifestInvalid', path: rootFs, reason: 'expected a JSON array' } as const,
-            )
-          }
+          const rows = yield* S.decodeUnknownEffect(WorkspaceListing)(stdout).pipe(
+            Effect.mapError((error): MemberRefusal => ({
+              _tag: 'ManifestInvalid',
+              path: rootFs,
+              reason: error.message,
+            })),
+          )
           const members: Array<Member> = []
-          const unknownRows: ReadonlyArray<unknown> = rows
-          for (const row of unknownRows) {
-            if (typeof row !== 'object' || row === null || !('path' in row)) {
-              return yield* Effect.fail(
-                { _tag: 'ManifestInvalid', path: rootFs, reason: 'a workspace row without a path' } as const,
-              )
-            }
-            const rawPath: unknown = row.path
-            if (typeof rawPath !== 'string') {
-              return yield* Effect.fail(
-                { _tag: 'ManifestInvalid', path: rootFs, reason: 'a workspace row without a path' } as const,
-              )
-            }
-            const dir = path.relative(root, rawPath)
+          for (const row of rows) {
+            const dir = path.relative(root, row.path)
             if (dir === '') continue
-            const member = yield* S.decodeUnknownEffect(RelativePath)(dir).pipe(
+            const memberDir = yield* S.decodeUnknownEffect(RelativePath)(dir).pipe(
               Effect.mapError((error): MemberRefusal => ({
                 _tag: 'ManifestInvalid',
                 path: rootFs,
                 reason: error.message,
               })),
             )
-            const manifest = yield* readManifest(member)
-            members.push({ name: manifest.name, dir: member, manifest, publishable: manifest.private !== true })
+            const manifest = yield* readManifest(memberDir)
+            members.push({
+              name: manifest.name,
+              dir: memberDir,
+              manifest,
+              publishable: manifest.private !== true,
+            })
           }
           return members
         })
 
-      const readFileFromRoot = (path_: RelativePath): Effect.Effect<RootFile, MemberRefusal> =>
+      const readFileFromRoot = (file: RelativePath): Effect.Effect<RootFile, MemberRefusal> =>
         Effect.gen(function*() {
-          const full = path.join(root, path_)
-          const fullFs = yield* S.decodeUnknownEffect(FsPath)(full).pipe(Effect.orDie)
-          const text = yield* fs.readFileString(full).pipe(
-            Effect.catchTag(
-              'PlatformError',
-              (): Effect.Effect<never, MemberRefusal> =>
-                Effect.fail({ _tag: 'ManifestUnreadable', path: fullFs } as const),
-            ),
+          const full = FsPath.make(path.join(root, file))
+          const text = yield* readTextFile(fs, full).pipe(
+            Effect.mapError((): MemberRefusal => ({ _tag: 'ManifestUnreadable', path: full })),
           )
-          return { path: path_, text }
+          return { path: file, text }
         })
 
       return { root, listMembers, readManifest, readFileFromRoot }
