@@ -1,9 +1,9 @@
 import { Workflow } from '@systemfsoftware/effect-cell-types'
-import { PackageName, RelativePath } from '@systemfsoftware/release-language'
+import { DecisionTypeId, PackageName, RelativePath } from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
-import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
+import { type TrustLauncherMissing } from './stage-trust.schema.js'
 
 export class AssessLauncherReadinessCommand extends S.TaggedClass<AssessLauncherReadinessCommand>()(
   'AssessLauncherReadinessCommand',
@@ -14,68 +14,50 @@ export class AssessLauncherReadinessCommand extends S.TaggedClass<AssessLauncher
   },
 ) {}
 
-const AssessLauncherReadinessTypeId: unique symbol = Symbol.for(
-  '@systemfsoftware/npm-publish-engine/AssessLauncherReadinessDecision',
-)
-type AssessLauncherReadinessTypeId = typeof AssessLauncherReadinessTypeId
-
-export class LauncherUnneeded extends S.TaggedClass<LauncherUnneeded>()(
-  'LauncherUnneeded',
-  {},
-) {
-  readonly [AssessLauncherReadinessTypeId] = AssessLauncherReadinessTypeId
+export class LauncherUnneeded extends S.TaggedClass<LauncherUnneeded>()('LauncherUnneeded', {
+  debuts: S.Array(PackageName),
+}) {
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
 export class LauncherReady extends S.TaggedClass<LauncherReady>()('LauncherReady', {
   debuts: S.Array(PackageName),
 }) {
-  readonly [AssessLauncherReadinessTypeId] = AssessLauncherReadinessTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
-export class TrustLauncherMissing extends S.TaggedError<TrustLauncherMissing>()(
-  'TrustLauncherMissing',
-  { package: PackageName },
-) {}
+const UnneededCase = S.TaggedStruct('Unneeded', { debuts: S.Array(PackageName) })
+type UnneededCase = S.Schema.Type<typeof UnneededCase>
 
-const UnneededCase = S.TaggedStruct('Unneeded', {})
 const ReadyCase = S.TaggedStruct('Ready', { debuts: S.Array(PackageName) })
+type ReadyCase = S.Schema.Type<typeof ReadyCase>
+
 const MissingCase = S.TaggedStruct('Missing', { package: PackageName })
-const LauncherCase = S.Union([UnneededCase, ReadyCase, MissingCase])
-type LauncherCase = S.Schema.Type<typeof LauncherCase>
+type MissingCase = S.Schema.Type<typeof MissingCase>
 
-const configuredCaseOf = (command: AssessLauncherReadinessCommand): LauncherCase =>
-  Match.value(command.launcherReadable).pipe(
-    Match.when(true, () => ReadyCase.make({ debuts: [...command.debuts] })),
-    Match.when(false, () =>
-      MissingCase.make({
-        package: Option.getOrThrow(Option.fromNullishOr(command.debuts[0])),
-      })),
-    Match.exhaustive,
-  )
+type LauncherCase = UnneededCase | ReadyCase | MissingCase
 
-const manifestCaseOf = (command: AssessLauncherReadinessCommand): LauncherCase =>
-  Match.value(Option.fromNullishOr(command.launcherManifest)).pipe(
-    Match.tag('None', () => ReadyCase.make({ debuts: [...command.debuts] })),
-    Match.tag('Some', () => configuredCaseOf(command)),
-    Match.exhaustive,
-  )
-
-const classify = (command: AssessLauncherReadinessCommand): LauncherCase =>
-  Match.value(Option.fromNullishOr(command.debuts[0])).pipe(
-    Match.tag('None', () => UnneededCase.make({})),
-    Match.tag('Some', () => manifestCaseOf(command)),
-    Match.exhaustive,
-  )
+const launcherCaseOf = (command: AssessLauncherReadinessCommand): LauncherCase => {
+  const firstDebut = command.debuts[0]
+  if (firstDebut === undefined) return UnneededCase.make({ debuts: [] })
+  if (command.launcherManifest === undefined) return ReadyCase.make({ debuts: command.debuts })
+  if (command.launcherReadable) return ReadyCase.make({ debuts: command.debuts })
+  return MissingCase.make({ package: firstDebut })
+}
 
 export const assessLauncherReadiness = Workflow.make(
   AssessLauncherReadinessCommand,
   (
     command,
   ): Result.Result<LauncherUnneeded | LauncherReady, TrustLauncherMissing> =>
-    Match.value(classify(command)).pipe(
-      Match.tag('Unneeded', () => Result.succeed(LauncherUnneeded.make({}))),
-      Match.tag('Ready', (ready) => Result.succeed(LauncherReady.make({ debuts: [...ready.debuts] }))),
-      Match.tag('Missing', (missing) => Result.fail(TrustLauncherMissing.make({ package: missing.package }))),
+    Match.value(launcherCaseOf(command)).pipe(
+      Match.tag('Unneeded', (unneeded) => Result.succeed(LauncherUnneeded.make({ debuts: unneeded.debuts }))),
+      Match.tag('Ready', (ready) => Result.succeed(LauncherReady.make({ debuts: ready.debuts }))),
+      Match.tag(
+        'Missing',
+        (missing): Result.Result<never, TrustLauncherMissing> =>
+          Result.fail({ _tag: 'TrustLauncherMissing', package: missing.package }),
+      ),
       Match.exhaustive,
     ),
 )

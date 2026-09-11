@@ -1,6 +1,6 @@
 import * as S from 'effect/Schema'
 import { PublishArg } from './Config.schema.js'
-import { Count, FsPath, RepoRoot } from './Workspace.schema.js'
+import { FsPath, RepoRoot } from './Workspace.schema.js'
 
 export const CommandName = S.NonEmptyString.pipe(S.brand('CommandName'))
 export type CommandName = S.Schema.Type<typeof CommandName>
@@ -16,45 +16,6 @@ export const ProcessCompleted = S.TaggedStruct('ProcessCompleted', {
   command: WorkspaceCommand,
 })
 export type ProcessCompleted = S.Schema.Type<typeof ProcessCompleted>
-
-const PublishDecisionTypeId: unique symbol = Symbol.for(
-  '@systemfsoftware/pnpm-release-management/PublishDecision',
-)
-type PublishDecisionTypeId = typeof PublishDecisionTypeId
-
-export class PublishDispatched extends S.TaggedClass<PublishDispatched>()(
-  'PublishDispatched',
-  {
-    command: WorkspaceCommand,
-  },
-) {
-  readonly [PublishDecisionTypeId] = PublishDecisionTypeId
-}
-
-export class PublishNothingOwed extends S.TaggedClass<PublishNothingOwed>()(
-  'PublishNothingOwed',
-  {
-    packages: Count,
-  },
-) {
-  readonly [PublishDecisionTypeId] = PublishDecisionTypeId
-}
-
-export class PublishDryRun extends S.TaggedClass<PublishDryRun>()(
-  'PublishDryRun',
-  {
-    command: WorkspaceCommand,
-  },
-) {
-  readonly [PublishDecisionTypeId] = PublishDecisionTypeId
-}
-
-export const PublishDecision = S.Union([
-  PublishDispatched,
-  PublishNothingOwed,
-  PublishDryRun,
-])
-export type PublishDecision = S.Schema.Type<typeof PublishDecision>
 
 export const PublishCapturedRequired = S.TaggedStruct(
   'PublishCapturedRequired',

@@ -42,6 +42,7 @@ const toCommand = (input: {
     _tag: 'PinRootManifestCommand',
     manifestText: input.manifestText,
     manifest: input.manifest,
+    path: 'package.json',
     packageName: input.packageName,
     indent: input.indent,
     trailingNewline: input.trailingNewline,

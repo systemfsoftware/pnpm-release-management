@@ -1,7 +1,6 @@
 import { Workflow } from '@systemfsoftware/effect-cell-types'
-import { PackageName } from '@systemfsoftware/release-language'
+import { DecisionTypeId, PackageName, type TrustRegistryUnreadable } from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
-import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import { TrustCandidateState, TrustWorkItem, type TrustWorkMode, type TrustWorkStep } from './stage-trust.schema.js'
@@ -13,11 +12,6 @@ export class PlanStagedWorkCommand extends S.TaggedClass<PlanStagedWorkCommand>(
   },
 ) {}
 
-const PlanStagedWorkTypeId: unique symbol = Symbol.for(
-  '@systemfsoftware/npm-publish-engine/PlanStagedWorkDecision',
-)
-type PlanStagedWorkTypeId = typeof PlanStagedWorkTypeId
-
 export class StagedWorkPlanned extends S.TaggedClass<StagedWorkPlanned>()(
   'StagedWorkPlanned',
   {
@@ -26,7 +20,7 @@ export class StagedWorkPlanned extends S.TaggedClass<StagedWorkPlanned>()(
     packages: S.Int,
   },
 ) {
-  readonly [PlanStagedWorkTypeId] = PlanStagedWorkTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
 export class NoStagedWork extends S.TaggedClass<NoStagedWork>()('NoStagedWork', {
@@ -34,23 +28,27 @@ export class NoStagedWork extends S.TaggedClass<NoStagedWork>()('NoStagedWork', 
   debuts: S.Array(PackageName),
   packages: S.Int,
 }) {
-  readonly [PlanStagedWorkTypeId] = PlanStagedWorkTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
-export class TrustRegistryUnreadable extends S.TaggedError<TrustRegistryUnreadable>()(
-  'TrustRegistryUnreadable',
-  { packages: S.Array(PackageName) },
-) {}
+const UnreadableCase = S.TaggedStruct('Unreadable', { packages: S.NonEmptyArray(PackageName) })
+type UnreadableCase = S.Schema.Type<typeof UnreadableCase>
 
-const UnreadableCase = S.TaggedStruct('Unreadable', { packages: S.Array(PackageName) })
-const EmptyCase = S.TaggedStruct('Empty', {})
+const EmptyCase = S.TaggedStruct('Empty', {
+  items: S.Array(TrustWorkItem),
+  debuts: S.Array(PackageName),
+  packages: S.Int,
+})
+type EmptyCase = S.Schema.Type<typeof EmptyCase>
+
 const PlannedCase = S.TaggedStruct('Planned', {
   items: S.Array(TrustWorkItem),
   debuts: S.Array(PackageName),
   packages: S.Int,
 })
-const PlanCase = S.Union([UnreadableCase, EmptyCase, PlannedCase])
-type PlanCase = S.Schema.Type<typeof PlanCase>
+type PlannedCase = S.Schema.Type<typeof PlannedCase>
+
+type PlanCase = UnreadableCase | EmptyCase | PlannedCase
 
 const debutMode: TrustWorkMode = 'debut'
 const untrustedMode: TrustWorkMode = 'untrusted'
@@ -62,85 +60,76 @@ const listStep: TrustWorkStep = 'trust-list'
 
 const untrustedSteps: ReadonlyArray<TrustWorkStep> = [githubStep, listStep]
 
-const modeOf = (candidate: TrustCandidateState): TrustWorkMode =>
-  Option.match(Option.fromNullishOr(candidate.snapshot.latest), {
-    onNone: () => debutMode,
-    onSome: () => untrustedMode,
-  })
+const modeOf = (candidate: TrustCandidateState): TrustWorkMode => {
+  if (candidate.snapshot.latest === undefined) return debutMode
+  return untrustedMode
+}
 
-const debutStepsOf = (candidate: TrustCandidateState): ReadonlyArray<TrustWorkStep> =>
-  Match.value(candidate.hasBuild).pipe(
-    Match.when(true, () => [buildStep, publishStep, githubStep, listStep]),
-    Match.when(false, () => [publishStep, githubStep, listStep]),
-    Match.exhaustive,
-  )
+const stepsOf = (candidate: TrustCandidateState): ReadonlyArray<TrustWorkStep> => {
+  if (candidate.snapshot.latest !== undefined) return untrustedSteps
+  if (candidate.hasBuild) return [buildStep, publishStep, githubStep, listStep]
+  return [publishStep, githubStep, listStep]
+}
 
-const stepsOf = (candidate: TrustCandidateState): ReadonlyArray<TrustWorkStep> =>
-  Match.value(modeOf(candidate)).pipe(
-    Match.when(debutMode, () => debutStepsOf(candidate)),
-    Match.when(untrustedMode, () => untrustedSteps),
-    Match.exhaustive,
-  )
-
-const itemsIn = (
-  command: PlanStagedWorkCommand,
-): ReadonlyArray<TrustWorkItem> =>
-  command.owed.map((candidate) => ({
+const itemsIn = (owed: ReadonlyArray<TrustCandidateState>): ReadonlyArray<TrustWorkItem> =>
+  owed.map((candidate) => ({
     name: candidate.name,
     version: candidate.version,
     mode: modeOf(candidate),
     hasBuild: candidate.hasBuild,
-    steps: [...stepsOf(candidate)],
+    steps: stepsOf(candidate),
   }))
 
-const debutsIn = (command: PlanStagedWorkCommand): ReadonlyArray<PackageName> =>
-  command.owed
+const debutsIn = (owed: ReadonlyArray<TrustCandidateState>): ReadonlyArray<PackageName> =>
+  owed
     .filter((candidate) => modeOf(candidate) === debutMode)
     .map((candidate) => candidate.name)
 
-const unreachableIn = (
-  command: PlanStagedWorkCommand,
-): ReadonlyArray<TrustCandidateState> => command.owed.filter((candidate) => candidate.snapshot.reachable === false)
+const nonEmptyOf = (
+  names: ReadonlyArray<PackageName>,
+): readonly [PackageName, ...PackageName[]] | undefined => {
+  const first = names[0]
+  if (first === undefined) return undefined
+  return [first, ...names.slice(1)]
+}
 
-const owedCaseOf = (command: PlanStagedWorkCommand): PlanCase =>
-  Match.value(Option.fromNullishOr(command.owed[0])).pipe(
-    Match.tag('None', () => EmptyCase.make({})),
-    Match.tag('Some', () =>
-      PlannedCase.make({
-        items: [...itemsIn(command)],
-        debuts: [...debutsIn(command)],
-        packages: command.owed.length,
-      })),
-    Match.exhaustive,
+const planCaseOf = (command: PlanStagedWorkCommand): PlanCase => {
+  const unreadable = nonEmptyOf(
+    command.owed
+      .filter((candidate) => candidate.snapshot.reachable === false)
+      .map((candidate) => candidate.name),
   )
-
-const classify = (command: PlanStagedWorkCommand): PlanCase =>
-  Match.value(Option.fromNullishOr(unreachableIn(command)[0])).pipe(
-    Match.tag('None', () => owedCaseOf(command)),
-    Match.tag('Some', () =>
-      UnreadableCase.make({
-        packages: unreachableIn(command).map((candidate) => candidate.name),
-      })),
-    Match.exhaustive,
-  )
+  if (unreadable !== undefined) return UnreadableCase.make({ packages: unreadable })
+  if (command.owed.length === 0) return EmptyCase.make({ items: [], debuts: [], packages: 0 })
+  return PlannedCase.make({
+    items: itemsIn(command.owed),
+    debuts: debutsIn(command.owed),
+    packages: command.owed.length,
+  })
+}
 
 export const planStagedWork = Workflow.make(
   PlanStagedWorkCommand,
   (command): Result.Result<StagedWorkPlanned | NoStagedWork, TrustRegistryUnreadable> =>
-    Match.value(classify(command)).pipe(
+    Match.value(planCaseOf(command)).pipe(
       Match.tag(
         'Unreadable',
-        (unreadable) => Result.fail(TrustRegistryUnreadable.make({ packages: [...unreadable.packages] })),
+        (unreadable): Result.Result<never, TrustRegistryUnreadable> =>
+          Result.fail({ _tag: 'TrustRegistryUnreadable', packages: unreadable.packages }),
       ),
-      Match.tag('Empty', () =>
+      Match.tag('Empty', (empty) =>
         Result.succeed(
-          NoStagedWork.make({ items: [], debuts: [], packages: 0 }),
+          NoStagedWork.make({
+            items: empty.items,
+            debuts: empty.debuts,
+            packages: empty.packages,
+          }),
         )),
       Match.tag('Planned', (planned) =>
         Result.succeed(
           StagedWorkPlanned.make({
-            items: [...planned.items],
-            debuts: [...planned.debuts],
+            items: planned.items,
+            debuts: planned.debuts,
             packages: planned.packages,
           }),
         )),

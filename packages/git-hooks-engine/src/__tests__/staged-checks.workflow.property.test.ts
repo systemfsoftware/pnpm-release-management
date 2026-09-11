@@ -3,7 +3,8 @@ import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import * as fc from 'effect/testing/FastCheck'
-import { stagedChecks, StagedChecksCommand } from '../staged-checks.workflow.js'
+import { StagedChecksCommand } from '../staged-checks.schema.js'
+import { stagedChecks } from '../staged-checks.workflow.js'
 import type { StagedChecksIdle, StagedChecksRan, StagedChecksSkipped } from '../staged-checks.workflow.js'
 
 const commandOf = (staged: ReadonlyArray<string>, merge: boolean): StagedChecksCommand =>

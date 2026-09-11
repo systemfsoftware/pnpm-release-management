@@ -24,6 +24,16 @@ export const TrustWorkItem = S.Struct({
 })
 export type TrustWorkItem = S.Schema.Type<typeof TrustWorkItem>
 
+export const TrustPublishRefused = S.TaggedStruct('TrustPublishRefused', {
+  packages: S.NonEmptyArray(PackageName),
+})
+export type TrustPublishRefused = S.Schema.Type<typeof TrustPublishRefused>
+
+export const TrustLauncherMissing = S.TaggedStruct('TrustLauncherMissing', {
+  package: PackageName,
+})
+export type TrustLauncherMissing = S.Schema.Type<typeof TrustLauncherMissing>
+
 export class TrustItemUnstaged extends S.TaggedError<TrustItemUnstaged>()('TrustItemUnstaged', {
   name: S.String,
 }) {}

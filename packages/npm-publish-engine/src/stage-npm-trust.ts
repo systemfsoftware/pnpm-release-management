@@ -116,10 +116,10 @@ const runParts = (
 ): Effect.Effect<void, TrustItemUnstaged, Lang.ProcessPort> =>
   Effect.gen(function*() {
     const process = yield* Lang.ProcessPort
-    const command = yield* S.decodeUnknownEffect(Lang.WorkspaceCommand)({ args, program }).pipe(
-      Effect.orDie,
-    )
-    yield* process.runCommand(command).pipe(
+    yield* process.runCommand({
+      program: Lang.CommandName.make(program),
+      args: args.map((arg) => Lang.PublishArg.make(arg)),
+    }).pipe(
       Effect.mapError(() => TrustItemUnstaged.make({ name: item.name })),
     )
   })
@@ -177,6 +177,7 @@ const selectionCell = Cell.layer({
   decode: (flow: TrustFlow): Result.Result<SelectTrustCandidatesCommand, never> =>
     Result.succeed(
       new SelectTrustCandidatesCommand({
+        members: Lang.Count.make(flow.candidates.length),
         candidates: [...flow.candidates],
         only: [...flow.request.only],
       }),

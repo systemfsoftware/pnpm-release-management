@@ -1,4 +1,5 @@
-import type { Bump, Intent, Member, PackageName, RelativePath, ReleaseBump } from '@systemfsoftware/release-language'
+import type { Bump, Intent, Member, PackageName, ReleaseBump } from '@systemfsoftware/release-language'
+import { Count, PackageVersion, RelativePath } from '@systemfsoftware/release-language'
 
 const RANK: Record<Bump, number> = { none: 0, patch: 1, minor: 2, major: 3 }
 
@@ -9,11 +10,11 @@ const coreOf = (version: string): readonly [number, number, number] => {
   return [Number(hit?.[1] ?? '0'), Number(hit?.[2] ?? '0'), Number(hit?.[3] ?? '0')]
 }
 
-const nextCore = (current: string, rank: ReleaseBump): string => {
+const nextCore = (current: string, rank: ReleaseBump): PackageVersion => {
   const core = coreOf(current)
-  if (rank === 'major') return `${core[0] + 1}.0.0`
-  if (rank === 'minor') return `${core[0]}.${core[1] + 1}.0`
-  return `${core[0]}.${core[1]}.${core[2] + 1}`
+  if (rank === 'major') return PackageVersion.make(`${core[0] + 1}.0.0`)
+  if (rank === 'minor') return PackageVersion.make(`${core[0]}.${core[1] + 1}.0`)
+  return PackageVersion.make(`${core[0]}.${core[1]}.${core[2] + 1}`)
 }
 
 const topRank = (ranks: ReadonlyArray<Bump>): Bump =>
@@ -31,13 +32,13 @@ export type CollapsedPackage = {
 export type BumpDerivation = {
   readonly packages: ReadonlyArray<CollapsedPackage>
   readonly consolidated: Bump
-  readonly consolidatedNext: string
-  readonly nexts: ReadonlyArray<{ readonly name: PackageName; readonly next: string }>
+  readonly consolidatedNext: PackageVersion
+  readonly nexts: ReadonlyArray<{ readonly name: PackageName; readonly next: PackageVersion }>
   readonly moved: ReadonlyArray<PackageName>
-  readonly changelogPaths: ReadonlyArray<{ readonly name: PackageName; readonly path: string }>
+  readonly changelogPaths: ReadonlyArray<{ readonly name: PackageName; readonly path: RelativePath }>
   readonly unknownPackage: PackageName | undefined
   readonly malformedPath: RelativePath | undefined
-  readonly intentCount: number
+  readonly intentCount: Count
 }
 
 export const fallbackSummaryOf = (intents: ReadonlyArray<Intent>): string =>
@@ -63,8 +64,8 @@ const nextOf = (
   strategy: 'pnpm' | 'surfaces',
   member: Member,
   packages: ReadonlyArray<CollapsedPackage>,
-  bumpedCore: string,
-): { readonly name: PackageName; readonly next: string } => {
+  bumpedCore: PackageVersion,
+): { readonly name: PackageName; readonly next: PackageVersion } => {
   if (strategy === 'surfaces') return { name: member.name, next: bumpedCore }
   const collapsed = packages.find((entry) => entry.name === member.name)
   const rank = collapsed?.rank ?? 'none'
@@ -89,14 +90,14 @@ const movedOf = (
 const changelogPathsOf = (
   changelogDir: string,
   moved: ReadonlyArray<PackageName>,
-  nexts: ReadonlyArray<{ readonly name: PackageName; readonly next: string }>,
-): ReadonlyArray<{ readonly name: PackageName; readonly path: string }> =>
+  nexts: ReadonlyArray<{ readonly name: PackageName; readonly next: PackageVersion }>,
+): ReadonlyArray<{ readonly name: PackageName; readonly path: RelativePath }> =>
   moved.map((name) => {
     const entry = nexts.find((candidate) => candidate.name === name)
     const version = entry?.next ?? ''
     const flat = name.replaceAll('/', '!')
-    if (version === '') return { name, path: `${changelogDir}/${flat}.md` }
-    return { name, path: `${changelogDir}/${flat}@${version}.md` }
+    if (version === '') return { name, path: RelativePath.make(`${changelogDir}/${flat}.md`) }
+    return { name, path: RelativePath.make(`${changelogDir}/${flat}@${version}.md`) }
   })
 
 export const deriveBump = (args: {
@@ -126,12 +127,12 @@ export const deriveBump = (args: {
     summaries: slot.summaries,
   }))
   const consolidated = topRank(packages.map((entry) => entry.rank))
-  const intentCount = args.intents.length
+  const intentCount = Count.make(args.intents.length)
   if (consolidated === 'none') {
     return {
       packages,
       consolidated,
-      consolidatedNext: args.manifestVersion,
+      consolidatedNext: PackageVersion.make(args.manifestVersion),
       nexts: [],
       moved: [],
       changelogPaths: [],

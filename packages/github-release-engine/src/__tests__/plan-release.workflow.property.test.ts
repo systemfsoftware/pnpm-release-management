@@ -43,6 +43,7 @@ const pendingArb = fc.nat({ max: 5 }).map((pending) => Count.make(pending))
 const cycleArb = fc.array(entryArb, { maxLength: 4 })
 const deferredArb = fc.array(packageNameArb, { maxLength: 3 })
 const unknownArb = fc.array(packageNameArb, { maxLength: 2 })
+const membersArb = fc.array(packageNameArb, { maxLength: 3 })
 
 const namesEqual = (
   left: ReadonlyArray<PackageName>,
@@ -75,17 +76,17 @@ const entriesEqual = (
 
 it.prop(
   '∀state_PlanRelease_≡PhaseFromState',
-  [pendingArb, cycleArb, deferredArb, unknownArb],
-  ([pending, cycle, deferred, unknownDeferred]) => {
+  [pendingArb, cycleArb, deferredArb, unknownArb, membersArb],
+  ([pending, cycle, deferred, unknownDeferred, members]) => {
     const outcome = planRelease(
-      PlanCommand.make({ pending, cycle, deferred, unknownDeferred }),
+      PlanCommand.make({ pending, cycle, deferred, unknownDeferred, members }),
     )
     if (unknownDeferred.length > 0) {
       if (Result.isFailure(outcome) === false) {
         return false
       }
       return Match.value(outcome.failure).pipe(
-        Match.tag('DeferredPackagesUnknown', (bad) => namesEqual([...bad.packages], [...unknownDeferred])),
+        Match.tag('PlanDeferredUnknown', (bad) => namesEqual([...bad.packages], [...unknownDeferred])),
         Match.exhaustive,
       )
     }
@@ -95,34 +96,34 @@ it.prop(
     const decision = outcome.success
     if (cycle.length > 0) {
       return Match.value(decision).pipe(
-        Match.tag('PlanReleasePublish', (publish) => entriesEqual([...publish.cycle], [...cycle])),
-        Match.tag('PlanReleaseVersion', () => false),
-        Match.tag('PlanReleaseSettled', () => false),
+        Match.tag('PlanPublish', (publish) => entriesEqual([...publish.cycle], [...cycle])),
+        Match.tag('PlanVersion', () => false),
+        Match.tag('PlanSettled', () => false),
         Match.exhaustive,
       )
     }
     if (pending > 0) {
       return Match.value(decision).pipe(
-        Match.tag('PlanReleaseVersion', (version) => {
+        Match.tag('PlanVersion', (version) => {
           if (version.pending !== pending) {
             return false
           }
           return entriesEqual([...version.cycle], [...cycle])
         }),
-        Match.tag('PlanReleasePublish', () => false),
-        Match.tag('PlanReleaseSettled', () => false),
+        Match.tag('PlanPublish', () => false),
+        Match.tag('PlanSettled', () => false),
         Match.exhaustive,
       )
     }
     return Match.value(decision).pipe(
-      Match.tag('PlanReleaseSettled', (settled) => {
+      Match.tag('PlanSettled', (settled) => {
         if (settled.pending !== pending) {
           return false
         }
-        return settled.cycleCount === 0
+        return settled.cycle === 0
       }),
-      Match.tag('PlanReleasePublish', () => false),
-      Match.tag('PlanReleaseVersion', () => false),
+      Match.tag('PlanPublish', () => false),
+      Match.tag('PlanVersion', () => false),
       Match.exhaustive,
     )
   },

@@ -22,11 +22,6 @@ on:
         required: false
         type: string
         default: "24"
-      deno-version:
-        description: reserved, unused; kept so existing callers keep working
-        required: false
-        type: string
-        default: v2.x
 
 permissions: {}
 

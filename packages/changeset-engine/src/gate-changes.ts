@@ -1,10 +1,9 @@
 import { Cell, Wire } from '@systemfsoftware/effect-cell-types'
 import {
-  type ChangeEvidence,
   ChangeEvidencePort,
+  type ChangeEvidenceRefusal,
   ChangesetStore,
   type GateIntentMissing,
-  type GateRefusal,
   type GateUnknownPackage,
   GitRef,
   type Intent,
@@ -15,13 +14,12 @@ import {
   WorkspaceStore,
 } from '@systemfsoftware/release-language'
 import { Effect } from 'effect'
-import * as Array from 'effect/Array'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import { type ChangesGated, type ChangesVacant, gateChanges, GateCommand } from './gate-changes.workflow.js'
 
-export const GateRequest = Wire.wire({
+const GateRequest = Wire.wire({
   root: Wire.mint(RepoRoot),
   ref: Wire.mint(GitRef),
   strategy: Wire.mint(S.Literals(['paths', 'turbo'])),
@@ -36,7 +34,7 @@ export interface GateReport {
 
 type GateRequestInput = S.Schema.Type<typeof GateRequest>
 
-type GateReadError = GateRefusal | MemberRefusal | IntentRefusal
+type GateReadError = ChangeEvidenceRefusal | MemberRefusal | IntentRefusal
 
 type GateVerdict = Result.Result<
   ChangesVacant | ChangesGated,
@@ -44,18 +42,6 @@ type GateVerdict = Result.Result<
 >
 
 const buildTask = (): TaskName => TaskName.make('build')
-
-const evidenceOf = (
-  request: GateRequestInput,
-): Effect.Effect<ChangeEvidence, GateRefusal, ChangeEvidencePort> =>
-  Effect.flatMap(ChangeEvidencePort, (port) =>
-    Match.value(request).pipe(
-      Match.when(
-        { strategy: 'turbo' },
-        (turbo) => port.turboEvidence(turbo.root, turbo.ref, turbo.task ?? buildTask()),
-      ),
-      Match.orElse(() => port.pathsEvidence(request.root, request.ref)),
-    ))
 
 const read = (
   request: GateRequestInput,
@@ -65,13 +51,18 @@ const read = (
   ChangeEvidencePort | WorkspaceStore | ChangesetStore
 > =>
   Effect.gen(function*() {
-    const evidence = yield* evidenceOf(request)
+    const evidence = yield* Effect.flatMap(ChangeEvidencePort, (port) => {
+      if (request.strategy === 'turbo') {
+        return port.turboEvidence(request.root, request.ref, request.task ?? buildTask())
+      }
+      return port.pathsEvidence(request.root, request.ref)
+    })
     const workspace = yield* WorkspaceStore
     const store = yield* ChangesetStore
     const members = yield* workspace.listMembers()
     const paths = yield* store.listIntents()
     const intents: ReadonlyArray<Intent> = yield* Effect.all(
-      Array.map(paths, (path) => store.readIntent(path)),
+      paths.map((path) => store.readIntent(path)),
     )
     return GateCommand.make({
       members,

@@ -24,12 +24,6 @@ export const RelativePath = S.String.pipe(
 )
 export type RelativePath = S.Schema.Type<typeof RelativePath>
 
-export const AbsolutePath = S.String.pipe(
-  S.check(S.isPattern(/^\//)),
-  S.brand('AbsolutePath'),
-)
-export type AbsolutePath = S.Schema.Type<typeof AbsolutePath>
-
 export const FsPath = S.NonEmptyString.pipe(S.brand('FsPath'))
 export type FsPath = S.Schema.Type<typeof FsPath>
 

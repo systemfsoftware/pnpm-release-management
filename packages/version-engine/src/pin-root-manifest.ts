@@ -3,49 +3,25 @@ import {
   FsPath,
   type MemberRefusal,
   PackageVersion,
-  type PinDecision,
-  type PinDistributionMissing,
-  type PinManifestInvalid,
-  PinName,
-  type PinRefusal,
-  type PinVersionUnusable,
   type RepoRoot,
   SurfaceStore,
   type TargetSuffix,
   type VersionRefusal,
   WorkspaceStore,
-  WorkspaceVersionAlreadyCurrent,
-  WorkspaceVersionRepinned,
 } from '@systemfsoftware/release-language'
 import { Effect } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import { PinnedManifest, PinRootManifestCommand, type PinRootManifestInput } from './pin-root-manifest.schema.js'
 import {
-  pinRootManifest,
-  type WorkspaceVersionAlreadyCurrent as LocalAlreadyCurrent,
-  type WorkspaceVersionRepinned as LocalRepinned,
-} from './pin-root-manifest.workflow.js'
+  PinName,
+  PinnedManifest,
+  PinRootManifestCommand,
+  type PinRootManifestInput,
+} from './pin-root-manifest.schema.js'
+import { type PinDecision, PinManifestInvalid, type PinRefusal, pinRootManifest } from './pin-root-manifest.workflow.js'
 
 const INDENT = /^(\s+)"/m
-
-class RawPin {
-  constructor(
-    readonly request: PinRootManifestInput,
-    readonly text: string,
-    readonly root: RepoRoot,
-  ) {}
-}
-
-const read = (
-  request: PinRootManifestInput,
-): Effect.Effect<RawPin, MemberRefusal, WorkspaceStore> =>
-  Effect.gen(function*() {
-    const workspace = yield* WorkspaceStore
-    const file = yield* workspace.readFileFromRoot(request.manifest)
-    return new RawPin(request, file.text, workspace.root)
-  })
 
 const pinIndentOf = (text: string): string | number => text.match(INDENT)?.[1] ?? 2
 
@@ -54,105 +30,80 @@ const availableVersionOf = (given: string | undefined): PackageVersion | undefin
   return Result.getOrUndefined(S.decodeUnknownResult(PackageVersion)(given))
 }
 
-const suffixesCopyOf = (
-  suffixes: ReadonlyArray<TargetSuffix> | undefined,
-): ReadonlyArray<TargetSuffix> | undefined => {
-  if (suffixes === undefined) return undefined
-  return [...suffixes]
-}
-
-const suffixNamesOf = (
+const pinNamesOf = (
   suffixes: ReadonlyArray<TargetSuffix> | undefined,
   name: string,
-): ReadonlyArray<string> => {
+): ReadonlyArray<PinName> => {
   if (suffixes === undefined) return []
-  return suffixes.map((suffix) => `${name}-${suffix}`)
+  return suffixes.map((suffix) => PinName.make(`${name}-${suffix}`))
 }
 
-const decode = (raw: RawPin) =>
+const parseCommand = (
+  request: PinRootManifestInput,
+  text: string,
+  root: RepoRoot,
+): Result.Result<PinRootManifestCommand, PinManifestInvalid | S.SchemaError> =>
   Result.flatMap(
     Result.mapError(
-      S.decodeUnknownResult(S.fromJsonString(S.Unknown))(raw.text),
-      (error): PinManifestInvalid => ({
-        _tag: 'PinManifestInvalid',
-        path: FsPath.make(raw.request.manifest),
-        reason: error.message,
-      }),
+      S.decodeUnknownResult(S.fromJsonString(S.Unknown))(text),
+      (error) =>
+        PinManifestInvalid.make({
+          path: FsPath.make(request.manifest),
+          reason: error.message,
+        }),
     ),
     (parsed) =>
       Result.flatMap(
         S.decodeUnknownResult(S.Record(S.String, S.Unknown))(parsed),
         (manifest) =>
-          Result.flatMap(
+          Result.map(
             S.decodeUnknownResult(PinnedManifest)(manifest),
             (pinned) =>
-              Result.map(
-                S.decodeUnknownResult(S.Array(PinName))(
-                  suffixNamesOf(raw.request.suffixes, pinned.name),
-                ),
-                (pinNames) =>
-                  PinRootManifestCommand.make({
-                    _tag: 'PinRootManifestCommand',
-                    manifestText: raw.text,
-                    manifest,
-                    packageName: pinned.name,
-                    indent: pinIndentOf(raw.text),
-                    trailingNewline: raw.text.endsWith('\n'),
-                    requestedVersion: raw.request.requestedVersion,
-                    requestedUsable: availableVersionOf(raw.request.requestedVersion),
-                    declaredVersion: pinned.version,
-                    declaredUsable: availableVersionOf(pinned.version),
-                    suffixes: suffixesCopyOf(raw.request.suffixes),
-                    pinNames,
-                    repoRoot: raw.root,
-                  }),
-              ),
+              PinRootManifestCommand.make({
+                manifestText: text,
+                manifest,
+                path: request.manifest,
+                packageName: pinned.name,
+                indent: pinIndentOf(text),
+                trailingNewline: text.endsWith('\n'),
+                requestedVersion: request.requestedVersion,
+                requestedUsable: availableVersionOf(request.requestedVersion),
+                declaredVersion: pinned.version,
+                declaredUsable: availableVersionOf(pinned.version),
+                suffixes: request.suffixes,
+                pinNames: pinNamesOf(request.suffixes, pinned.name),
+                repoRoot: root,
+                dryRun: request.dryRun,
+              }),
           ),
       ),
   )
 
-const toDecision = (decision: LocalRepinned | LocalAlreadyCurrent): PinDecision =>
-  Match.value(decision).pipe(
-    Match.tag(
-      'WorkspaceVersionRepinned',
-      (repinned) =>
-        WorkspaceVersionRepinned.make({
-          version: repinned.version,
-          pins: [...repinned.pins],
-          text: repinned.text,
-        }),
-    ),
-    Match.tag(
-      'WorkspaceVersionAlreadyCurrent',
-      (current) =>
-        WorkspaceVersionAlreadyCurrent.make({
-          version: current.version,
-          pins: [...current.pins],
-          text: current.text,
-        }),
-    ),
-    Match.exhaustive,
-  )
-
-const encode = (
-  outcome: Result.Result<
-    LocalRepinned | LocalAlreadyCurrent,
-    PinVersionUnusable | PinDistributionMissing
-  >,
-): Result.Result<PinDecision, PinVersionUnusable | PinDistributionMissing> => Result.map(outcome, toDecision)
+const read = (
+  request: PinRootManifestInput,
+): Effect.Effect<
+  PinRootManifestCommand,
+  MemberRefusal | PinManifestInvalid | S.SchemaError,
+  WorkspaceStore
+> =>
+  Effect.gen(function*() {
+    const workspace = yield* WorkspaceStore
+    const file = yield* workspace.readFileFromRoot(request.manifest)
+    return yield* Effect.fromResult(parseCommand(request, file.text, workspace.root))
+  })
 
 const write = (
   output: Result.Result<PinDecision, PinRefusal>,
-  raw: RawPin,
+  command: PinRootManifestCommand,
 ): Effect.Effect<PinDecision, PinRefusal | VersionRefusal, SurfaceStore> => {
   if (Result.isFailure(output)) return Effect.fail(output.failure)
   return Match.value(output.success).pipe(
     Match.tag('WorkspaceVersionAlreadyCurrent', (current) => Effect.succeed(current)),
     Match.tag('WorkspaceVersionRepinned', (repinned) =>
       Effect.gen(function*() {
-        if (raw.request.dryRun === true) return repinned
+        if (command.dryRun === true) return repinned
         const surfaces = yield* SurfaceStore
-        yield* surfaces.writeRootManifest(raw.request.manifest, repinned.text)
+        yield* surfaces.writeRootManifest(command.path, repinned.text)
         return repinned
       })),
     Match.exhaustive,
@@ -161,8 +112,6 @@ const write = (
 
 export const pinRootManifestCell = Cell.layer({
   read,
-  decode,
   decide: pinRootManifest,
-  encode,
   write,
 })

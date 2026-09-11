@@ -4,9 +4,7 @@ import {
   ChangelogStore,
   ChangesetStore,
   CommandName,
-  type Intent,
   type IntentRefusal,
-  type Member,
   type MemberRefusal,
   type PackageManifest,
   type PackageName,
@@ -14,44 +12,22 @@ import {
   ProcessPort,
   PublishArg,
   type PublishRefusal,
-  type RepoRoot,
   SurfaceStore,
-  VersionBumped,
-  VersionConsumed,
-  type VersionDecision,
-  VersionIdle,
-  type VersionIntentMalformed,
   type VersionRefusal,
-  type VersionUnknownPackage,
   WorkspaceStore,
 } from '@systemfsoftware/release-language'
 import { Effect } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
-import * as S from 'effect/Schema'
 import { deriveBump, rootBulletsOf, summaryForPackage } from './bump-derive.js'
-import {
-  bumpVersions,
-  type VersionBumped as LocalVersionBumped,
-  type VersionConsumed as LocalVersionConsumed,
-  type VersionIdle as LocalVersionIdle,
-} from './bump-versions.workflow.js'
+import type { VersionBumped, VersionDecision } from './bump-versions.workflow.js'
+import { bumpVersions } from './bump-versions.workflow.js'
 import { BumpCommand, type BumpInput } from './bump.schema.js'
-
-class RawBump {
-  constructor(
-    readonly request: BumpInput,
-    readonly root: RepoRoot,
-    readonly intents: ReadonlyArray<Intent>,
-    readonly members: ReadonlyArray<Member>,
-    readonly manifestVersion: PackageVersion,
-  ) {}
-}
 
 const read = (
   request: BumpInput,
 ): Effect.Effect<
-  RawBump,
+  BumpCommand,
   IntentRefusal | MemberRefusal | VersionRefusal,
   ChangesetStore | WorkspaceStore | SurfaceStore
 > =>
@@ -66,57 +42,33 @@ const read = (
       request.manifest.file,
       request.manifest.surface,
     )
-    return new RawBump(request, workspace.root, intents, members, manifestVersion)
+    const derived = deriveBump({
+      intents,
+      members,
+      strategy: request.strategy,
+      manifestVersion,
+      changelogDir: request.changelogDir,
+    })
+    return BumpCommand.make({
+      strategy: request.strategy,
+      intents: [...intents],
+      members: [...members],
+      manifestVersion,
+      changelogDir: request.changelogDir,
+      rootChangelog: request.rootChangelog,
+      manifest: request.manifest,
+      surfaces: [...request.surfaces],
+      consolidated: derived.consolidated,
+      consolidatedNext: derived.consolidatedNext,
+      nexts: derived.nexts,
+      moved: derived.moved,
+      changelogPaths: derived.changelogPaths,
+      packageRanks: derived.packages,
+      unknownPackage: derived.unknownPackage,
+      malformedPath: derived.malformedPath,
+      intentCount: derived.intentCount,
+    })
   })
-
-const decode = (raw: RawBump) => {
-  const { packages, ...derived } = deriveBump({
-    intents: raw.intents,
-    members: raw.members,
-    strategy: raw.request.strategy,
-    manifestVersion: raw.manifestVersion,
-    changelogDir: raw.request.changelogDir,
-  })
-  return S.decodeUnknownResult(BumpCommand)({
-    _tag: 'BumpCommand',
-    strategy: raw.request.strategy,
-    intents: [...raw.intents],
-    members: [...raw.members],
-    manifestVersion: raw.manifestVersion,
-    changelogDir: raw.request.changelogDir,
-    rootChangelog: raw.request.rootChangelog,
-    ...derived,
-    packageRanks: packages,
-  })
-}
-
-const toDecision = (
-  decision: LocalVersionBumped | LocalVersionConsumed | LocalVersionIdle,
-): VersionDecision =>
-  Match.value(decision).pipe(
-    Match.tag(
-      'VersionBumped',
-      (bumped) =>
-        VersionBumped.make({
-          version: bumped.version,
-          moved: [...bumped.moved],
-          changelogs: [...bumped.changelogs],
-        }),
-    ),
-    Match.tag(
-      'VersionConsumed',
-      (consumed) => VersionConsumed.make({ consumed: consumed.consumed }),
-    ),
-    Match.tag('VersionIdle', (idle) => VersionIdle.make({ pending: idle.pending })),
-    Match.exhaustive,
-  )
-
-const encode = (
-  outcome: Result.Result<
-    LocalVersionBumped | LocalVersionConsumed | LocalVersionIdle,
-    VersionUnknownPackage | VersionIntentMalformed
-  >,
-): Result.Result<VersionDecision, VersionUnknownPackage | VersionIntentMalformed> => Result.map(outcome, toDecision)
 
 const commandVersionOf = (
   manifests: ReadonlyArray<PackageManifest>,
@@ -129,8 +81,7 @@ const commandVersionOf = (
 }
 
 const writeMemberChangelogs = (
-  request: BumpInput,
-  intents: ReadonlyArray<Intent>,
+  command: BumpCommand,
   moved: ReadonlyArray<PackageName>,
   versionOf: (name: PackageName) => PackageVersion,
 ): Effect.Effect<void, ChangelogRefusal, ChangelogStore> =>
@@ -140,49 +91,44 @@ const writeMemberChangelogs = (
       moved,
       (name) =>
         changelogs.writeMemberChangelog({
-          changelogDir: request.changelogDir,
+          changelogDir: command.changelogDir,
           name,
           version: versionOf(name),
-          summary: summaryForPackage(intents, name),
+          summary: summaryForPackage(command.intents, name),
         }),
       { discard: true },
     )
   })
 
 const writeSurfaces = (
-  raw: RawBump,
+  command: BumpCommand,
   bumped: VersionBumped,
 ): Effect.Effect<void, VersionRefusal | ChangelogRefusal, SurfaceStore | ChangelogStore> =>
   Effect.gen(function*() {
     const surfaces = yield* SurfaceStore
     const changelogs = yield* ChangelogStore
     yield* surfaces.writeSurface(
-      raw.request.manifest.file,
-      raw.request.manifest.surface,
+      command.manifest.file,
+      command.manifest.surface,
       bumped.version,
     )
     yield* Effect.forEach(
-      raw.request.surfaces,
+      command.surfaces,
       (surface) => surfaces.writeSurface(surface.file, surface.surface, bumped.version),
       { discard: true },
     )
-    if (raw.request.rootChangelog !== undefined) {
+    if (command.rootChangelog !== undefined) {
       yield* changelogs.appendReleaseSummary({
-        path: raw.request.rootChangelog,
+        path: command.rootChangelog,
         version: bumped.version,
-        summary: rootBulletsOf(raw.intents),
+        summary: rootBulletsOf(command.intents),
       })
     }
-    yield* writeMemberChangelogs(
-      raw.request,
-      raw.intents,
-      bumped.moved,
-      () => bumped.version,
-    )
+    yield* writeMemberChangelogs(command, bumped.moved, () => bumped.version)
   })
 
 const writePnpm = (
-  raw: RawBump,
+  command: BumpCommand,
   bumped: VersionBumped,
 ): Effect.Effect<
   void,
@@ -195,7 +141,7 @@ const writePnpm = (
     yield* process.runCommand({
       program: CommandName.make('pnpm'),
       args: [PublishArg.make('version'), PublishArg.make('-r')],
-      cwd: raw.root,
+      cwd: workspace.root,
     })
     const members = yield* workspace.listMembers()
     const manifests = yield* Effect.forEach(
@@ -203,28 +149,27 @@ const writePnpm = (
       (member) => workspace.readManifest(member.dir),
     )
     yield* writeMemberChangelogs(
-      raw.request,
-      raw.intents,
+      command,
       bumped.moved,
       (name) => commandVersionOf(manifests, name, bumped.version),
     )
   })
 
 const applyBumped = (
-  raw: RawBump,
+  command: BumpCommand,
   bumped: VersionBumped,
 ): Effect.Effect<
   void,
   VersionRefusal | ChangelogRefusal | MemberRefusal | PublishRefusal,
   ChangelogStore | SurfaceStore | ProcessPort | WorkspaceStore
 > => {
-  if (raw.request.strategy === 'surfaces') return writeSurfaces(raw, bumped)
-  return writePnpm(raw, bumped)
+  if (command.strategy === 'surfaces') return writeSurfaces(command, bumped)
+  return writePnpm(command, bumped)
 }
 
 const write = (
   output: Result.Result<VersionDecision, VersionRefusal>,
-  raw: RawBump,
+  command: BumpCommand,
 ): Effect.Effect<
   VersionDecision,
   VersionRefusal | IntentRefusal | MemberRefusal | ChangelogRefusal | PublishRefusal,
@@ -235,20 +180,18 @@ const write = (
   return Effect.gen(function*() {
     const changesets = yield* ChangesetStore
     yield* Match.value(decision).pipe(
-      Match.tag('VersionBumped', (bumped) => applyBumped(raw, bumped)),
+      Match.tag('VersionBumped', (bumped) => applyBumped(command, bumped)),
       Match.tag('VersionConsumed', () => Effect.void),
       Match.tag('VersionIdle', () => Effect.void),
       Match.exhaustive,
     )
-    yield* changesets.deleteIntents(raw.intents.map((intent) => intent.path))
+    yield* changesets.deleteIntents(command.intents.map((intent) => intent.path))
     return decision
   })
 }
 
 export const bumpCell = Cell.layer({
   read,
-  decode,
   decide: bumpVersions,
-  encode,
   write,
 })

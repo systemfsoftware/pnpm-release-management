@@ -1,21 +1,52 @@
 import { Workflow } from '@systemfsoftware/effect-cell-types'
-import type {
-  SyncActionUnknown,
-  SyncStrategyMismatch,
-  SyncSurfacesDrifted,
-  SyncVersionMissing,
-} from '@systemfsoftware/release-language'
-import { Count, PackageVersion, RelativePath, SyncDrift } from '@systemfsoftware/release-language'
+import { Count, DecisionTypeId, PackageVersion, RelativePath } from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
-import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import { SyncCommand } from './sync.schema.js'
 
-const SyncDecisionTypeId: unique symbol = Symbol.for(
-  '@systemfsoftware/pnpm-release-management/SyncDecision',
-)
-type SyncDecisionTypeId = typeof SyncDecisionTypeId
+export const SyncDrift = S.Struct({
+  path: RelativePath,
+  found: PackageVersion,
+})
+export type SyncDrift = S.Schema.Type<typeof SyncDrift>
+
+export class SyncStrategyMismatch extends S.TaggedError<SyncStrategyMismatch>()(
+  'SyncStrategyMismatch',
+  {
+    strategy: S.String,
+  },
+) {}
+
+export class SyncSurfacesDrifted extends S.TaggedError<SyncSurfacesDrifted>()(
+  'SyncSurfacesDrifted',
+  {
+    expected: PackageVersion,
+    diffs: S.NonEmptyArray(SyncDrift),
+  },
+) {}
+
+export class SyncVersionMissing extends S.TaggedError<SyncVersionMissing>()(
+  'SyncVersionMissing',
+  {
+    action: S.Literal('bump'),
+  },
+) {}
+
+export class SyncActionUnknown extends S.TaggedError<SyncActionUnknown>()(
+  'SyncActionUnknown',
+  {
+    given: S.String,
+  },
+) {}
+
+export const SyncRefusal = S.Union([
+  SyncStrategyMismatch,
+  SyncSurfacesDrifted,
+  SyncVersionMissing,
+  SyncActionUnknown,
+])
+export type SyncRefusal = S.Schema.Type<typeof SyncRefusal>
 
 export class SyncAligned extends S.TaggedClass<SyncAligned>()(
   'SyncAligned',
@@ -24,7 +55,7 @@ export class SyncAligned extends S.TaggedClass<SyncAligned>()(
     surfaces: Count,
   },
 ) {
-  readonly [SyncDecisionTypeId] = SyncDecisionTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
 export class SyncRealigned extends S.TaggedClass<SyncRealigned>()(
@@ -34,118 +65,93 @@ export class SyncRealigned extends S.TaggedClass<SyncRealigned>()(
     rewritten: S.Array(RelativePath),
   },
 ) {
-  readonly [SyncDecisionTypeId] = SyncDecisionTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
-const SyncCase = S.Union([
-  S.TaggedStruct('StrategyMismatch', { strategy: S.String }),
-  S.TaggedStruct('ActionUnknown', { given: S.String }),
-  S.TaggedStruct('VersionMissing', {}),
-  S.TaggedStruct('Drifted', {
-    expected: PackageVersion,
-    diffs: S.NonEmptyArray(SyncDrift),
-  }),
-  S.TaggedStruct('Aligned', { version: PackageVersion, count: Count }),
-  S.TaggedStruct('Realign', {
-    version: PackageVersion,
-    files: S.Array(RelativePath),
-  }),
-])
-type SyncCase = S.Schema.Type<typeof SyncCase>
+export type SyncDecision = SyncAligned | SyncRealigned
 
-const driftsOf = (command: SyncCommand): ReadonlyArray<SyncDrift> =>
-  command.entries
-    .filter((entry) => entry.found !== command.expected)
-    .map((entry): SyncDrift => ({ path: entry.file, found: entry.found }))
+const StrategyMismatchCase = S.TaggedStruct('StrategyMismatch', { strategy: S.String })
+const ActionUnknownCase = S.TaggedStruct('ActionUnknown', { given: S.String })
+const VersionMissingCase = S.TaggedStruct('VersionMissing', { action: S.Literal('bump') })
+const DriftedCase = S.TaggedStruct('Drifted', {
+  expected: PackageVersion,
+  diffs: S.NonEmptyArray(SyncDrift),
+})
+const AlignedCase = S.TaggedStruct('Aligned', { version: PackageVersion, count: Count })
+const RealignCase = S.TaggedStruct('Realign', {
+  version: PackageVersion,
+  files: S.Array(RelativePath),
+})
 
-const nonEmptyDriftsOf = (
-  command: SyncCommand,
-): Option.Option<readonly [SyncDrift, ...ReadonlyArray<SyncDrift>]> => {
-  const drifts = driftsOf(command)
-  return Option.map(
-    Option.fromNullishOr(drifts[0]),
-    (first): readonly [SyncDrift, ...ReadonlyArray<SyncDrift>] => [first, ...drifts.slice(1)],
-  )
+type StrategyMismatchCase = S.Schema.Type<typeof StrategyMismatchCase>
+type ActionUnknownCase = S.Schema.Type<typeof ActionUnknownCase>
+type VersionMissingCase = S.Schema.Type<typeof VersionMissingCase>
+type DriftedCase = S.Schema.Type<typeof DriftedCase>
+type AlignedCase = S.Schema.Type<typeof AlignedCase>
+type RealignCase = S.Schema.Type<typeof RealignCase>
+
+type SyncCase =
+  | StrategyMismatchCase
+  | ActionUnknownCase
+  | VersionMissingCase
+  | DriftedCase
+  | AlignedCase
+  | RealignCase
+
+const syncCaseOf = (command: SyncCommand): SyncCase => {
+  if (command.strategy !== 'surfaces') {
+    return StrategyMismatchCase.make({ strategy: command.strategy })
+  }
+  if (command.action === 'check') {
+    const diffs = command.entries
+      .filter((entry) => entry.found !== command.expected)
+      .map((entry) => ({ path: entry.file, found: entry.found }))
+    const [first, ...rest] = diffs
+    if (first === undefined) {
+      return AlignedCase.make({ version: command.expected, count: command.count })
+    }
+    return DriftedCase.make({ expected: command.expected, diffs: [first, ...rest] })
+  }
+  if (command.action === 'bump') {
+    if (command.pinned === undefined) return VersionMissingCase.make({ action: 'bump' })
+    return RealignCase.make({
+      version: command.pinned,
+      files: [command.manifest.file, ...command.entries.map((entry) => entry.file)],
+    })
+  }
+  return ActionUnknownCase.make({ given: command.action })
 }
-
-const checkCaseOf = (command: SyncCommand): SyncCase =>
-  Option.match(nonEmptyDriftsOf(command), {
-    onNone: (): SyncCase => ({ _tag: 'Aligned', version: command.expected, count: command.count }),
-    onSome: (diffs): SyncCase => ({ _tag: 'Drifted', expected: command.expected, diffs }),
-  })
-
-const bumpCaseOf = (command: SyncCommand): SyncCase =>
-  Option.match(Option.fromNullishOr(command.pinned), {
-    onNone: (): SyncCase => ({ _tag: 'VersionMissing' }),
-    onSome: (pinned): SyncCase => ({
-      _tag: 'Realign',
-      version: pinned,
-      files: [command.manifestFile, ...command.entries.map((entry) => entry.file)],
-    }),
-  })
-
-const checkActionOf = (command: SyncCommand): Option.Option<SyncCase> =>
-  Option.map(
-    Option.filter(Option.some(command.action), (action) => action === 'check'),
-    (): SyncCase => checkCaseOf(command),
-  )
-
-const bumpActionOf = (command: SyncCommand): Option.Option<SyncCase> =>
-  Option.map(
-    Option.filter(Option.some(command.action), (action) => action === 'bump'),
-    (): SyncCase => bumpCaseOf(command),
-  )
-
-const unknownActionOf = (command: SyncCommand): SyncCase =>
-  Option.getOrElse(
-    bumpActionOf(command),
-    (): SyncCase => ({ _tag: 'ActionUnknown', given: command.action }),
-  )
-
-const actionCaseOf = (command: SyncCommand): SyncCase =>
-  Option.match(checkActionOf(command), {
-    onNone: (): SyncCase => unknownActionOf(command),
-    onSome: (decided): SyncCase => decided,
-  })
-
-const caseOf = (command: SyncCommand): SyncCase =>
-  Option.match(
-    Option.filter(Option.some(command.strategy), (strategy) => strategy === 'surfaces'),
-    {
-      onNone: (): SyncCase => ({ _tag: 'StrategyMismatch', strategy: command.strategy }),
-      onSome: (): SyncCase => actionCaseOf(command),
-    },
-  )
 
 export const syncSurfaces = Workflow.make(
   SyncCommand,
   (
     command,
   ): Result.Result<
-    SyncAligned | SyncRealigned,
+    SyncDecision,
     SyncStrategyMismatch | SyncSurfacesDrifted | SyncVersionMissing | SyncActionUnknown
   > =>
-    Match.value(caseOf(command)).pipe(
+    Match.value(syncCaseOf(command)).pipe(
       Match.tag(
         'StrategyMismatch',
-        (mismatch) => Result.fail({ _tag: 'SyncStrategyMismatch' as const, strategy: mismatch.strategy }),
+        (mismatch) => Result.fail(SyncStrategyMismatch.make({ strategy: mismatch.strategy })),
       ),
       Match.tag(
         'ActionUnknown',
-        (unknown) => Result.fail({ _tag: 'SyncActionUnknown' as const, given: unknown.given }),
+        (unknown) => Result.fail(SyncActionUnknown.make({ given: unknown.given })),
       ),
       Match.tag(
         'VersionMissing',
-        () => Result.fail({ _tag: 'SyncVersionMissing' as const, action: 'bump' as const }),
+        (missing) => Result.fail(SyncVersionMissing.make({ action: missing.action })),
       ),
       Match.tag(
         'Drifted',
         (drifted) =>
-          Result.fail({
-            _tag: 'SyncSurfacesDrifted' as const,
-            expected: drifted.expected,
-            diffs: drifted.diffs,
-          }),
+          Result.fail(
+            SyncSurfacesDrifted.make({
+              expected: drifted.expected,
+              diffs: drifted.diffs,
+            }),
+          ),
       ),
       Match.tag(
         'Aligned',

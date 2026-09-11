@@ -9,39 +9,6 @@ export const TrustSnapshot = S.Struct({
 })
 export type TrustSnapshot = S.Schema.Type<typeof TrustSnapshot>
 
-export const TrustOwed = S.Struct({
-  name: PackageName,
-  mode: S.Literals(['debut', 'untrusted']),
-})
-export type TrustOwed = S.Schema.Type<typeof TrustOwed>
-
-const TrustDecisionTypeId: unique symbol = Symbol.for(
-  '@systemfsoftware/pnpm-release-management/TrustDecision',
-)
-type TrustDecisionTypeId = typeof TrustDecisionTypeId
-
-export class TrustComplete extends S.TaggedClass<TrustComplete>()(
-  'TrustComplete',
-  {
-    processed: Count,
-    debuts: Count,
-  },
-) {
-  readonly [TrustDecisionTypeId] = TrustDecisionTypeId
-}
-
-export class TrustIdle extends S.TaggedClass<TrustIdle>()(
-  'TrustIdle',
-  {
-    packages: Count,
-  },
-) {
-  readonly [TrustDecisionTypeId] = TrustDecisionTypeId
-}
-
-export const TrustDecision = S.Union([TrustComplete, TrustIdle])
-export type TrustDecision = S.Schema.Type<typeof TrustDecision>
-
 export const TrustOnlyUnmatched = S.TaggedStruct('TrustOnlyUnmatched', {
   only: S.NonEmptyArray(PackageName),
 })

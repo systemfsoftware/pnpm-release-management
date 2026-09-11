@@ -4,22 +4,14 @@ import type {
   MemberRefusal,
   PackageName,
   PlanDeferredUnknown,
-  TagDecision,
   TagRefusal,
 } from '@systemfsoftware/release-language'
 import {
-  Count,
   CycleStore,
   FsPath,
   GitPort,
   RelativePath,
-  ReleaseTag,
   RemoteName,
-  TagCapturedMalformed,
-  TagExcludedMalformed,
-  TagPreview,
-  TagPushed,
-  TagUpToDate,
   WorkspaceStore,
 } from '@systemfsoftware/release-language'
 import { Effect } from 'effect'
@@ -28,13 +20,11 @@ import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import { cycleOf, dropExcluded } from './cycle.js'
 import {
-  type CapturedListMalformed,
-  type ExcludedListMalformed,
+  TagCapturedMalformed,
   TagCommand,
+  type TagDecision,
   tagPackages,
-  type TagPackagesPreviewed,
-  type TagPackagesPushed,
-  type TagPackagesUpToDate,
+  type TagPushed,
 } from './tag-packages.workflow.js'
 
 export const TagRequest = Wire.wire({
@@ -56,15 +46,6 @@ interface ExclusionScan {
 interface CycleScan {
   readonly entries: ReadonlyArray<CycleEntry>
   readonly issue: FsPath | undefined
-}
-
-interface RawTag {
-  readonly cycle: ReadonlyArray<CycleEntry>
-  readonly remote: RemoteName
-  readonly output: FsPath | undefined
-  readonly preview: boolean
-  readonly capturedIssue: FsPath | undefined
-  readonly excludedIssue: FsPath | undefined
 }
 
 const readExclusion = (
@@ -131,7 +112,7 @@ const readCycle = (input: {
 const read = (
   request: S.Schema.Type<typeof TagRequest>,
 ): Effect.Effect<
-  RawTag,
+  TagCommand,
   MemberRefusal | TagRefusal | PlanDeferredUnknown,
   WorkspaceStore | GitPort | CycleStore
 > =>
@@ -150,61 +131,18 @@ const read = (
       changelogDir: request.changelogDir,
       excluded: exclusion.names,
     })
-    return {
-      cycle: scan.entries,
-      remote,
-      output: request.output,
+    return TagCommand.make({
+      cycle: [...scan.entries],
       preview: request.dryRun || request.json || request.output !== undefined,
       capturedIssue: scan.issue,
       excludedIssue: exclusion.issue,
-    }
+      remote,
+      output: request.output,
+    })
   })
 
-const decode = (raw: RawTag): Result.Result<TagCommand, never> =>
-  Result.succeed(
-    TagCommand.make({
-      cycle: [...raw.cycle],
-      preview: raw.preview,
-      capturedIssue: raw.capturedIssue,
-      excludedIssue: raw.excludedIssue,
-    }),
-  )
-
-const toRefusal = (bad: CapturedListMalformed | ExcludedListMalformed): TagRefusal =>
-  Match.value(bad).pipe(
-    Match.tag('CapturedListMalformed', (malformed) => TagCapturedMalformed.make({ path: malformed.path })),
-    Match.tag('ExcludedListMalformed', (malformed) => TagExcludedMalformed.make({ path: malformed.path })),
-    Match.exhaustive,
-  )
-
-const releaseTagsOf = (
-  tags: readonly [string, ...Array<string>],
-): readonly [ReleaseTag, ...Array<ReleaseTag>] => {
-  const [first, ...rest] = tags
-  return [ReleaseTag.make(first), ...rest.map((tag) => ReleaseTag.make(tag))]
-}
-
-const toDecision = (
-  decision: TagPackagesPreviewed | TagPackagesUpToDate | TagPackagesPushed,
-): TagDecision =>
-  Match.value(decision).pipe(
-    Match.tag('TagPackagesPreviewed', (previewed) =>
-      TagPreview.make({ tags: previewed.tags.map((tag) => ReleaseTag.make(tag)) })),
-    Match.tag('TagPackagesUpToDate', (upToDate) =>
-      TagUpToDate.make({ tags: Count.make(upToDate.tags) })),
-    Match.tag('TagPackagesPushed', (pushed) => TagPushed.make({ tags: releaseTagsOf(pushed.tags) })),
-    Match.exhaustive,
-  )
-
-const encode = (
-  outcome: Result.Result<
-    TagPackagesPreviewed | TagPackagesUpToDate | TagPackagesPushed,
-    CapturedListMalformed | ExcludedListMalformed
-  >,
-): Result.Result<TagDecision, TagRefusal> => Result.mapError(outcome, toRefusal).pipe(Result.map(toDecision))
-
 const captureCycle = (
-  raw: RawTag,
+  raw: TagCommand,
 ): Effect.Effect<void, TagRefusal | PlanDeferredUnknown, CycleStore> => {
   const output = raw.output
   if (output === undefined) {
@@ -221,7 +159,7 @@ const captureCycle = (
   })
 }
 
-const pushTags = (raw: RawTag, pushed: TagPushed): Effect.Effect<TagPushed, TagRefusal, GitPort> =>
+const pushTags = (raw: TagCommand, pushed: TagPushed): Effect.Effect<TagPushed, TagRefusal, GitPort> =>
   Effect.gen(function*() {
     const git = yield* GitPort
     const remote = yield* git.remoteTags(raw.remote)
@@ -235,13 +173,13 @@ const pushTags = (raw: RawTag, pushed: TagPushed): Effect.Effect<TagPushed, TagR
   })
 
 const write = (
-  output: Result.Result<TagDecision, TagRefusal>,
-  raw: RawTag,
+  outcome: Result.Result<TagDecision, TagRefusal>,
+  raw: TagCommand,
 ): Effect.Effect<TagDecision, TagRefusal | PlanDeferredUnknown, GitPort | CycleStore> => {
-  if (Result.isFailure(output)) {
-    return Effect.fail(output.failure)
+  if (Result.isFailure(outcome)) {
+    return Effect.fail(outcome.failure)
   }
-  const decision = output.success
+  const decision = outcome.success
   return Effect.gen(function*() {
     yield* captureCycle(raw)
     return yield* Match.value(decision).pipe(
@@ -260,8 +198,6 @@ export const tagCell: Cell.Cell<
   WorkspaceStore | GitPort | CycleStore
 > = Cell.layer({
   read,
-  decode,
   decide: tagPackages,
-  encode,
   write,
 })

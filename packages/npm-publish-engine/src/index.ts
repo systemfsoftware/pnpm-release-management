@@ -1,25 +1,7 @@
 export { publishPackagesCell, PublishRequest } from './publish-packages.js'
+export type { PublishWorkflowDecision } from './publish-packages.workflow.js'
 export { publishStatusCell, StatusRequest } from './publish-status.js'
+export { StatusMode } from './publish-status.workflow.js'
+export { TrustComplete, TrustIdle, type TrustWorkflowDecision } from './split-dry-run.workflow.js'
 export { stageNpmTrustCell, TrustRequest } from './stage-npm-trust.js'
-export { StatusMode, StatusReport, StatusRow } from './status.schema.js'
-export {
-  type FakeCycle,
-  type FakeCycleEntry,
-  type FakeCycleSeed,
-  type FakeCycleWrite,
-  makeFakeCycleStore,
-} from './testing/FakeCycle.js'
-export { type FakeProcess, makeFakeProcess } from './testing/FakeProcess.js'
-export {
-  type FakePublishCall,
-  type FakeRegistry,
-  type FakeRegistrySeed,
-  type FakeRegistrySnapshot,
-  makeFakeRegistry,
-} from './testing/FakeRegistry.js'
-export {
-  type FakeMemberSeed,
-  type FakeWorkspace,
-  type FakeWorkspaceSeed,
-  makeFakeWorkspace,
-} from './testing/FakeWorkspace.js'
+export { PublishStatusRefusal, StatusReport, StatusRow } from './status.schema.js'

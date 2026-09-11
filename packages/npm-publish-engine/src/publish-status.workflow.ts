@@ -1,14 +1,18 @@
 import { Workflow } from '@systemfsoftware/effect-cell-types'
-import { PackageName, PackageVersion, StatusClass } from '@systemfsoftware/release-language'
+import { DecisionTypeId, PackageName, PackageVersion, StatusClass } from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import { StatusMode } from './status.schema.js'
+import type {
+  PublishStatusEmpty,
+  PublishStatusRefusal,
+  PublishStatusUnattested,
+  PublishStatusUnpublished,
+  PublishStatusUnreadable,
+} from './status.schema.js'
 
-const PublishStatusDecisionTypeId: unique symbol = Symbol.for(
-  '@systemfsoftware/npm-publish-engine/PublishStatusDecision',
-)
-type PublishStatusDecisionTypeId = typeof PublishStatusDecisionTypeId
+export const StatusMode = S.Literals(['report', 'check', 'preflight'])
+export type StatusMode = S.Schema.Type<typeof StatusMode>
 
 export const StatusEvaluationState = S.Struct({
   name: PackageName,
@@ -43,7 +47,7 @@ export class PublishStatusHealthy extends S.TaggedClass<PublishStatusHealthy>()(
     evaluations: S.Array(ScoredEvaluation),
   },
 ) {
-  readonly [PublishStatusDecisionTypeId] = PublishStatusDecisionTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
 export class PublishStatusOwed extends S.TaggedClass<PublishStatusOwed>()('PublishStatusOwed', {
@@ -52,88 +56,52 @@ export class PublishStatusOwed extends S.TaggedClass<PublishStatusOwed>()('Publi
   stuck: S.Int,
   evaluations: S.Array(ScoredEvaluation),
 }) {
-  readonly [PublishStatusDecisionTypeId] = PublishStatusDecisionTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
 export type PublishStatusWorkflowDecision = PublishStatusHealthy | PublishStatusOwed
 
-export class PublishStatusUnpublished extends S.TaggedError<PublishStatusUnpublished>()(
-  'PublishStatusUnpublished',
-  { packages: S.Array(PackageName) },
-) {}
-
-export class PublishStatusUnattested extends S.TaggedError<PublishStatusUnattested>()(
-  'PublishStatusUnattested',
-  { packages: S.Array(PackageName) },
-) {}
-
-export class PublishStatusUnreadable extends S.TaggedError<PublishStatusUnreadable>()(
-  'PublishStatusUnreadable',
-  { packages: S.Array(PackageName) },
-) {}
-
-export class PublishStatusEmpty extends S.TaggedError<PublishStatusEmpty>()('PublishStatusEmpty', {
-  members: S.Int,
-}) {}
-
-export type PublishStatusWorkflowRefusal =
-  | PublishStatusUnpublished
-  | PublishStatusUnattested
-  | PublishStatusUnreadable
-  | PublishStatusEmpty
-
 const EmptyCase = S.TaggedStruct('Empty', { members: S.Int })
-const UnreadableCase = S.TaggedStruct('Unreadable', { packages: S.Array(PackageName) })
-const UnpublishedCase = S.TaggedStruct('Unpublished', { packages: S.Array(PackageName) })
-const UnattestedCase = S.TaggedStruct('Unattested', { packages: S.Array(PackageName) })
+type EmptyCase = S.Schema.Type<typeof EmptyCase>
+
+const UnreadableCase = S.TaggedStruct('Unreadable', { packages: S.NonEmptyArray(PackageName) })
+type UnreadableCase = S.Schema.Type<typeof UnreadableCase>
+
+const UnpublishedCase = S.TaggedStruct('Unpublished', { packages: S.NonEmptyArray(PackageName) })
+type UnpublishedCase = S.Schema.Type<typeof UnpublishedCase>
+
+const UnattestedCase = S.TaggedStruct('Unattested', { packages: S.NonEmptyArray(PackageName) })
+type UnattestedCase = S.Schema.Type<typeof UnattestedCase>
+
 const HealthyCase = S.TaggedStruct('Healthy', {
   packages: S.Int,
   evaluations: S.Array(ScoredEvaluation),
 })
+type HealthyCase = S.Schema.Type<typeof HealthyCase>
+
 const OwedCase = S.TaggedStruct('Owed', {
   unpublished: S.Int,
   untrusted: S.Int,
   stuck: S.Int,
   evaluations: S.Array(ScoredEvaluation),
 })
+type OwedCase = S.Schema.Type<typeof OwedCase>
 
-const StatusCase = S.Union([
-  EmptyCase,
-  UnreadableCase,
-  UnpublishedCase,
-  UnattestedCase,
-  HealthyCase,
-  OwedCase,
-])
-type StatusCase = S.Schema.Type<typeof StatusCase>
+type StatusCase =
+  | EmptyCase
+  | UnreadableCase
+  | UnpublishedCase
+  | UnattestedCase
+  | HealthyCase
+  | OwedCase
 
-interface StatusTally {
-  readonly unpublished: number
-  readonly untrusted: number
-  readonly stuck: number
-  readonly unreadable: number
+const scoreOf = (evaluation: StatusEvaluationState): StatusClass => {
+  if (evaluation.npmLatest === undefined) return 'unpublished'
+  if (evaluation.reachable === false) return 'error'
+  if (evaluation.attested === false) return 'no-oidc'
+  if (evaluation.localVersion === evaluation.npmLatest) return 'ok'
+  return 'stuck'
 }
-
-const scoreEvaluation = (evaluation: StatusEvaluationState): ScoredEvaluation =>
-  Match.value(evaluation).pipe(
-    Match.when(
-      (candidate) => candidate.npmLatest === undefined,
-      (candidate) => ScoredEvaluation.make({ ...candidate, class: 'unpublished' }),
-    ),
-    Match.when(
-      (candidate) => candidate.reachable === false,
-      (candidate) => ScoredEvaluation.make({ ...candidate, class: 'error' }),
-    ),
-    Match.when(
-      (candidate) => candidate.attested === false,
-      (candidate) => ScoredEvaluation.make({ ...candidate, class: 'no-oidc' }),
-    ),
-    Match.when(
-      (candidate) => candidate.localVersion === candidate.npmLatest,
-      (candidate) => ScoredEvaluation.make({ ...candidate, class: 'ok' }),
-    ),
-    Match.orElse((candidate) => ScoredEvaluation.make({ ...candidate, class: 'stuck' })),
-  )
 
 const namesOf = (
   scored: ReadonlyArray<ScoredEvaluation>,
@@ -144,115 +112,72 @@ const namesOf = (
 const countOf = (scored: ReadonlyArray<ScoredEvaluation>, klass: StatusClass): number =>
   scored.filter((evaluation) => evaluation.class === klass).length
 
-const tallyOf = (scored: ReadonlyArray<ScoredEvaluation>): StatusTally => ({
-  unpublished: countOf(scored, 'unpublished'),
-  untrusted: countOf(scored, 'no-oidc'),
-  stuck: countOf(scored, 'stuck'),
-  unreadable: countOf(scored, 'error'),
-})
-
-const owedSumOf = (tally: StatusTally): number => tally.unpublished + tally.untrusted + tally.stuck + tally.unreadable
-
-const settledCaseOf = (scored: ReadonlyArray<ScoredEvaluation>, tally: StatusTally): StatusCase =>
-  Match.value(owedSumOf(tally) === 0).pipe(
-    Match.when(true, () => HealthyCase.make({ packages: scored.length, evaluations: [...scored] })),
-    Match.when(false, () =>
-      OwedCase.make({
-        unpublished: tally.unpublished,
-        untrusted: tally.untrusted,
-        stuck: tally.stuck,
-        evaluations: [...scored],
-      })),
-    Match.exhaustive,
-  )
-
-const checkAttestedCaseOf = (
-  scored: ReadonlyArray<ScoredEvaluation>,
-  tally: StatusTally,
-): StatusCase =>
-  Match.value(tally.untrusted > 0).pipe(
-    Match.when(true, () => UnattestedCase.make({ packages: [...namesOf(scored, 'no-oidc')] })),
-    Match.when(false, () => settledCaseOf(scored, tally)),
-    Match.exhaustive,
-  )
-
-const checkUnpublishedCaseOf = (
-  scored: ReadonlyArray<ScoredEvaluation>,
-  tally: StatusTally,
-): StatusCase =>
-  Match.value(tally.unpublished > 0).pipe(
-    Match.when(true, () => UnpublishedCase.make({ packages: [...namesOf(scored, 'unpublished')] })),
-    Match.when(false, () => checkAttestedCaseOf(scored, tally)),
-    Match.exhaustive,
-  )
-
-const checkCaseOf = (scored: ReadonlyArray<ScoredEvaluation>, tally: StatusTally): StatusCase =>
-  Match.value(tally.unreadable > 0).pipe(
-    Match.when(true, () => UnreadableCase.make({ packages: [...namesOf(scored, 'error')] })),
-    Match.when(false, () => checkUnpublishedCaseOf(scored, tally)),
-    Match.exhaustive,
-  )
-
-const preflightUnpublishedCaseOf = (
-  scored: ReadonlyArray<ScoredEvaluation>,
-  tally: StatusTally,
-): StatusCase =>
-  Match.value(tally.unpublished > 0).pipe(
-    Match.when(true, () => UnpublishedCase.make({ packages: [...namesOf(scored, 'unpublished')] })),
-    Match.when(false, () => settledCaseOf(scored, tally)),
-    Match.exhaustive,
-  )
-
-const preflightCaseOf = (
-  scored: ReadonlyArray<ScoredEvaluation>,
-  tally: StatusTally,
-): StatusCase =>
-  Match.value(tally.unreadable > 0).pipe(
-    Match.when(true, () => UnreadableCase.make({ packages: [...namesOf(scored, 'error')] })),
-    Match.when(false, () => preflightUnpublishedCaseOf(scored, tally)),
-    Match.exhaustive,
-  )
-
-const scoredCaseOf = (command: StatusCommand): StatusCase => {
-  const scored = command.evaluations.map((evaluation) => scoreEvaluation(evaluation))
-  const tally = tallyOf(scored)
-  return Match.value(command.mode).pipe(
-    Match.when('report', () => settledCaseOf(scored, tally)),
-    Match.when('check', () => checkCaseOf(scored, tally)),
-    Match.when('preflight', () => preflightCaseOf(scored, tally)),
-    Match.exhaustive,
-  )
+const nonEmptyOf = (
+  names: ReadonlyArray<PackageName>,
+): readonly [PackageName, ...PackageName[]] | undefined => {
+  const first = names[0]
+  if (first === undefined) return undefined
+  return [first, ...names.slice(1)]
 }
 
-const classify = (command: StatusCommand): StatusCase =>
-  Match.value(command.evaluations.length === 0).pipe(
-    Match.when(true, () => EmptyCase.make({ members: 0 })),
-    Match.when(false, () => scoredCaseOf(command)),
-    Match.exhaustive,
-  )
+const statusCaseOf = (command: StatusCommand): StatusCase => {
+  if (command.evaluations.length === 0) return EmptyCase.make({ members: 0 })
+  const scored = command.evaluations.map((evaluation) => ({
+    ...evaluation,
+    class: scoreOf(evaluation),
+  }))
+  const unreadable = nonEmptyOf(namesOf(scored, 'error'))
+  if (command.mode !== 'report' && unreadable !== undefined) {
+    return UnreadableCase.make({ packages: unreadable })
+  }
+  const unpublished = nonEmptyOf(namesOf(scored, 'unpublished'))
+  if (command.mode !== 'report' && unpublished !== undefined) {
+    return UnpublishedCase.make({ packages: unpublished })
+  }
+  const unattested = nonEmptyOf(namesOf(scored, 'no-oidc'))
+  if (command.mode === 'check' && unattested !== undefined) {
+    return UnattestedCase.make({ packages: unattested })
+  }
+  const owed = countOf(scored, 'unpublished') + countOf(scored, 'no-oidc') +
+    countOf(scored, 'stuck') + countOf(scored, 'error')
+  if (owed === 0) return HealthyCase.make({ packages: scored.length, evaluations: scored })
+  return OwedCase.make({
+    unpublished: countOf(scored, 'unpublished'),
+    untrusted: countOf(scored, 'no-oidc'),
+    stuck: countOf(scored, 'stuck'),
+    evaluations: scored,
+  })
+}
 
 export const publishStatus = Workflow.make(
   StatusCommand,
-  (command): Result.Result<PublishStatusWorkflowDecision, PublishStatusWorkflowRefusal> =>
-    Match.value(classify(command)).pipe(
-      Match.tag('Empty', (empty) => Result.fail(PublishStatusEmpty.make({ members: empty.members }))),
+  (command): Result.Result<PublishStatusWorkflowDecision, PublishStatusRefusal> =>
+    Match.value(statusCaseOf(command)).pipe(
+      Match.tag(
+        'Empty',
+        (empty): Result.Result<never, PublishStatusEmpty> =>
+          Result.fail({ _tag: 'PublishStatusEmpty', members: empty.members }),
+      ),
       Match.tag(
         'Unreadable',
-        (unreadable) => Result.fail(PublishStatusUnreadable.make({ packages: [...unreadable.packages] })),
+        (unreadable): Result.Result<never, PublishStatusUnreadable> =>
+          Result.fail({ _tag: 'PublishStatusUnreadable', packages: unreadable.packages }),
       ),
       Match.tag(
         'Unpublished',
-        (unpublished) => Result.fail(PublishStatusUnpublished.make({ packages: [...unpublished.packages] })),
+        (unpublished): Result.Result<never, PublishStatusUnpublished> =>
+          Result.fail({ _tag: 'PublishStatusUnpublished', packages: unpublished.packages }),
       ),
       Match.tag(
         'Unattested',
-        (unattested) => Result.fail(PublishStatusUnattested.make({ packages: [...unattested.packages] })),
+        (unattested): Result.Result<never, PublishStatusUnattested> =>
+          Result.fail({ _tag: 'PublishStatusUnattested', packages: unattested.packages }),
       ),
       Match.tag('Healthy', (healthy) =>
         Result.succeed(
           PublishStatusHealthy.make({
             packages: healthy.packages,
-            evaluations: [...healthy.evaluations],
+            evaluations: healthy.evaluations,
           }),
         )),
       Match.tag('Owed', (owed) =>
@@ -261,7 +186,7 @@ export const publishStatus = Workflow.make(
             unpublished: owed.unpublished,
             untrusted: owed.untrusted,
             stuck: owed.stuck,
-            evaluations: [...owed.evaluations],
+            evaluations: owed.evaluations,
           }),
         )),
       Match.exhaustive,

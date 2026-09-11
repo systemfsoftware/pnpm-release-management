@@ -3,10 +3,15 @@ import {
   Count,
   FsPath,
   GitRef,
+  OwnerName,
   PrTitle,
   PullRequestAbsent,
   PullRequestFound,
   PullRequestNumber,
+  ReleaseLabel,
+  RemoteName,
+  RepoName,
+  RepoSlug,
 } from '@systemfsoftware/release-language'
 import { Result } from 'effect'
 import * as Match from 'effect/Match'
@@ -39,10 +44,21 @@ const bodyIssueArb = fc.option(fc.string({ minLength: 1 }).map((path) => FsPath.
   nil: undefined,
 })
 
+const slugPartArb = fc.stringMatching(/^[a-z][a-z0-9-]{0,10}$/)
+
+const slugArb = fc
+  .tuple(slugPartArb, slugPartArb)
+  .map(([owner, repo]) => RepoSlug.make({ owner: OwnerName.make(owner), repo: RepoName.make(repo) }))
+
+const remoteArb = slugPartArb.map((remote) => RemoteName.make(remote))
+
+const labelsArb = fc
+  .array(slugPartArb.map((label) => ReleaseLabel.make(label)), { maxLength: 3 })
+
 it.prop(
   '∀state_PullRequest_≡OpensRefreshesCloses',
-  [pendingArb, refsArb, existingArb, titleArb, bodyArb, bodyIssueArb],
-  ([pending, refs, existing, title, body, bodyIssue]) => {
+  [pendingArb, refsArb, existingArb, titleArb, bodyArb, bodyIssueArb, slugArb, remoteArb, labelsArb],
+  ([pending, refs, existing, title, body, bodyIssue, slug, remote, labels]) => {
     const outcome = pullRequest(
       PullRequestCommand.make({
         pending,
@@ -52,6 +68,9 @@ it.prop(
         title,
         body,
         bodyIssue,
+        slug,
+        remote,
+        labels,
       }),
     )
     if (bodyIssue !== undefined) {
@@ -59,8 +78,8 @@ it.prop(
         return false
       }
       return Match.value(outcome.failure).pipe(
-        Match.tag('BodyFileUnreadable', (bad) => bad.path === bodyIssue),
-        Match.tag('HeadRefInvalid', () => false),
+        Match.tag('PullRequestBodyUnreadable', (bad) => bad.path === bodyIssue),
+        Match.tag('PullRequestHeadInvalid', () => false),
         Match.exhaustive,
       )
     }
@@ -69,8 +88,8 @@ it.prop(
         return false
       }
       return Match.value(outcome.failure).pipe(
-        Match.tag('HeadRefInvalid', (bad) => bad.branch === refs.branch),
-        Match.tag('BodyFileUnreadable', () => false),
+        Match.tag('PullRequestHeadInvalid', (bad) => bad.branch === refs.branch),
+        Match.tag('PullRequestBodyUnreadable', () => false),
         Match.exhaustive,
       )
     }
@@ -86,30 +105,30 @@ it.prop(
     if (pending > 0) {
       if (existingIsFound) {
         return Match.value(decision).pipe(
-          Match.tag('PullRequestReleaseRefreshed', (refreshed) => {
+          Match.tag('PullRequestUpdated', (refreshed) => {
             return Match.value(existing).pipe(
               Match.tag('PullRequestFound', (found) => refreshed.number === found.number),
               Match.tag('PullRequestAbsent', () => false),
               Match.exhaustive,
             )
           }),
-          Match.tag('PullRequestReleaseOpened', () => false),
-          Match.tag('PullRequestReleaseClosed', () => false),
-          Match.tag('PullRequestReleaseVacant', () => false),
+          Match.tag('PullRequestCreated', () => false),
+          Match.tag('PullRequestClosed', () => false),
+          Match.tag('PullRequestVacant', () => false),
           Match.exhaustive,
         )
       }
       return Match.value(decision).pipe(
-        Match.tag('PullRequestReleaseVacant', (vacant) => vacant.branch === refs.branch),
-        Match.tag('PullRequestReleaseOpened', () => false),
-        Match.tag('PullRequestReleaseRefreshed', () => false),
-        Match.tag('PullRequestReleaseClosed', () => false),
+        Match.tag('PullRequestVacant', (vacant) => vacant.branch === refs.branch),
+        Match.tag('PullRequestCreated', () => false),
+        Match.tag('PullRequestUpdated', () => false),
+        Match.tag('PullRequestClosed', () => false),
         Match.exhaustive,
       )
     }
     if (existingIsFound) {
       return Match.value(decision).pipe(
-        Match.tag('PullRequestReleaseClosed', (closed) => {
+        Match.tag('PullRequestClosed', (closed) => {
           const numberMatches = Match.value(existing).pipe(
             Match.tag('PullRequestFound', (found) => closed.number === found.number),
             Match.tag('PullRequestAbsent', () => false),
@@ -118,19 +137,19 @@ it.prop(
           if (numberMatches === false) {
             return false
           }
-          return closed.branch === refs.branch
+          return closed.branch.branch === refs.branch
         }),
-        Match.tag('PullRequestReleaseOpened', () => false),
-        Match.tag('PullRequestReleaseRefreshed', () => false),
-        Match.tag('PullRequestReleaseVacant', () => false),
+        Match.tag('PullRequestCreated', () => false),
+        Match.tag('PullRequestUpdated', () => false),
+        Match.tag('PullRequestVacant', () => false),
         Match.exhaustive,
       )
     }
     return Match.value(decision).pipe(
-      Match.tag('PullRequestReleaseVacant', (vacant) => vacant.branch === refs.branch),
-      Match.tag('PullRequestReleaseOpened', () => false),
-      Match.tag('PullRequestReleaseRefreshed', () => false),
-      Match.tag('PullRequestReleaseClosed', () => false),
+      Match.tag('PullRequestVacant', (vacant) => vacant.branch === refs.branch),
+      Match.tag('PullRequestCreated', () => false),
+      Match.tag('PullRequestUpdated', () => false),
+      Match.tag('PullRequestClosed', () => false),
       Match.exhaustive,
     )
   },

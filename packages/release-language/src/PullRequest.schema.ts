@@ -38,56 +38,6 @@ export const PullRequestSummary = S.Struct({
 })
 export type PullRequestSummary = S.Schema.Type<typeof PullRequestSummary>
 
-const PullRequestDecisionTypeId: unique symbol = Symbol.for(
-  '@systemfsoftware/pnpm-release-management/PullRequestDecision',
-)
-type PullRequestDecisionTypeId = typeof PullRequestDecisionTypeId
-
-export class PullRequestCreated extends S.TaggedClass<PullRequestCreated>()(
-  'PullRequestCreated',
-  {
-    number: PullRequestNumber,
-  },
-) {
-  readonly [PullRequestDecisionTypeId] = PullRequestDecisionTypeId
-}
-
-export class PullRequestUpdated extends S.TaggedClass<PullRequestUpdated>()(
-  'PullRequestUpdated',
-  {
-    number: PullRequestNumber,
-  },
-) {
-  readonly [PullRequestDecisionTypeId] = PullRequestDecisionTypeId
-}
-
-export class PullRequestClosed extends S.TaggedClass<PullRequestClosed>()(
-  'PullRequestClosed',
-  {
-    number: PullRequestNumber,
-    branch: BranchDeleted,
-  },
-) {
-  readonly [PullRequestDecisionTypeId] = PullRequestDecisionTypeId
-}
-
-export class PullRequestVacant extends S.TaggedClass<PullRequestVacant>()(
-  'PullRequestVacant',
-  {
-    branch: GitRef,
-  },
-) {
-  readonly [PullRequestDecisionTypeId] = PullRequestDecisionTypeId
-}
-
-export const PullRequestDecision = S.Union([
-  PullRequestCreated,
-  PullRequestUpdated,
-  PullRequestClosed,
-  PullRequestVacant,
-])
-export type PullRequestDecision = S.Schema.Type<typeof PullRequestDecision>
-
 export const PullRequestBodyUnreadable = S.TaggedStruct(
   'PullRequestBodyUnreadable',
   {

@@ -13,19 +13,18 @@ const describeFailure = (cause: unknown): string => {
   return 'unknown error'
 }
 
-export const program: <Name extends string, Input, ContextInput, E, R>(
+export const program = <Name extends string, Input, ContextInput, E, R>(
   command: Command.Command<Name, Input, ContextInput, E, R>,
   version: string,
-) => Effect.Effect<void, never, R | Reporter | NodeServices.NodeServices> = (
-  command,
-  version,
-) =>
-  Effect.suspend(() => Command.run(command, { version, renderErrors: false })).pipe(
-    Effect.matchEffect({
-      onFailure: (cause) =>
-        Effect.flatMap(Reporter, (reporter) =>
-          Effect.andThen(reporter.annotateError(describeFailure(cause)), () => reporter.exitCode(1))),
-      onSuccess: () =>
-        Effect.void,
-    }),
-  )
+): Effect.Effect<void, never, R | Reporter | NodeServices.NodeServices> =>
+  Effect.gen(function*() {
+    const reporter = yield* Reporter
+    yield* Command.run(command, { version, renderErrors: false }).pipe(
+      Effect.catch((failure) =>
+        Effect.gen(function*() {
+          yield* reporter.annotateError(describeFailure(failure))
+          yield* reporter.exitCode(1)
+        })
+      ),
+    )
+  })

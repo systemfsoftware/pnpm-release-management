@@ -1,5 +1,14 @@
 import { it } from '@effect/vitest'
-import { CycleEntry, PackageName, PackageVersion, RelativePath, ReleaseTag } from '@systemfsoftware/release-language'
+import {
+  CycleEntry,
+  OwnerName,
+  PackageName,
+  PackageVersion,
+  RelativePath,
+  ReleaseTag,
+  RepoName,
+  RepoSlug,
+} from '@systemfsoftware/release-language'
 import { Result } from 'effect'
 import * as Match from 'effect/Match'
 import * as fc from 'effect/testing/FastCheck'
@@ -39,6 +48,13 @@ const freshTagArb = fc
   )
   .map(([name, version]) => ReleaseTag.make(`zz-${name}@v${version}.0.0`))
 
+const slugArb = fc
+  .tuple(
+    fc.stringMatching(/^[a-z][a-z0-9-]{0,10}$/),
+    fc.stringMatching(/^[a-z][a-z0-9-]{0,10}$/),
+  )
+  .map(([owner, repo]) => RepoSlug.make({ owner: OwnerName.make(owner), repo: RepoName.make(repo) }))
+
 const inputArb = fc
   .record({
     items: fc.array(
@@ -47,8 +63,9 @@ const inputArb = fc
     ),
     assert: fc.boolean(),
     preview: fc.boolean(),
+    slug: slugArb,
   })
-  .chain(({ items, assert, preview }) => {
+  .chain(({ items, assert, preview, slug }) => {
     const itemTags = items.map((item) => item.entry.tag)
     return fc
       .record({
@@ -62,6 +79,7 @@ const inputArb = fc
         items,
         assert,
         preview,
+        slug,
         existing: [
           ...itemTags.filter((_, index) => selection[index] === true),
           ...extras,
@@ -89,11 +107,11 @@ it.prop('∀notes_GithubRelease_≡CreatesFromChangelogs', [inputArb], ([input])
       return false
     }
     return Match.value(outcome.success).pipe(
-      Match.tag('GithubReleasesEmpty', (empty) => empty.cycle === 0),
-      Match.tag('GithubReleasesCreated', () => false),
-      Match.tag('GithubReleasesSkipped', () => false),
-      Match.tag('GithubReleasesAsserted', () => false),
-      Match.tag('GithubReleasesPreviewed', () => false),
+      Match.tag('GithubReleaseEmpty', (empty) => empty.cycle === 0),
+      Match.tag('GithubReleaseCreated', () => false),
+      Match.tag('GithubReleaseSkipped', () => false),
+      Match.tag('GithubReleaseAsserted', () => false),
+      Match.tag('GithubReleasePreview', () => false),
       Match.exhaustive,
     )
   }
@@ -103,13 +121,13 @@ it.prop('∀notes_GithubRelease_≡CreatesFromChangelogs', [inputArb], ([input])
       return false
     }
     return Match.value(outcome.failure).pipe(
-      Match.tag('ChangelogFileMissing', (bad) => {
+      Match.tag('ReleaseChangelogMissing', (bad) => {
         if (bad.package !== missing.entry.name) {
           return false
         }
         return bad.changelog === missing.entry.changelog
       }),
-      Match.tag('ChangelogFileEmpty', () => false),
+      Match.tag('ReleaseChangelogEmpty', () => false),
       Match.exhaustive,
     )
   }
@@ -121,13 +139,13 @@ it.prop('∀notes_GithubRelease_≡CreatesFromChangelogs', [inputArb], ([input])
       return false
     }
     return Match.value(outcome.failure).pipe(
-      Match.tag('ChangelogFileEmpty', (bad) => {
+      Match.tag('ReleaseChangelogEmpty', (bad) => {
         if (bad.package !== blank.entry.name) {
           return false
         }
         return bad.changelog === blank.entry.changelog
       }),
-      Match.tag('ChangelogFileMissing', () => false),
+      Match.tag('ReleaseChangelogMissing', () => false),
       Match.exhaustive,
     )
   }
@@ -137,21 +155,21 @@ it.prop('∀notes_GithubRelease_≡CreatesFromChangelogs', [inputArb], ([input])
   const decision = outcome.success
   if (input.assert) {
     return Match.value(decision).pipe(
-      Match.tag('GithubReleasesAsserted', (asserted) => asserted.count === input.items.length),
-      Match.tag('GithubReleasesCreated', () => false),
-      Match.tag('GithubReleasesSkipped', () => false),
-      Match.tag('GithubReleasesPreviewed', () => false),
-      Match.tag('GithubReleasesEmpty', () => false),
+      Match.tag('GithubReleaseAsserted', (asserted) => asserted.count === input.items.length),
+      Match.tag('GithubReleaseCreated', () => false),
+      Match.tag('GithubReleaseSkipped', () => false),
+      Match.tag('GithubReleasePreview', () => false),
+      Match.tag('GithubReleaseEmpty', () => false),
       Match.exhaustive,
     )
   }
   if (input.preview) {
     return Match.value(decision).pipe(
-      Match.tag('GithubReleasesPreviewed', (previewed) => tagsEqual([...previewed.tags], tags)),
-      Match.tag('GithubReleasesCreated', () => false),
-      Match.tag('GithubReleasesSkipped', () => false),
-      Match.tag('GithubReleasesAsserted', () => false),
-      Match.tag('GithubReleasesEmpty', () => false),
+      Match.tag('GithubReleasePreview', (previewed) => tagsEqual([...previewed.tags], tags)),
+      Match.tag('GithubReleaseCreated', () => false),
+      Match.tag('GithubReleaseSkipped', () => false),
+      Match.tag('GithubReleaseAsserted', () => false),
+      Match.tag('GithubReleaseEmpty', () => false),
       Match.exhaustive,
     )
   }
@@ -160,20 +178,20 @@ it.prop('∀notes_GithubRelease_≡CreatesFromChangelogs', [inputArb], ([input])
     .map((item) => item.entry.tag)
   if (remaining.length === 0) {
     return Match.value(decision).pipe(
-      Match.tag('GithubReleasesSkipped', (skipped) => tagsEqual([...skipped.tags], tags)),
-      Match.tag('GithubReleasesCreated', () => false),
-      Match.tag('GithubReleasesAsserted', () => false),
-      Match.tag('GithubReleasesPreviewed', () => false),
-      Match.tag('GithubReleasesEmpty', () => false),
+      Match.tag('GithubReleaseSkipped', (skipped) => tagsEqual([...skipped.tags], tags)),
+      Match.tag('GithubReleaseCreated', () => false),
+      Match.tag('GithubReleaseAsserted', () => false),
+      Match.tag('GithubReleasePreview', () => false),
+      Match.tag('GithubReleaseEmpty', () => false),
       Match.exhaustive,
     )
   }
   return Match.value(decision).pipe(
-    Match.tag('GithubReleasesPreviewed', (previewed) => tagsEqual([...previewed.tags], remaining)),
-    Match.tag('GithubReleasesCreated', () => false),
-    Match.tag('GithubReleasesSkipped', () => false),
-    Match.tag('GithubReleasesAsserted', () => false),
-    Match.tag('GithubReleasesEmpty', () => false),
+    Match.tag('GithubReleasePreview', (previewed) => tagsEqual([...previewed.tags], remaining)),
+    Match.tag('GithubReleaseCreated', () => false),
+    Match.tag('GithubReleaseSkipped', () => false),
+    Match.tag('GithubReleaseAsserted', () => false),
+    Match.tag('GithubReleaseEmpty', () => false),
     Match.exhaustive,
   )
 })

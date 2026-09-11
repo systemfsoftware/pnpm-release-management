@@ -10,18 +10,17 @@ import {
 } from '@systemfsoftware/release-language'
 import * as S from 'effect/Schema'
 
+const VersionTarget = S.Struct({
+  file: RelativePath,
+  surface: VersionSurface,
+})
+
 export const BumpInput = S.Struct({
   strategy: S.Literals(['pnpm', 'surfaces']),
   changelogDir: RelativePath,
   rootChangelog: S.optional(RelativePath),
-  manifest: S.Struct({
-    file: RelativePath,
-    surface: VersionSurface,
-  }),
-  surfaces: S.Array(S.Struct({
-    file: RelativePath,
-    surface: VersionSurface,
-  })),
+  manifest: VersionTarget,
+  surfaces: S.Array(VersionTarget),
 })
 export type BumpInput = S.Schema.Type<typeof BumpInput>
 
@@ -34,6 +33,8 @@ export class BumpCommand extends S.TaggedClass<BumpCommand>()(
     manifestVersion: PackageVersion,
     changelogDir: RelativePath,
     rootChangelog: S.optional(RelativePath),
+    manifest: VersionTarget,
+    surfaces: S.Array(VersionTarget),
     consolidated: Bump,
     consolidatedNext: PackageVersion,
     nexts: S.Array(S.Struct({

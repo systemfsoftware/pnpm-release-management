@@ -1,26 +1,21 @@
 import { NodeRuntime, NodeServices } from '@effect/platform-node'
-import { program, Reporter, ReporterLive } from '@systemfsoftware/cli-adapter'
+import { program, ReporterLive } from '@systemfsoftware/cli-adapter'
 import { Cell } from '@systemfsoftware/effect-cell-types'
 import { GitLive } from '@systemfsoftware/git-adapter'
 import { ForgeConfig, ForgeLive } from '@systemfsoftware/github-adapter'
 import {
   githubReleaseCell,
-  GithubReleaseRequest,
   planCell,
-  PlanRequest,
   pullRequestCell,
-  PullRequestRequest,
+  type PullRequestDecision,
   tagCell,
-  TagRequest,
 } from '@systemfsoftware/github-release-engine'
 import { ProcessLive } from '@systemfsoftware/process-adapter'
 import {
   GitPort,
   type GitRef,
   type PrTitle,
-  type PullRequestDecision,
   type PullRequestRefusal,
-  type RelativePath,
   type ReleaseConfig,
   ReleaseConfigStore,
   RemoteName,
@@ -35,26 +30,37 @@ import {
   SurfaceStoreLive,
   WorkspaceStoreLive,
 } from '@systemfsoftware/workspace-adapter'
-import { Effect, FileSystem, Layer, Option, Path } from 'effect'
+import { Effect, Layer, Option } from 'effect'
 import * as Match from 'effect/Match'
 import * as S from 'effect/Schema'
 import { Command, Flag } from 'effect/unstable/cli'
-import { refuse, tell } from './Lines.js'
-import { planFailureText, prFailureText, releaseFailureText, tagFailureText } from './Refusal.js'
-import { InvalidFlags } from './Refusal.schema.js'
-import type { BoundaryRefusal, VersionStageRefused } from './Refusal.schema.js'
-import { planLines, prLines, releaseLines, tagLines, versionLines } from './Render.js'
-import { bumpInput, CHANGESET_FALLBACK, workspaceOf } from './Workspace.js'
+import {
+  bumpInput,
+  CHANGESET_FALLBACK,
+  planRequestOf,
+  pullRequestRequestOf,
+  releaseRequestOf,
+  tagRequestOf,
+  workspaceOf,
+} from './boundary.js'
+import { VersionStageRefused } from './boundary.schema.js'
+import {
+  renderPlan,
+  renderPlanRefusal,
+  renderPullRequest,
+  renderPullRequestRefusal,
+  renderRelease,
+  renderReleaseRefusal,
+  renderTag,
+  renderTagRefusal,
+  renderVersion,
+} from './render.js'
 
 const VERSION = '0.0.0'
 
 const DEFAULT_REMOTE: RemoteName = RemoteName.make('origin')
 
-const workspaceAtEdge: Effect.Effect<
-  { readonly root: RepoRoot; readonly changesetDir: RelativePath },
-  never,
-  FileSystem.FileSystem | Path.Path | ReleaseConfigStore
-> = Effect.gen(function*() {
+const workspaceAtEdge = Effect.gen(function*() {
   const cwd = yield* Effect.sync(() => process.cwd())
   const root = yield* S.decodeUnknownEffect(RepoRoot)(cwd).pipe(Effect.orDie)
   const changesetDir = yield* Effect.flatMap(
@@ -94,35 +100,6 @@ const MainLive = Layer.unwrap(
   ),
 )
 
-const decodeFlags = <A, E extends { readonly message: string }>(
-  decode: Effect.Effect<A, E>,
-): Effect.Effect<A, InvalidFlags> =>
-  decode.pipe(Effect.mapError((issue) => InvalidFlags.make({ reason: issue.message })))
-
-const reporting = <E, R>(
-  work: Effect.Effect<void, E, R>,
-  text: (refusal: E) => string,
-): Effect.Effect<void, never, R | Reporter> =>
-  Effect.matchEffect(work, {
-    onFailure: (refusal) => refuse(text(refusal)),
-    onSuccess: () => Effect.void,
-  })
-
-const versionStage = (
-  config: ReleaseConfig,
-): Effect.Effect<
-  void,
-  BoundaryRefusal | VersionStageRefused,
-  Reporter | FileSystem.FileSystem
-> =>
-  Cell.run(
-    Cell.provide(bumpCell, MainLive),
-    bumpInput(config.changelogDir, config.versioning),
-  ).pipe(
-    Effect.mapError((refusal): VersionStageRefused => ({ _tag: 'VersionStageRefused', refusal })),
-    Effect.flatMap((decision) => tell(versionLines(decision))),
-  )
-
 const landVersion = (
   decision: PullRequestDecision,
   branch: GitRef,
@@ -134,11 +111,12 @@ const landVersion = (
     yield* git.pushBranch(branch, DEFAULT_REMOTE)
   })
   return Match.value(decision).pipe(
-    Match.tag('PullRequestCreated', () => land),
-    Match.tag('PullRequestUpdated', () => land),
-    Match.tag('PullRequestClosed', () => Effect.void),
-    Match.tag('PullRequestVacant', () => Effect.void),
-    Match.exhaustive,
+    Match.tagsExhaustive({
+      PullRequestCreated: () => land,
+      PullRequestUpdated: () => land,
+      PullRequestClosed: () => Effect.void,
+      PullRequestVacant: () => Effect.void,
+    }),
   )
 }
 
@@ -147,22 +125,16 @@ const plan = Command.make('plan', {
   output: Flag.string('output').pipe(Flag.optional),
   remote: Flag.string('remote').pipe(Flag.optional),
   config: Flag.string('config').pipe(Flag.optional),
-}, ({ deferred, output, remote, config }) =>
-  reporting(
-    Effect.gen(function*() {
-      const workspace = yield* workspaceOf(config)
-      const request = yield* decodeFlags(
-        S.decodeUnknownEffect(PlanRequest)({
-          deferred: Option.getOrUndefined(deferred),
-          remote: Option.getOrUndefined(remote),
-          changelogDir: workspace.config.changelogDir,
-        }),
-      )
-      const report = yield* Cell.run(Cell.provide(planCell, MainLive), request)
-      yield* tell(planLines(report, Option.getOrUndefined(output)))
-    }),
-    planFailureText,
-  ))
+}, (flags) =>
+  Effect.gen(function*() {
+    const workspace = yield* workspaceOf(flags.config)
+    const request = yield* planRequestOf(workspace, {
+      deferred: Option.getOrUndefined(flags.deferred),
+      remote: Option.getOrUndefined(flags.remote),
+    })
+    const report = yield* Cell.run(planCell, request)
+    yield* renderPlan(report, Option.getOrUndefined(flags.output))
+  }).pipe(Effect.catch(renderPlanRefusal)))
 
 const tag = Command.make('tag', {
   dryRun: Flag.boolean('dry-run').pipe(Flag.withDefault(false)),
@@ -173,28 +145,22 @@ const tag = Command.make('tag', {
   output: Flag.string('output').pipe(Flag.optional),
   remote: Flag.string('remote').pipe(Flag.optional),
   config: Flag.string('config').pipe(Flag.optional),
-}, ({ dryRun, json, captured, capturedFile, exclude, output, remote, config }) =>
-  reporting(
-    Effect.gen(function*() {
-      const workspace = yield* workspaceOf(config)
-      const outputPath = Option.getOrUndefined(output)
-      const request = yield* decodeFlags(
-        S.decodeUnknownEffect(TagRequest)({
-          captured: Option.getOrUndefined(captured),
-          capturedFile: Option.getOrUndefined(capturedFile),
-          exclude: Option.getOrUndefined(exclude),
-          output: outputPath,
-          remote: Option.getOrUndefined(remote),
-          dryRun,
-          json,
-          changelogDir: workspace.config.changelogDir,
-        }),
-      )
-      const decision = yield* Cell.run(Cell.provide(tagCell, MainLive), request)
-      yield* tell(tagLines(decision, { output: outputPath, json, dryRun }))
-    }),
-    tagFailureText,
-  ))
+}, (flags) =>
+  Effect.gen(function*() {
+    const workspace = yield* workspaceOf(flags.config)
+    const output = Option.getOrUndefined(flags.output)
+    const request = yield* tagRequestOf(workspace, {
+      captured: Option.getOrUndefined(flags.captured),
+      capturedFile: Option.getOrUndefined(flags.capturedFile),
+      exclude: Option.getOrUndefined(flags.exclude),
+      output,
+      remote: Option.getOrUndefined(flags.remote),
+      dryRun: flags.dryRun,
+      json: flags.json,
+    })
+    const decision = yield* Cell.run(tagCell, request)
+    yield* renderTag(decision, { output, json: flags.json, dryRun: flags.dryRun })
+  }).pipe(Effect.catch(renderTagRefusal)))
 
 const releaseCommand = Command.make('release', {
   dryRun: Flag.boolean('dry-run').pipe(Flag.withDefault(false)),
@@ -202,24 +168,18 @@ const releaseCommand = Command.make('release', {
   captured: Flag.string('captured').pipe(Flag.optional),
   capturedFile: Flag.string('captured-file').pipe(Flag.optional),
   config: Flag.string('config').pipe(Flag.optional),
-}, ({ dryRun, assert, captured, capturedFile, config }) =>
-  reporting(
-    Effect.gen(function*() {
-      const workspace = yield* workspaceOf(config)
-      const request = yield* decodeFlags(
-        S.decodeUnknownEffect(GithubReleaseRequest)({
-          captured: Option.getOrUndefined(captured),
-          capturedFile: Option.getOrUndefined(capturedFile),
-          assert,
-          dryRun,
-          changelogDir: workspace.config.changelogDir,
-        }),
-      )
-      const decision = yield* Cell.run(Cell.provide(githubReleaseCell, MainLive), request)
-      yield* tell(releaseLines(decision))
-    }),
-    releaseFailureText,
-  ))
+}, (flags) =>
+  Effect.gen(function*() {
+    const workspace = yield* workspaceOf(flags.config)
+    const request = yield* releaseRequestOf(workspace, {
+      captured: Option.getOrUndefined(flags.captured),
+      capturedFile: Option.getOrUndefined(flags.capturedFile),
+      assert: flags.assert,
+      dryRun: flags.dryRun,
+    })
+    const decision = yield* Cell.run(githubReleaseCell, request)
+    yield* renderRelease(decision)
+  }).pipe(Effect.catch(renderReleaseRefusal)))
 
 const pr = Command.make('pr', {
   title: Flag.string('title').pipe(Flag.optional),
@@ -228,42 +188,25 @@ const pr = Command.make('pr', {
   base: Flag.string('base').pipe(Flag.optional),
   branch: Flag.string('branch').pipe(Flag.optional),
   config: Flag.string('config').pipe(Flag.optional),
-}, ({ title, body, bodyFile: bodyFileFlag, base, branch, config }) =>
-  reporting(
-    Effect.gen(function*() {
-      const path = yield* Path.Path
-      const workspace = yield* workspaceOf(config)
-      const cwd = yield* Effect.sync(() => process.cwd())
-      const bodyFile = Option.match(bodyFileFlag, {
-        onNone: (): string | undefined => undefined,
-        onSome: (file) => path.relative(cwd, path.resolve(cwd, file)),
-      })
-      const bodyValue = Option.match(body, {
-        onNone: (): string | undefined =>
-          Option.match(Option.fromNullishOr(bodyFile), {
-            onNone: () => workspace.config.pr.body,
-            onSome: (): string | undefined => undefined,
-          }),
-        onSome: (given) => given,
-      })
-      const request = yield* decodeFlags(
-        S.decodeUnknownEffect(PullRequestRequest)({
-          title: Option.getOrElse(title, () => workspace.config.pr.title),
-          body: bodyValue,
-          bodyFile,
-          base: Option.getOrElse(base, () => workspace.config.base),
-          branch: Option.getOrElse(branch, () => workspace.config.branch),
-          remote: undefined,
-          labels: ['release'],
-        }),
-      )
-      const decision = yield* Cell.run(Cell.provide(pullRequestCell, MainLive), request)
-      yield* versionStage(workspace.config)
-      yield* tell(prLines(decision))
-      yield* landVersion(decision, request.branch, request.title)
-    }),
-    prFailureText,
-  ))
+}, (flags) =>
+  Effect.gen(function*() {
+    const workspace = yield* workspaceOf(flags.config)
+    const request = yield* pullRequestRequestOf(workspace, {
+      title: Option.getOrUndefined(flags.title),
+      body: Option.getOrUndefined(flags.body),
+      bodyFile: Option.getOrUndefined(flags.bodyFile),
+      base: Option.getOrUndefined(flags.base),
+      branch: Option.getOrUndefined(flags.branch),
+    })
+    const decision = yield* Cell.run(pullRequestCell, request)
+    const config: ReleaseConfig = workspace.config
+    yield* Cell.run(bumpCell, bumpInput(config.changelogDir, config.versioning)).pipe(
+      Effect.mapError((refusal): VersionStageRefused => VersionStageRefused.make({ refusal })),
+      Effect.flatMap((versioned) => renderVersion(versioned)),
+    )
+    yield* renderPullRequest(decision)
+    yield* landVersion(decision, request.branch, request.title)
+  }).pipe(Effect.catch(renderPullRequestRefusal)))
 
 const release = Command.make('release').pipe(
   Command.withDescription('Plan release phases, open release PRs, tag and publish GitHub releases'),

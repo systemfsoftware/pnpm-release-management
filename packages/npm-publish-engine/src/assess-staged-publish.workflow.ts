@@ -1,9 +1,9 @@
 import { Workflow } from '@systemfsoftware/effect-cell-types'
-import { PackageName } from '@systemfsoftware/release-language'
+import { DecisionTypeId, PackageName } from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
-import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
+import { type TrustPublishRefused } from './stage-trust.schema.js'
 
 export const StagedItemOutcome = S.Struct({
   name: PackageName,
@@ -18,18 +18,13 @@ export class AssessStagedPublishCommand extends S.TaggedClass<AssessStagedPublis
   },
 ) {}
 
-const AssessStagedPublishTypeId: unique symbol = Symbol.for(
-  '@systemfsoftware/npm-publish-engine/AssessStagedPublishDecision',
-)
-type AssessStagedPublishTypeId = typeof AssessStagedPublishTypeId
-
 export class StagedPublishCleared extends S.TaggedClass<StagedPublishCleared>()(
   'StagedPublishCleared',
   {
     staged: S.NonEmptyArray(PackageName),
   },
 ) {
-  readonly [AssessStagedPublishTypeId] = AssessStagedPublishTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
 export class StagedPublishVacant extends S.TaggedClass<StagedPublishVacant>()(
@@ -38,75 +33,57 @@ export class StagedPublishVacant extends S.TaggedClass<StagedPublishVacant>()(
     staged: S.Array(PackageName),
   },
 ) {
-  readonly [AssessStagedPublishTypeId] = AssessStagedPublishTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
-export class TrustPublishRefused extends S.TaggedError<TrustPublishRefused>()(
-  'TrustPublishRefused',
-  { packages: S.NonEmptyArray(PackageName) },
-) {}
+const VacantCase = S.TaggedStruct('Vacant', { staged: S.Array(PackageName) })
+type VacantCase = S.Schema.Type<typeof VacantCase>
 
-const VacantCase = S.TaggedStruct('Vacant', {})
-const ClearedCase = S.TaggedStruct('Cleared', { staged: S.Array(PackageName) })
-const RefusedCase = S.TaggedStruct('Refused', { packages: S.Array(PackageName) })
-const StagedPublishCase = S.Union([VacantCase, ClearedCase, RefusedCase])
-type StagedPublishCase = S.Schema.Type<typeof StagedPublishCase>
+const ClearedCase = S.TaggedStruct('Cleared', { staged: S.NonEmptyArray(PackageName) })
+type ClearedCase = S.Schema.Type<typeof ClearedCase>
 
-const nonEmptyOf = <T>(
-  values: ReadonlyArray<T>,
-): Option.Option<readonly [T, ...T[]]> =>
-  Option.map(
-    Option.fromNullishOr(values[0]),
-    (head): readonly [T, ...T[]] => [head, ...values.slice(1)],
-  )
+const RefusedCase = S.TaggedStruct('Refused', { packages: S.NonEmptyArray(PackageName) })
+type RefusedCase = S.Schema.Type<typeof RefusedCase>
 
-const stagedIn = (
+type StagedPublishCase = VacantCase | ClearedCase | RefusedCase
+
+const namesWhere = (
   command: AssessStagedPublishCommand,
+  staged: boolean,
 ): ReadonlyArray<PackageName> =>
   command.outcomes
-    .filter((outcome) => outcome.staged === true)
+    .filter((outcome) => outcome.staged === staged)
     .map((outcome) => outcome.name)
 
-const failedIn = (
-  command: AssessStagedPublishCommand,
-): ReadonlyArray<PackageName> =>
-  command.outcomes
-    .filter((outcome) => outcome.staged === false)
-    .map((outcome) => outcome.name)
+const nonEmptyOf = (
+  names: ReadonlyArray<PackageName>,
+): readonly [PackageName, ...PackageName[]] | undefined => {
+  const first = names[0]
+  if (first === undefined) return undefined
+  return [first, ...names.slice(1)]
+}
 
-const stagedCaseOf = (command: AssessStagedPublishCommand): StagedPublishCase =>
-  Match.value(Option.fromNullishOr(stagedIn(command)[0])).pipe(
-    Match.tag('None', () => VacantCase.make({})),
-    Match.tag('Some', () => ClearedCase.make({ staged: [...stagedIn(command)] })),
-    Match.exhaustive,
-  )
-
-const classify = (command: AssessStagedPublishCommand): StagedPublishCase =>
-  Match.value(Option.fromNullishOr(failedIn(command)[0])).pipe(
-    Match.tag('None', () => stagedCaseOf(command)),
-    Match.tag('Some', () => RefusedCase.make({ packages: [...failedIn(command)] })),
-    Match.exhaustive,
-  )
+const stagedPublishCaseOf = (command: AssessStagedPublishCommand): StagedPublishCase => {
+  const failed = nonEmptyOf(namesWhere(command, false))
+  if (failed !== undefined) return RefusedCase.make({ packages: failed })
+  const staged = nonEmptyOf(namesWhere(command, true))
+  if (staged === undefined) return VacantCase.make({ staged: [] })
+  return ClearedCase.make({ staged })
+}
 
 export const assessStagedPublish = Workflow.make(
   AssessStagedPublishCommand,
   (
     command,
   ): Result.Result<StagedPublishCleared | StagedPublishVacant, TrustPublishRefused> =>
-    Match.value(classify(command)).pipe(
-      Match.tag('Vacant', () => Result.succeed(StagedPublishVacant.make({ staged: [] }))),
-      Match.tag('Cleared', (cleared) =>
-        Result.succeed(
-          StagedPublishCleared.make({
-            staged: Option.getOrThrow(nonEmptyOf(cleared.staged)),
-          }),
-        )),
-      Match.tag('Refused', (refused) =>
-        Result.fail(
-          TrustPublishRefused.make({
-            packages: Option.getOrThrow(nonEmptyOf(refused.packages)),
-          }),
-        )),
+    Match.value(stagedPublishCaseOf(command)).pipe(
+      Match.tag('Vacant', (vacant) => Result.succeed(StagedPublishVacant.make({ staged: vacant.staged }))),
+      Match.tag('Cleared', (cleared) => Result.succeed(StagedPublishCleared.make({ staged: cleared.staged }))),
+      Match.tag(
+        'Refused',
+        (refused): Result.Result<never, TrustPublishRefused> =>
+          Result.fail({ _tag: 'TrustPublishRefused', packages: refused.packages }),
+      ),
       Match.exhaustive,
     ),
 )

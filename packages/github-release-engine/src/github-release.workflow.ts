@@ -1,72 +1,85 @@
 import { Workflow } from '@systemfsoftware/effect-cell-types'
-import { CycleEntry, ReleaseTag } from '@systemfsoftware/release-language'
+import {
+  Count,
+  CycleEntry,
+  DecisionTypeId,
+  PackageName,
+  PackageVersion,
+  RelativePath,
+  ReleaseId,
+  ReleaseTag,
+  RepoSlug,
+} from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
-import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 
-const GithubReleasesDecisionTypeId: unique symbol = Symbol.for(
-  '@systemfsoftware/pnpm-release-management/GithubReleasesDecision',
-)
-type GithubReleasesDecisionTypeId = typeof GithubReleasesDecisionTypeId
-
 const ReleaseCreatedEntry = S.Struct({
-  tag: S.String,
-  id: S.Finite,
+  tag: ReleaseTag,
+  id: ReleaseId,
 })
 
-export class GithubReleasesCreated extends S.TaggedClass<GithubReleasesCreated>()(
-  'GithubReleasesCreated',
-  { created: S.NonEmptyArray(ReleaseCreatedEntry), skipped: S.Finite },
+export type CreatedRelease = S.Schema.Type<typeof ReleaseCreatedEntry>
+
+export class GithubReleaseCreated extends S.TaggedClass<GithubReleaseCreated>()(
+  'GithubReleaseCreated',
+  { created: S.NonEmptyArray(ReleaseCreatedEntry), skipped: Count },
 ) {
-  readonly [GithubReleasesDecisionTypeId] = GithubReleasesDecisionTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
-export class GithubReleasesSkipped extends S.TaggedClass<GithubReleasesSkipped>()(
-  'GithubReleasesSkipped',
-  { tags: S.NonEmptyArray(S.String) },
+export class GithubReleaseSkipped extends S.TaggedClass<GithubReleaseSkipped>()(
+  'GithubReleaseSkipped',
+  { tags: S.NonEmptyArray(ReleaseTag) },
 ) {
-  readonly [GithubReleasesDecisionTypeId] = GithubReleasesDecisionTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
-export class GithubReleasesAsserted extends S.TaggedClass<GithubReleasesAsserted>()(
-  'GithubReleasesAsserted',
+export class GithubReleaseAsserted extends S.TaggedClass<GithubReleaseAsserted>()(
+  'GithubReleaseAsserted',
   { count: S.Finite },
 ) {
-  readonly [GithubReleasesDecisionTypeId] = GithubReleasesDecisionTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
-export class GithubReleasesPreviewed extends S.TaggedClass<GithubReleasesPreviewed>()(
-  'GithubReleasesPreviewed',
-  { tags: S.NonEmptyArray(S.String) },
+export class GithubReleasePreview extends S.TaggedClass<GithubReleasePreview>()(
+  'GithubReleasePreview',
+  { tags: S.NonEmptyArray(ReleaseTag) },
 ) {
-  readonly [GithubReleasesDecisionTypeId] = GithubReleasesDecisionTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
-export class GithubReleasesEmpty extends S.TaggedClass<GithubReleasesEmpty>()(
-  'GithubReleasesEmpty',
+export class GithubReleaseEmpty extends S.TaggedClass<GithubReleaseEmpty>()(
+  'GithubReleaseEmpty',
   { cycle: S.Finite },
 ) {
-  readonly [GithubReleasesDecisionTypeId] = GithubReleasesDecisionTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
-export class ChangelogFileMissing extends S.TaggedError<ChangelogFileMissing>()(
-  'ChangelogFileMissing',
+export class ReleaseChangelogMissing extends S.TaggedError<ReleaseChangelogMissing>()(
+  'ReleaseChangelogMissing',
   {
-    package: S.String,
-    version: S.String,
-    changelog: S.String,
+    package: PackageName,
+    version: PackageVersion,
+    changelog: RelativePath,
   },
 ) {}
 
-export class ChangelogFileEmpty extends S.TaggedError<ChangelogFileEmpty>()(
-  'ChangelogFileEmpty',
+export class ReleaseChangelogEmpty extends S.TaggedError<ReleaseChangelogEmpty>()(
+  'ReleaseChangelogEmpty',
   {
-    package: S.String,
-    version: S.String,
-    changelog: S.String,
+    package: PackageName,
+    version: PackageVersion,
+    changelog: RelativePath,
   },
 ) {}
+
+export type GithubReleaseDecision =
+  | GithubReleaseCreated
+  | GithubReleaseSkipped
+  | GithubReleaseAsserted
+  | GithubReleasePreview
+  | GithubReleaseEmpty
 
 const ReleaseItemSchema = S.Struct({
   entry: CycleEntry,
@@ -82,16 +95,17 @@ export class GithubReleaseCommand extends S.TaggedClass<GithubReleaseCommand>()(
     assert: S.Boolean,
     preview: S.Boolean,
     existing: S.Array(ReleaseTag),
+    slug: RepoSlug,
   },
 ) {}
 
-const BodyAbsentCase = S.TaggedStruct('ReleaseBodyAbsent', { entry: CycleEntry })
-const BodyBlankCase = S.TaggedStruct('ReleaseBodyBlank', { entry: CycleEntry })
-const VacantCase = S.TaggedStruct('ReleaseVacant', {})
-const AssertingCase = S.TaggedStruct('ReleaseAsserting', {})
-const PreviewingCase = S.TaggedStruct('ReleasePreviewing', { tags: S.NonEmptyArray(S.String) })
-const TakenCase = S.TaggedStruct('ReleaseTaken', { tags: S.NonEmptyArray(S.String) })
-const ReadyCase = S.TaggedStruct('ReleaseReady', { tags: S.NonEmptyArray(S.String) })
+const BodyAbsentCase = S.TaggedStruct('BodyAbsent', { entry: CycleEntry })
+const BodyBlankCase = S.TaggedStruct('BodyBlank', { entry: CycleEntry })
+const VacantCase = S.TaggedStruct('Vacant', { cycle: S.Finite })
+const AssertingCase = S.TaggedStruct('Asserting', { count: S.Finite })
+const PreviewingCase = S.TaggedStruct('Previewing', { tags: S.NonEmptyArray(ReleaseTag) })
+const TakenCase = S.TaggedStruct('Taken', { tags: S.NonEmptyArray(ReleaseTag) })
+const ReadyCase = S.TaggedStruct('Ready', { tags: S.NonEmptyArray(ReleaseTag) })
 const ReleaseCase = S.Union([
   BodyAbsentCase,
   BodyBlankCase,
@@ -103,125 +117,83 @@ const ReleaseCase = S.Union([
 ])
 type ReleaseCase = S.Schema.Type<typeof ReleaseCase>
 
-const nonEmptyOf = <A>(
-  values: ReadonlyArray<A>,
-): Option.Option<readonly [A, ...Array<A>]> =>
-  Option.map(
-    Option.fromNullishOr(values[0]),
-    (head): readonly [A, ...Array<A>] => [head, ...values.slice(1)],
-  )
-
-const isBlankBody = (body: string | undefined): boolean =>
-  Match.value(Option.fromNullishOr(body)).pipe(
-    Match.tag('Some', (text) => text.value.trim().length === 0),
-    Match.tag('None', () => false),
-    Match.exhaustive,
-  )
-
 const tagsOf = (
   items: readonly [ReleaseItem, ...Array<ReleaseItem>],
-): readonly [string, ...Array<string>] => {
+): readonly [ReleaseTag, ...Array<ReleaseTag>] => {
   const [first, ...rest] = items
   return [first.entry.tag, ...rest.map((item) => item.entry.tag)]
 }
 
-const remainingCaseOf = (
-  command: GithubReleaseCommand,
-  items: readonly [ReleaseItem, ...Array<ReleaseItem>],
-): ReleaseCase => {
-  const remaining = command.items.filter(
+const releaseCaseOf = (command: GithubReleaseCommand): ReleaseCase => {
+  const [first, ...rest] = command.items
+  if (first === undefined) {
+    return VacantCase.make({ cycle: command.items.length })
+  }
+  const missing = command.items.find((item) => item.body === undefined)
+  if (missing !== undefined) {
+    return BodyAbsentCase.make({ entry: missing.entry })
+  }
+  const blank = command.items.find(
+    (item) => item.body !== undefined && item.body.trim().length === 0,
+  )
+  if (blank !== undefined) {
+    return BodyBlankCase.make({ entry: blank.entry })
+  }
+  if (command.assert) {
+    return AssertingCase.make({ count: command.items.length })
+  }
+  const tags = tagsOf([first, ...rest])
+  if (command.preview) {
+    return PreviewingCase.make({ tags })
+  }
+  const [firstRemaining, ...restRemaining] = command.items.filter(
     (item) => command.existing.includes(item.entry.tag) === false,
   )
-  return Match.value(nonEmptyOf(remaining)).pipe(
-    Match.tag('Some', (ready) => ReadyCase.make({ tags: tagsOf(ready.value) })),
-    Match.tag('None', () => TakenCase.make({ tags: tagsOf(items) })),
-    Match.exhaustive,
-  )
+  if (firstRemaining === undefined) {
+    return TakenCase.make({ tags })
+  }
+  return ReadyCase.make({
+    tags: [firstRemaining.entry.tag, ...restRemaining.map((item) => item.entry.tag)],
+  })
 }
-
-const previewCaseOf = (
-  command: GithubReleaseCommand,
-  items: readonly [ReleaseItem, ...Array<ReleaseItem>],
-): ReleaseCase =>
-  Match.value(command.preview).pipe(
-    Match.when(true, () => PreviewingCase.make({ tags: tagsOf(items) })),
-    Match.when(false, () => remainingCaseOf(command, items)),
-    Match.exhaustive,
-  )
-
-const assertingCaseOf = (
-  command: GithubReleaseCommand,
-  items: readonly [ReleaseItem, ...Array<ReleaseItem>],
-): ReleaseCase =>
-  Match.value(command.assert).pipe(
-    Match.when(true, () => AssertingCase.make({})),
-    Match.when(false, () => previewCaseOf(command, items)),
-    Match.exhaustive,
-  )
-
-const blankCaseOf = (
-  command: GithubReleaseCommand,
-  items: readonly [ReleaseItem, ...Array<ReleaseItem>],
-): ReleaseCase =>
-  Match.value(Option.fromNullishOr(command.items.find((item) => isBlankBody(item.body)))).pipe(
-    Match.tag('Some', (blank) => BodyBlankCase.make({ entry: blank.value.entry })),
-    Match.tag('None', () => assertingCaseOf(command, items)),
-    Match.exhaustive,
-  )
-
-const itemCaseOf = (
-  command: GithubReleaseCommand,
-  items: readonly [ReleaseItem, ...Array<ReleaseItem>],
-): ReleaseCase =>
-  Match.value(Option.fromNullishOr(command.items.find((item) => item.body === undefined))).pipe(
-    Match.tag('Some', (missing) => BodyAbsentCase.make({ entry: missing.value.entry })),
-    Match.tag('None', () => blankCaseOf(command, items)),
-    Match.exhaustive,
-  )
-
-const classify = (command: GithubReleaseCommand): ReleaseCase =>
-  Match.value(nonEmptyOf(command.items)).pipe(
-    Match.tag('Some', (items) => itemCaseOf(command, items.value)),
-    Match.tag('None', () => VacantCase.make({})),
-    Match.exhaustive,
-  )
 
 export const githubRelease = Workflow.make(
   GithubReleaseCommand,
   (
     command,
   ): Result.Result<
-    | GithubReleasesCreated
-    | GithubReleasesSkipped
-    | GithubReleasesAsserted
-    | GithubReleasesPreviewed
-    | GithubReleasesEmpty,
-    ChangelogFileMissing | ChangelogFileEmpty
+    | GithubReleaseCreated
+    | GithubReleaseSkipped
+    | GithubReleaseAsserted
+    | GithubReleasePreview
+    | GithubReleaseEmpty,
+    ReleaseChangelogMissing | ReleaseChangelogEmpty
   > =>
-    Match.value(classify(command)).pipe(
-      Match.tag('ReleaseBodyAbsent', (bad) =>
+    Match.value(releaseCaseOf(command)).pipe(
+      Match.tag('BodyAbsent', (absent) =>
         Result.fail(
-          ChangelogFileMissing.make({
-            package: bad.entry.name,
-            version: bad.entry.version,
-            changelog: bad.entry.changelog,
+          ReleaseChangelogMissing.make({
+            package: absent.entry.name,
+            version: absent.entry.version,
+            changelog: absent.entry.changelog,
           }),
         )),
-      Match.tag('ReleaseBodyBlank', (bad) =>
+      Match.tag('BodyBlank', (blank) =>
         Result.fail(
-          ChangelogFileEmpty.make({
-            package: bad.entry.name,
-            version: bad.entry.version,
-            changelog: bad.entry.changelog,
+          ReleaseChangelogEmpty.make({
+            package: blank.entry.name,
+            version: blank.entry.version,
+            changelog: blank.entry.changelog,
           }),
         )),
-      Match.tag('ReleaseVacant', () => Result.succeed(GithubReleasesEmpty.make({ cycle: 0 }))),
-      Match.tag('ReleaseAsserting', () => Result.succeed(GithubReleasesAsserted.make({ count: command.items.length }))),
-      Match.tag('ReleasePreviewing', (previewing) =>
-        Result.succeed(GithubReleasesPreviewed.make({ tags: [...previewing.tags] }))),
-      Match.tag('ReleaseTaken', (taken) =>
-        Result.succeed(GithubReleasesSkipped.make({ tags: [...taken.tags] }))),
-      Match.tag('ReleaseReady', (ready) => Result.succeed(GithubReleasesPreviewed.make({ tags: [...ready.tags] }))),
+      Match.tag('Vacant', (vacant) => Result.succeed(GithubReleaseEmpty.make({ cycle: vacant.cycle }))),
+      Match.tag('Asserting', (asserting) => Result.succeed(GithubReleaseAsserted.make({ count: asserting.count }))),
+      Match.tag(
+        'Previewing',
+        (previewing) => Result.succeed(GithubReleasePreview.make({ tags: [...previewing.tags] })),
+      ),
+      Match.tag('Taken', (taken) => Result.succeed(GithubReleaseSkipped.make({ tags: [...taken.tags] }))),
+      Match.tag('Ready', (ready) => Result.succeed(GithubReleasePreview.make({ tags: [...ready.tags] }))),
       Match.exhaustive,
     ),
 )

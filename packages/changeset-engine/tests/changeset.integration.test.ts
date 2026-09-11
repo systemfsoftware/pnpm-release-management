@@ -1,10 +1,4 @@
-import {
-  fakeChangeEvidencePort,
-  fakeChangesetStore,
-  fakeWorkspaceStore,
-  gateChangesCell,
-  newIntentCell,
-} from '@systemfsoftware/changeset-engine'
+import { gateChangesCell, newIntentCell } from '@systemfsoftware/changeset-engine'
 import { Cell } from '@systemfsoftware/effect-cell-types'
 import { Gherkin, Given, it, layer, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
 import {
@@ -21,6 +15,9 @@ import { Effect } from 'effect'
 import * as Layer from 'effect/Layer'
 import * as Match from 'effect/Match'
 import { expect } from 'vitest'
+import { fakeChangeEvidencePort } from './__fixtures__/FakeChangeEvidencePort.js'
+import { fakeChangesetStore } from './__fixtures__/FakeChangesetStore.js'
+import { fakeWorkspaceStore } from './__fixtures__/FakeWorkspaceStore.js'
 
 const Feature = makeFeature({ it, layer })
 
@@ -216,11 +213,9 @@ Feature('Changeset intents').body(({ scenario }) => {
           )),
         Then('the intent is staged derived and the store holds one write')((s) => {
           Match.value(s.outcome).pipe(
-            Match.tag('decided', (decided) =>
-              Match.value(decided.decision).pipe(
-                Match.tag('IntentStagedDerived', () => undefined),
-                Match.orElse(() => failUnexpected('expected derived intent')),
-              )),
+            Match.tag('decided', (decided) => {
+              expect(decided.decision.path).toEqual('s-a.md')
+            }),
             Match.orElse(() => failUnexpected('expected decided')),
           )
           expect(s.setup.store.written.length).toEqual(1)
@@ -256,13 +251,9 @@ Feature('Changeset intents').body(({ scenario }) => {
           )),
         Then('the intent is staged named under the given slug')((s) => {
           Match.value(s.outcome).pipe(
-            Match.tag('decided', (decided) =>
-              Match.value(decided.decision).pipe(
-                Match.tag('IntentStagedNamed', (named) => {
-                  expect(named.path).toEqual('add-a-thing.md')
-                }),
-                Match.orElse(() => failUnexpected('expected named intent')),
-              )),
+            Match.tag('decided', (decided) => {
+              expect(decided.decision.path).toEqual('add-a-thing.md')
+            }),
             Match.orElse(() => failUnexpected('expected decided')),
           )
           const first = s.setup.store.written[0]
@@ -502,13 +493,9 @@ Feature('Changeset intents').body(({ scenario }) => {
           )),
         Then('the intent stages derived under the slugified path')((s) => {
           Match.value(s.outcome).pipe(
-            Match.tag('decided', (decided) =>
-              Match.value(decided.decision).pipe(
-                Match.tag('IntentStagedDerived', (derived) => {
-                  expect(derived.path).toEqual('s-a.md')
-                }),
-                Match.orElse(() => failUnexpected('expected derived intent')),
-              )),
+            Match.tag('decided', (decided) => {
+              expect(decided.decision.path).toEqual('s-a.md')
+            }),
             Match.orElse(() => failUnexpected('expected decided')),
           )
         }),

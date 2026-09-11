@@ -1,7 +1,6 @@
 import { Workflow } from '@systemfsoftware/effect-cell-types'
-import { PackageName } from '@systemfsoftware/release-language'
+import { DecisionTypeId, PackageName, type TrustRegistryUnreadable } from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
-import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import { TrustCandidateState } from './stage-trust.schema.js'
@@ -13,18 +12,13 @@ export class EvaluateTrustStateCommand extends S.TaggedClass<EvaluateTrustStateC
   },
 ) {}
 
-const EvaluateTrustStateTypeId: unique symbol = Symbol.for(
-  '@systemfsoftware/npm-publish-engine/EvaluateTrustStateDecision',
-)
-type EvaluateTrustStateTypeId = typeof EvaluateTrustStateTypeId
-
 export class TrustStatesAttested extends S.TaggedClass<TrustStatesAttested>()(
   'TrustStatesAttested',
   {
     owed: S.Array(TrustCandidateState),
   },
 ) {
-  readonly [EvaluateTrustStateTypeId] = EvaluateTrustStateTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
 export class TrustStatesOwed extends S.TaggedClass<TrustStatesOwed>()(
@@ -33,65 +27,56 @@ export class TrustStatesOwed extends S.TaggedClass<TrustStatesOwed>()(
     owed: S.Array(TrustCandidateState),
   },
 ) {
-  readonly [EvaluateTrustStateTypeId] = EvaluateTrustStateTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
-export class TrustRegistryUnreadable extends S.TaggedError<TrustRegistryUnreadable>()(
-  'TrustRegistryUnreadable',
-  { packages: S.Array(PackageName) },
-) {}
+const UnreadableCase = S.TaggedStruct('Unreadable', { packages: S.NonEmptyArray(PackageName) })
+type UnreadableCase = S.Schema.Type<typeof UnreadableCase>
 
-const UnreadableCase = S.TaggedStruct('Unreadable', { packages: S.Array(PackageName) })
 const AttestedCase = S.TaggedStruct('Attested', { owed: S.Array(TrustCandidateState) })
+type AttestedCase = S.Schema.Type<typeof AttestedCase>
+
 const OwedCase = S.TaggedStruct('Owed', { owed: S.Array(TrustCandidateState) })
-const TrustStateCase = S.Union([UnreadableCase, AttestedCase, OwedCase])
-type TrustStateCase = S.Schema.Type<typeof TrustStateCase>
+type OwedCase = S.Schema.Type<typeof OwedCase>
+
+type TrustStateCase = UnreadableCase | AttestedCase | OwedCase
 
 const owesTrustWork = (candidate: TrustCandidateState): boolean =>
-  Match.value(Option.fromNullishOr(candidate.snapshot.latest)).pipe(
-    Match.tag('None', () => true),
-    Match.tag('Some', () => candidate.snapshot.attested === false),
-    Match.exhaustive,
+  candidate.snapshot.latest === undefined || candidate.snapshot.attested === false
+
+const nonEmptyOf = (
+  names: ReadonlyArray<PackageName>,
+): readonly [PackageName, ...PackageName[]] | undefined => {
+  const first = names[0]
+  if (first === undefined) return undefined
+  return [first, ...names.slice(1)]
+}
+
+const trustStateCaseOf = (command: EvaluateTrustStateCommand): TrustStateCase => {
+  const unreadable = nonEmptyOf(
+    command.candidates
+      .filter((candidate) => candidate.snapshot.reachable === false)
+      .map((candidate) => candidate.name),
   )
-
-const owesIn = (
-  command: EvaluateTrustStateCommand,
-): ReadonlyArray<TrustCandidateState> => command.candidates.filter((candidate) => owesTrustWork(candidate))
-
-const unreadableIn = (
-  command: EvaluateTrustStateCommand,
-): ReadonlyArray<TrustCandidateState> =>
-  command.candidates.filter((candidate) => candidate.snapshot.reachable === false)
-
-const owedCaseOf = (command: EvaluateTrustStateCommand): TrustStateCase =>
-  Match.value(Option.fromNullishOr(owesIn(command)[0])).pipe(
-    Match.tag('None', () => AttestedCase.make({ owed: [] })),
-    Match.tag('Some', () => OwedCase.make({ owed: [...owesIn(command)] })),
-    Match.exhaustive,
-  )
-
-const classify = (command: EvaluateTrustStateCommand): TrustStateCase =>
-  Match.value(Option.fromNullishOr(unreadableIn(command)[0])).pipe(
-    Match.tag('None', () => owedCaseOf(command)),
-    Match.tag('Some', () =>
-      UnreadableCase.make({
-        packages: unreadableIn(command).map((candidate) => candidate.name),
-      })),
-    Match.exhaustive,
-  )
+  if (unreadable !== undefined) return UnreadableCase.make({ packages: unreadable })
+  const owed = command.candidates.filter((candidate) => owesTrustWork(candidate))
+  if (owed.length === 0) return AttestedCase.make({ owed: [] })
+  return OwedCase.make({ owed })
+}
 
 export const evaluateTrustState = Workflow.make(
   EvaluateTrustStateCommand,
   (
     command,
   ): Result.Result<TrustStatesAttested | TrustStatesOwed, TrustRegistryUnreadable> =>
-    Match.value(classify(command)).pipe(
+    Match.value(trustStateCaseOf(command)).pipe(
       Match.tag(
         'Unreadable',
-        (unreadable) => Result.fail(TrustRegistryUnreadable.make({ packages: [...unreadable.packages] })),
+        (unreadable): Result.Result<never, TrustRegistryUnreadable> =>
+          Result.fail({ _tag: 'TrustRegistryUnreadable', packages: unreadable.packages }),
       ),
-      Match.tag('Attested', (attested) => Result.succeed(TrustStatesAttested.make({ owed: [...attested.owed] }))),
-      Match.tag('Owed', (owed) => Result.succeed(TrustStatesOwed.make({ owed: [...owed.owed] }))),
+      Match.tag('Attested', (attested) => Result.succeed(TrustStatesAttested.make({ owed: attested.owed }))),
+      Match.tag('Owed', (owed) => Result.succeed(TrustStatesOwed.make({ owed: owed.owed }))),
       Match.exhaustive,
     ),
 )

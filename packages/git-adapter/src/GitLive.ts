@@ -1,5 +1,6 @@
 import { NodeServices } from '@effect/platform-node'
 import {
+  BranchDeleted,
   CommitSha,
   Count,
   FsPath,
@@ -20,7 +21,6 @@ import {
   TagExcludedMalformed,
 } from '@systemfsoftware/release-language'
 import type {
-  BranchDeleted,
   GateRefusal,
   PrTitle,
   PullRequestRefusal,
@@ -29,80 +29,64 @@ import type {
   StagedChecksRefusal,
   TagRefusal,
 } from '@systemfsoftware/release-language'
-import { Effect, Layer } from 'effect'
-import * as Option from 'effect/Option'
-import * as Result from 'effect/Result'
+import { Effect, Layer, Option, Result } from 'effect'
 import * as S from 'effect/Schema'
 import * as Stream from 'effect/Stream'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 
-const opPath = {
-  currentBranch: FsPath.make('git:current-branch'),
-  headSha: FsPath.make('git:head-sha'),
-  remoteTags: FsPath.make('git:remote-tags'),
-  commit: FsPath.make('git:commit'),
-  pushTags: FsPath.make('git:push-tags'),
-  writeTag: FsPath.make('git:write-tag'),
-  repoSlug: FsPath.make('git:repo-slug'),
-}
+const currentBranchPath = FsPath.make('git:current-branch')
+const headShaPath = FsPath.make('git:head-sha')
+const remoteTagsPath = FsPath.make('git:remote-tags')
+const commitPath = FsPath.make('git:commit')
+const pushTagsPath = FsPath.make('git:push-tags')
+const writeTagPath = FsPath.make('git:write-tag')
+const repoSlugPath = FsPath.make('git:repo-slug')
+const diffPath = RelativePath.make('git:diff')
 
 const headRef = GitRef.make('HEAD')
-
-const changedPathsLabel = RelativePath.make('git:diff')
-
 const unnamedPackage = PackageName.make('unknown')
 
-const scpRemote = /^[^:]+:([^/]+)\/([^/]+?)(\.git)?$/
-const httpsRemote = /^https?:\/\/[^/]+\/([^/]+)\/([^/]+?)(\.git)?$/
+const scpRemote = /^[^:]+:([^/]+)\/([^/]+?)(?:\.git)?$/
+const httpsRemote = /^https?:\/\/[^/]+\/([^/]+)\/([^/]+?)(?:\.git)?$/
 
-const splitOnce = (
-  text: string,
-  separator: string,
-): Option.Option<readonly [string, string]> => {
-  const parts = text.split(separator)
-  const first = parts[0]
-  const second = parts[1]
-  if (parts.length !== 2 || first === undefined || second === undefined) {
+const brandedSlug = (
+  owner: string | undefined,
+  repo: string | undefined,
+): Option.Option<RepoSlug> => {
+  if (owner === undefined || repo === undefined) {
     return Option.none()
   }
-  return Option.some([first, second])
-}
-
-const slugOf = (owner: string, repo: string): Option.Option<RepoSlug> =>
-  Option.all({
+  return Option.all({
     owner: S.decodeUnknownOption(OwnerName)(owner),
     repo: S.decodeUnknownOption(RepoName)(repo),
   })
+}
 
-const slugFromEnvironment = (declared: string | undefined): Option.Option<RepoSlug> =>
-  Option.flatMap(
-    Option.fromNullishOr(declared),
-    (value) => Option.flatMap(splitOnce(value, '/'), ([owner, repo]) => slugOf(owner, repo)),
-  )
-
-const ownerAndRepo = (
-  remoteUrlPattern: RegExp,
-  url: string,
-): Option.Option<readonly [string, string]> => {
-  const match = remoteUrlPattern.exec(url)
-  const owner = match?.[1]
-  const repo = match?.[2]
-  if (owner === undefined || repo === undefined) {
+const declaredPair = (text: string): Option.Option<readonly [string, string]> => {
+  const [owner, repo, extra] = text.split('/')
+  if (extra !== undefined || owner === undefined || repo === undefined) {
     return Option.none()
   }
   return Option.some([owner, repo])
 }
 
-const slugFromRemoteUrl = (url: string): Option.Option<RepoSlug> =>
-  Option.flatMap(
-    Option.orElse(
-      ownerAndRepo(scpRemote, url),
-      () => ownerAndRepo(httpsRemote, url),
-    ),
-    ([owner, repo]) => slugOf(owner, repo),
-  )
+const remoteSlug = (url: string): Option.Option<RepoSlug> => {
+  const match = scpRemote.exec(url) ?? httpsRemote.exec(url)
+  if (match === null) {
+    return Option.none()
+  }
+  return brandedSlug(match[1], match[2])
+}
 
-const lines = (text: string): ReadonlyArray<string> =>
+const declaredSlug = (): Option.Option<RepoSlug> => {
+  const declared = process.env['GITHUB_REPOSITORY']
+  if (declared === undefined) {
+    return Option.none()
+  }
+  return Option.flatMap(declaredPair(declared), ([owner, repo]) => brandedSlug(owner, repo))
+}
+
+const nonEmptyLines = (text: string): ReadonlyArray<string> =>
   text.split('\n').map((line) => line.trim()).filter((line) => line.length > 0)
 
 const listedTags = (text: string): ReadonlyArray<string> =>
@@ -111,13 +95,11 @@ const listedTags = (text: string): ReadonlyArray<string> =>
     .map((line) => line.replace(/.*refs\/tags\//, '').replace(/\^\{\}$/, ''))
     .filter((tag) => tag.length > 0)
 
-const branchAlreadyAbsent = (stderr: string): boolean =>
+const branchAlreadyGone = (stderr: string): boolean =>
   stderr.includes('remote ref does not exist') || stderr.includes('does not exist')
 
-const noMergeInProgress = (stderr: string): boolean =>
+const mergeHeadMissing = (stderr: string): boolean =>
   stderr.includes('Needed a single revision') || stderr.includes('unknown revision')
-
-const noOutput = (): Result.Result<void, never> => Result.succeed(undefined)
 
 const makeGitPort = (
   spawner: ChildProcessSpawner.ChildProcessSpawner['Service'],
@@ -141,221 +123,155 @@ const makeGitPort = (
       return Result.fail(stderr)
     })).pipe(Effect.orElseSucceed(() => Result.fail('')))
 
-  const readPort = <A, E>(
+  const capture = <A, E>(
     args: ReadonlyArray<string>,
-    onFailure: (stderr: string) => Result.Result<A, E>,
-    onSuccess: (stdout: string) => Result.Result<A, E>,
+    refuse: (failure: string) => E,
+    decode: (stdout: string) => Result.Result<A, E>,
   ): Effect.Effect<A, E> =>
-    Effect.flatMap(git(args), (outcome) => Effect.fromResult(Result.match(outcome, { onFailure, onSuccess })))
+    Effect.flatMap(git(args), (outcome) => {
+      if (Result.isFailure(outcome)) {
+        return Effect.fail(refuse(outcome.failure))
+      }
+      return Effect.fromResult(decode(outcome.success))
+    })
 
-  const decode = <A, E>(
+  const run = <E>(
+    args: ReadonlyArray<string>,
+    refuse: (failure: string) => E,
+  ): Effect.Effect<void, E> => Effect.asVoid(capture(args, refuse, () => Result.succeed(undefined)))
+
+  const tagValue = <A>(
+    args: ReadonlyArray<string>,
+    path: FsPath,
     schema: S.ConstraintDecoder<A>,
-    input: unknown,
-    refusal: E,
-  ): Result.Result<A, E> => Result.mapError(S.decodeUnknownResult(schema)(input), () => refusal)
-
-  const currentBranch = (): Effect.Effect<GitRef, TagRefusal, never> =>
-    readPort<GitRef, TagRefusal>(
-      ['rev-parse', '--abbrev-ref', 'HEAD'],
-      () => Result.fail(TagCapturedMalformed.make({ path: opPath.currentBranch })),
+    shape: (stdout: string) => unknown,
+  ): Effect.Effect<A, TagRefusal> =>
+    capture<A, TagRefusal>(
+      args,
+      () => TagCapturedMalformed.make({ path }),
       (stdout) =>
-        decode(
-          GitRef,
-          stdout.trim(),
-          TagExcludedMalformed.make({ path: opPath.currentBranch }),
+        Result.mapError(
+          S.decodeUnknownResult(schema)(shape(stdout)),
+          () => TagExcludedMalformed.make({ path }),
         ),
     )
 
-  const headSha = (): Effect.Effect<CommitSha, TagRefusal, never> =>
-    readPort<CommitSha, TagRefusal>(
-      ['rev-parse', 'HEAD'],
-      () => Result.fail(TagCapturedMalformed.make({ path: opPath.headSha })),
-      (stdout) =>
-        decode(
-          CommitSha,
-          stdout.trim(),
-          TagExcludedMalformed.make({ path: opPath.headSha }),
-        ),
-    )
-
-  const changedPaths = (
-    base: GitRef,
-    head: GitRef,
-  ): Effect.Effect<ReadonlyArray<RelativePath>, GateRefusal, never> =>
-    readPort<ReadonlyArray<RelativePath>, GateRefusal>(
-      ['diff', '--name-only', `${base}...${head}`],
-      () => Result.fail(GateIntentMissing.make({ packages: [unnamedPackage] })),
-      (stdout) =>
-        decode(
-          S.Array(RelativePath),
-          lines(stdout),
-          GateUnknownPackage.make({
-            path: changedPathsLabel,
-            package: unnamedPackage,
-          }),
-        ),
-    )
-
-  const remoteTags = (
-    remote: RemoteName,
-  ): Effect.Effect<ReadonlyArray<ReleaseTag>, TagRefusal, never> =>
-    readPort<ReadonlyArray<ReleaseTag>, TagRefusal>(
-      ['ls-remote', '--tags', remote],
-      () => Result.fail(TagCapturedMalformed.make({ path: opPath.remoteTags })),
-      (stdout) =>
-        decode(
-          S.Array(ReleaseTag),
-          listedTags(stdout),
-          TagExcludedMalformed.make({ path: opPath.remoteTags }),
-        ),
-    )
-
-  const commitAll = (
-    message: PrTitle,
-  ): Effect.Effect<CommitSha, PullRequestRefusal, never> =>
-    readPort(
-      ['add', '-A'],
-      () => Result.fail(PullRequestBodyUnreadable.make({ path: opPath.commit })),
-      noOutput,
-    ).pipe(
-      Effect.andThen(readPort(
-        ['commit', '-m', message],
-        () => Result.fail(PullRequestBodyUnreadable.make({ path: opPath.commit })),
-        noOutput,
-      )),
-      Effect.andThen(readPort(
-        ['rev-parse', 'HEAD'],
-        () => Result.fail(PullRequestHeadInvalid.make({ branch: headRef })),
-        (stdout) =>
-          decode(
-            CommitSha,
-            stdout.trim(),
-            PullRequestHeadInvalid.make({ branch: headRef }),
-          ),
-      )),
-    )
-
-  const pushBranch = (
-    branch: GitRef,
-    remote: RemoteName,
-  ): Effect.Effect<void, PullRequestRefusal, never> =>
-    readPort(
-      ['push', '--force', remote, `HEAD:refs/heads/${branch}`],
-      () => Result.fail(PullRequestHeadInvalid.make({ branch })),
-      noOutput,
-    )
-
-  const deleteRemoteBranch = (
-    branch: GitRef,
-    remote: RemoteName,
-  ): Effect.Effect<BranchDeleted, PullRequestRefusal, never> =>
-    readPort(
-      ['push', remote, '--delete', branch],
-      (stderr): Result.Result<BranchDeleted, PullRequestRefusal> => {
-        if (branchAlreadyAbsent(stderr)) {
-          return Result.succeed({ branch, deleted: false })
-        }
-        return Result.fail(PullRequestHeadInvalid.make({ branch }))
-      },
-      () => Result.succeed({ branch, deleted: true }),
-    )
-
-  const pushTags = (
-    tags: ReadonlyArray<ReleaseTag>,
-    remote: RemoteName,
-  ): Effect.Effect<Count, TagRefusal, never> => {
-    if (tags.length === 0) {
-      return Effect.succeed(Count.make(0))
-    }
-    return readPort(
-      ['push', remote, ...tags.map((tag) => `refs/tags/${tag}`)],
-      () => Result.fail(TagCapturedMalformed.make({ path: opPath.pushTags })),
-      () => Result.succeed(Count.make(tags.length)),
-    )
-  }
-
-  const writeTag = (
-    tag: ReleaseTag,
-  ): Effect.Effect<ReleaseTag, TagRefusal, never> =>
-    readPort(
-      ['tag', tag],
-      () => Result.fail(TagCapturedMalformed.make({ path: opPath.writeTag })),
-      () => Result.succeed(tag),
-    )
-
-  const originSlug = (): Effect.Effect<RepoSlug, TagRefusal, never> =>
-    readPort(
-      ['remote', 'get-url', 'origin'],
-      () => Result.fail(TagCapturedMalformed.make({ path: opPath.repoSlug })),
-      (stdout): Result.Result<RepoSlug, TagRefusal> =>
-        Option.match(slugFromRemoteUrl(stdout.trim()), {
-          onNone: () => Result.fail(TagExcludedMalformed.make({ path: opPath.repoSlug })),
-          onSome: (slug) => Result.succeed(slug),
-        }),
-    )
-
-  const repoSlug = (): Effect.Effect<RepoSlug, TagRefusal, never> =>
-    Effect.flatMap(
-      Effect.sync(() => slugFromEnvironment(process.env['GITHUB_REPOSITORY'])),
-      (declared) =>
-        Option.match(declared, {
-          onNone: originSlug,
-          onSome: (slug) => Effect.succeed(slug),
-        }),
-    )
-
-  const stagedPaths = (): Effect.Effect<
-    ReadonlyArray<StagedPath>,
-    StagedChecksRefusal,
-    never
-  > =>
-    readPort(
-      ['diff', '--cached', '--name-only'],
-      () =>
-        Result.fail(StagedStateUnreadable.make({
-          reason: 'git staged paths unavailable',
-        })),
-      (stdout) =>
-        decode(
-          S.Array(StagedPath),
-          lines(stdout),
-          StagedStateUnreadable.make({
-            reason: 'git staged paths malformed',
-          }),
-        ),
-    )
-
-  const mergeInProgress = (): Effect.Effect<
-    boolean,
-    StagedChecksRefusal,
-    never
-  > =>
-    readPort(
-      ['rev-parse', '--verify', 'MERGE_HEAD'],
-      (stderr): Result.Result<boolean, StagedChecksRefusal> => {
-        if (noMergeInProgress(stderr)) {
-          return Result.succeed(false)
-        }
-        return Result.fail(StagedStateUnreadable.make({
-          reason: 'git merge state unavailable',
-        }))
-      },
-      () => Result.succeed(true),
-    )
+  const readRepoSlug = (): Effect.Effect<RepoSlug, TagRefusal> =>
+    Effect.gen(function*() {
+      const captured = yield* git(['remote', 'get-url', 'origin'])
+      if (Result.isFailure(captured)) {
+        return yield* Effect.fail(TagCapturedMalformed.make({ path: repoSlugPath }))
+      }
+      const slug = remoteSlug(captured.success.trim())
+      if (Option.isNone(slug)) {
+        return yield* Effect.fail(TagExcludedMalformed.make({ path: repoSlugPath }))
+      }
+      return slug.value
+    })
 
   return {
-    currentBranch,
-    headSha,
-    changedPaths,
-    remoteTags,
-    commitAll,
-    pushBranch,
-    deleteRemoteBranch,
-    pushTags,
-    writeTag,
-    repoSlug,
-    stagedPaths,
-    mergeInProgress,
+    currentBranch: (): Effect.Effect<GitRef, TagRefusal> =>
+      tagValue(['rev-parse', '--abbrev-ref', 'HEAD'], currentBranchPath, GitRef, (stdout) => stdout.trim()),
+    headSha: (): Effect.Effect<CommitSha, TagRefusal> =>
+      tagValue(['rev-parse', 'HEAD'], headShaPath, CommitSha, (stdout) => stdout.trim()),
+    changedPaths: (
+      base: GitRef,
+      head: GitRef,
+    ): Effect.Effect<ReadonlyArray<RelativePath>, GateRefusal> =>
+      capture<ReadonlyArray<RelativePath>, GateRefusal>(
+        ['diff', '--name-only', `${base}...${head}`],
+        () => GateIntentMissing.make({ packages: [unnamedPackage] }),
+        (stdout) =>
+          Result.mapError(
+            S.decodeUnknownResult(S.Array(RelativePath))(nonEmptyLines(stdout)),
+            () => GateUnknownPackage.make({ path: diffPath, package: unnamedPackage }),
+          ),
+      ),
+    remoteTags: (
+      remote: RemoteName,
+    ): Effect.Effect<ReadonlyArray<ReleaseTag>, TagRefusal> =>
+      tagValue(['ls-remote', '--tags', remote], remoteTagsPath, S.Array(ReleaseTag), listedTags),
+    commitAll: (message: PrTitle): Effect.Effect<CommitSha, PullRequestRefusal> =>
+      Effect.gen(function*() {
+        yield* run(['add', '-A'], () => PullRequestBodyUnreadable.make({ path: commitPath }))
+        yield* run(['commit', '-m', message], () => PullRequestBodyUnreadable.make({ path: commitPath }))
+        return yield* capture(
+          ['rev-parse', 'HEAD'],
+          () => PullRequestHeadInvalid.make({ branch: headRef }),
+          (stdout) =>
+            Result.mapError(
+              S.decodeUnknownResult(CommitSha)(stdout.trim()),
+              () => PullRequestHeadInvalid.make({ branch: headRef }),
+            ),
+        )
+      }),
+    pushBranch: (
+      branch: GitRef,
+      remote: RemoteName,
+    ): Effect.Effect<void, PullRequestRefusal> =>
+      run(['push', '--force', remote, `HEAD:refs/heads/${branch}`], () => PullRequestHeadInvalid.make({ branch })),
+    deleteRemoteBranch: (
+      branch: GitRef,
+      remote: RemoteName,
+    ): Effect.Effect<BranchDeleted, PullRequestRefusal> =>
+      Effect.gen(function*() {
+        const captured = yield* git(['push', remote, '--delete', branch])
+        if (Result.isFailure(captured)) {
+          if (branchAlreadyGone(captured.failure)) {
+            return BranchDeleted.make({ branch, deleted: false })
+          }
+          return yield* Effect.fail(PullRequestHeadInvalid.make({ branch }))
+        }
+        return BranchDeleted.make({ branch, deleted: true })
+      }),
+    pushTags: (
+      tags: ReadonlyArray<ReleaseTag>,
+      remote: RemoteName,
+    ): Effect.Effect<Count, TagRefusal> =>
+      Effect.gen(function*() {
+        if (tags.length === 0) {
+          return Count.make(0)
+        }
+        yield* run(['push', remote, ...tags.map((tag) => `refs/tags/${tag}`)], () =>
+          TagCapturedMalformed.make({ path: pushTagsPath }))
+        return Count.make(tags.length)
+      }),
+    writeTag: (tag: ReleaseTag): Effect.Effect<ReleaseTag, TagRefusal> =>
+      Effect.gen(function*() {
+        yield* run(['tag', tag], () => TagCapturedMalformed.make({ path: writeTagPath }))
+        return tag
+      }),
+    repoSlug: (): Effect.Effect<RepoSlug, TagRefusal> =>
+      Effect.gen(function*() {
+        const declared = declaredSlug()
+        if (Option.isSome(declared)) {
+          return declared.value
+        }
+        return yield* readRepoSlug()
+      }),
+    stagedPaths: (): Effect.Effect<ReadonlyArray<StagedPath>, StagedChecksRefusal> =>
+      capture(
+        ['diff', '--cached', '--name-only'],
+        () => StagedStateUnreadable.make({ reason: 'git staged paths unavailable' }),
+        (stdout) =>
+          Result.mapError(
+            S.decodeUnknownResult(S.Array(StagedPath))(nonEmptyLines(stdout)),
+            () => StagedStateUnreadable.make({ reason: 'git staged paths malformed' }),
+          ),
+      ),
+    mergeInProgress: (): Effect.Effect<boolean, StagedChecksRefusal> =>
+      Effect.gen(function*() {
+        const captured = yield* git(['rev-parse', '--verify', 'MERGE_HEAD'])
+        if (Result.isFailure(captured)) {
+          if (mergeHeadMissing(captured.failure)) {
+            return false
+          }
+          return yield* Effect.fail(
+            StagedStateUnreadable.make({ reason: 'git merge state unavailable' }),
+          )
+        }
+        return true
+      }),
   }
 }
 

@@ -41,8 +41,8 @@ and CI fails when any one does.
 
 ## Adding a subcommand
 
-1. Add the step to the lifecycle app that owns it, exporting a `Command` from
-   `effect/unstable/cli` whose handler returns `Effect.Effect<void, ToolError>`.
+1. Add the step to the lifecycle app that owns it, as a `Command` from
+   `effect/unstable/cli` declared in that app's `main.ts`.
 2. Register it with `Command.withSubcommands` in that app's entry module, which
    holds the app's single `NodeRuntime.runMain` edge.
 3. Import shared code by package name — never by a relative path that leaves

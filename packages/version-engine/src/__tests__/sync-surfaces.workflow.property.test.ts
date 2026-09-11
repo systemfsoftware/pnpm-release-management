@@ -31,8 +31,11 @@ const toCommand = (input: {
     action: input.action,
     pinned: input.pinned,
     expected: input.expected,
-    manifestFile: input.manifestFile,
-    entries: input.entries,
+    manifest: { file: input.manifestFile, surface: { kind: 'json', path: input.manifestFile } },
+    entries: input.entries.map((entry) => ({
+      ...entry,
+      surface: { kind: 'json', path: entry.file },
+    })),
     count: input.count,
   })
 

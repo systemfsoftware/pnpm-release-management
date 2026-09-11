@@ -2,13 +2,14 @@ import { it } from '@effect/vitest'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as fc from 'effect/testing/FastCheck'
-import { commitMessage, CommitMessageCommand } from '../commit-message.workflow.js'
-import type { CommitAllowed, CommitRefusal, CommitWaived } from '../commit-message.workflow.js'
+import { CommitMessageCommand } from '../commit-message.schema.js'
+import { commitMessage } from '../commit-message.workflow.js'
+import type { CommitAccepted, CommitIgnored, CommitRefusal } from '../commit-message.workflow.js'
 
 const run = (
   raw: string,
   staged: ReadonlyArray<string>,
-): Result.Result<CommitAllowed | CommitWaived, CommitRefusal> =>
+): Result.Result<CommitAccepted | CommitIgnored, CommitRefusal> =>
   commitMessage(CommitMessageCommand.make({ raw, staged: [...staged] }))
 
 const IGNORE_PREFIXES: ReadonlyArray<readonly [string, string]> = [
@@ -30,7 +31,7 @@ it.prop(
     const outcome = run(pair[0] + suffix, [])
     if (Result.isFailure(outcome)) return false
     return Match.value(outcome.success).pipe(
-      Match.tag('CommitWaived', (waived) => waived.kind === pair[1]),
+      Match.tag('CommitIgnored', (ignored) => ignored.kind === pair[1]),
       Match.orElse(() => false),
     )
   },
@@ -98,10 +99,10 @@ it.prop(
     if (Result.isFailure(outcome)) return false
     return Match.value(outcome.success).pipe(
       Match.tag(
-        'CommitAllowed',
-        (allowed) =>
-          allowed.type === expressible.type && allowed.scope === expressible.scope &&
-          allowed.subject === expressible.subject,
+        'CommitAccepted',
+        (accepted) =>
+          accepted.type === expressible.type && accepted.scope === expressible.scope &&
+          accepted.subject === expressible.subject,
       ),
       Match.orElse(() => false),
     )

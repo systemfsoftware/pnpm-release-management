@@ -1,21 +1,16 @@
 import {
   type ChangelogFile,
-  type ChangelogRefusal,
   ChangelogStore,
   type MemberChangelogEntry,
   RelativePath,
   type RootChangelogAppend,
 } from '@systemfsoftware/release-language'
 import { Effect, Layer } from 'effect'
-import * as S from 'effect/Schema'
 
 export type FakeChangelogState = {
   readonly rootChangelogs: Map<RelativePath, string>
   readonly memberChangelogs: Map<RelativePath, string>
 }
-
-const mustBrand = <C extends S.Constraint>(schema: C, input: unknown) =>
-  S.decodeUnknownEffect(schema)(input).pipe(Effect.orDie)
 
 export const makeFakeChangelogStore = (
   roots: ReadonlyMap<RelativePath, string> = new Map(),
@@ -40,14 +35,15 @@ export const makeFakeChangelogStore = (
         return file
       }),
     writeMemberChangelog: (entry: MemberChangelogEntry) =>
-      Effect.flatMap(
-        mustBrand(RelativePath, `${entry.changelogDir}/${entry.name.replaceAll('/', '!')}@${entry.version}.md`),
-        (path): Effect.Effect<ChangelogFile, ChangelogRefusal> => {
-          const text = `# ${entry.name}@${entry.version}\n\n${entry.summary}\n`
-          memberChangelogs.set(path, text)
-          return Effect.succeed({ path, text })
-        },
-      ),
+      Effect.sync(() => {
+        const path = RelativePath.make(
+          `${entry.changelogDir}/${entry.name.replaceAll('/', '!')}@${entry.version}.md`,
+        )
+        const text = `# ${entry.name}@${entry.version}\n\n${entry.summary}\n`
+        memberChangelogs.set(path, text)
+        const file: ChangelogFile = { path, text }
+        return file
+      }),
   })
   return { layer, state: { rootChangelogs, memberChangelogs } }
 }

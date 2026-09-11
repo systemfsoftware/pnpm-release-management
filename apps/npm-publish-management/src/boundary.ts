@@ -1,12 +1,52 @@
-import { PublishRequest, type StatusMode, StatusRequest, TrustRequest } from '@systemfsoftware/npm-publish-engine'
-import { FsPath, type RepoSlug } from '@systemfsoftware/release-language'
-import { Effect, FileSystem, Option } from 'effect'
-import * as Match from 'effect/Match'
+import { resolveWorkspaceRoot, type WorkspaceRootNotAbsolute } from '@systemfsoftware/cli-adapter'
+import { PublishRequest, type StatusMode, TrustRequest } from '@systemfsoftware/npm-publish-engine'
+import {
+  type ConfigRefusal,
+  FsPath,
+  GitPort,
+  OwnerName,
+  type ReleaseConfig,
+  ReleaseConfigStore,
+  RepoName,
+  type RepoRoot,
+  type RepoSlug,
+} from '@systemfsoftware/release-language'
+import { Effect, FileSystem, Option, Path } from 'effect'
 import * as S from 'effect/Schema'
 import { type BoundaryRefusal, EmitUnwritable, RequestInvalid } from './boundary.schema.js'
-import { slugText, type Workspace } from './workspace.js'
 
 const DEFAULT_JOBS = 4
+
+const UNKNOWN_SLUG: RepoSlug = {
+  owner: OwnerName.make('unknown'),
+  repo: RepoName.make('unknown'),
+}
+
+export const slugText = (slug: RepoSlug): string => `${slug.owner}/${slug.repo}`
+
+export const originSlug = (): Effect.Effect<RepoSlug, never, GitPort> =>
+  Effect.flatMap(GitPort, (git) => git.repoSlug().pipe(Effect.orElseSucceed(() => UNKNOWN_SLUG)))
+
+export interface Workspace {
+  readonly root: RepoRoot
+  readonly release: ReleaseConfig
+  readonly registry: string
+}
+
+export const workspaceOf = (
+  config: Option.Option<string>,
+  registry: Option.Option<string>,
+): Effect.Effect<
+  Workspace,
+  ConfigRefusal | WorkspaceRootNotAbsolute,
+  ReleaseConfigStore | FileSystem.FileSystem | Path.Path
+> =>
+  Effect.gen(function*() {
+    const root = yield* resolveWorkspaceRoot(config)
+    const store = yield* ReleaseConfigStore
+    const release = yield* store.loadConfig(root)
+    return { root, release, registry: Option.getOrUndefined(registry) ?? release.registry }
+  })
 
 export type StatusOutputMode = 'emit-files' | 'json' | 'preflight' | 'report'
 
@@ -15,7 +55,7 @@ export interface StatusTargets {
   readonly deferred: Option.Option<FsPath>
 }
 
-export interface PublishFlags {
+interface PublishFlags {
   readonly dryRun: boolean
   readonly unpublished: boolean
   readonly noProvenance: boolean
@@ -24,34 +64,32 @@ export interface PublishFlags {
   readonly filters: Option.Option<string>
 }
 
-export interface TrustFlags {
+interface TrustFlags {
   readonly dryRun: boolean
   readonly only: Option.Option<string>
   readonly jobs: Option.Option<string>
   readonly file: Option.Option<string>
 }
 
-export const statusModeOf = (preflight: boolean, check: boolean): StatusMode =>
-  Match.value({ preflight, check }).pipe(
-    Match.when({ preflight: true }, (): StatusMode => 'preflight'),
-    Match.when({ check: true }, (): StatusMode => 'check'),
-    Match.orElse((): StatusMode => 'report'),
-  )
+export const statusModeOf = (preflight: boolean, check: boolean): StatusMode => {
+  if (preflight) return 'preflight'
+  if (check) return 'check'
+  return 'report'
+}
 
 export const statusOutputModeOf = (options: {
   readonly json: boolean
   readonly preflight: boolean
   readonly emit: boolean
-}): StatusOutputMode =>
-  Match.value(options).pipe(
-    Match.when({ emit: true }, (): StatusOutputMode => 'emit-files'),
-    Match.when({ json: true }, (): StatusOutputMode => 'json'),
-    Match.when({ preflight: true }, (): StatusOutputMode => 'preflight'),
-    Match.orElse((): StatusOutputMode => 'report'),
-  )
+}): StatusOutputMode => {
+  if (options.emit) return 'emit-files'
+  if (options.json) return 'json'
+  if (options.preflight) return 'preflight'
+  return 'report'
+}
 
 export const jobsOf = (flag: Option.Option<string>): number =>
-  Option.getOrElse(Option.map(flag, (value) => Number(value)), () => DEFAULT_JOBS)
+  Option.match(flag, { onNone: () => DEFAULT_JOBS, onSome: (value) => Number(value) })
 
 const readTextFile = (file: string): Effect.Effect<string | undefined, never, FileSystem.FileSystem> =>
   Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(file).pipe(Effect.orElseSucceed(() => undefined)))
@@ -64,7 +102,7 @@ const readFiltersText = (
     onSome: (file) => readTextFile(file),
   })
 
-export const decodeTarget = (flag: Option.Option<string>): Effect.Effect<Option.Option<FsPath>, BoundaryRefusal> =>
+const decodeTarget = (flag: Option.Option<string>): Effect.Effect<Option.Option<FsPath>, BoundaryRefusal> =>
   Option.match(flag, {
     onNone: () => Effect.succeed(Option.none<FsPath>()),
     onSome: (value) =>
@@ -92,11 +130,6 @@ export const writeEmitFile = (
     fs.writeFileString(target, text).pipe(
       Effect.mapError((error) => EmitUnwritable.make({ path: target, reason: error.message })),
     ))
-
-export const statusRequestOf = (mode: StatusMode): Effect.Effect<StatusRequest, BoundaryRefusal> =>
-  S.decodeUnknownEffect(StatusRequest)({ mode }).pipe(
-    Effect.mapError((issue) => RequestInvalid.make({ reason: issue.message })),
-  )
 
 export const publishRequestOf = (
   workspace: Workspace,

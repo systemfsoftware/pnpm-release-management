@@ -1,8 +1,7 @@
 import {
   ChangesetStore,
   type Intent,
-  IntentStagedDerived,
-  IntentStagedNamed,
+  IntentFrontmatterMalformed,
   type NewIntentRefusal,
   type NewIntentRequest,
   RelativePath,
@@ -32,7 +31,7 @@ export const fakeChangesetStore = (
       if (found !== undefined) {
         return Effect.succeed(found)
       }
-      return Effect.fail({ _tag: 'IntentFrontmatterMalformed' as const, path })
+      return Effect.fail(IntentFrontmatterMalformed.make({ path }))
     },
     readReadme: () => Effect.die(new Error('FakeChangesetStore.readReadme is not used by these cells')),
     deleteIntents: () => Effect.die(new Error('FakeChangesetStore.deleteIntents is not used by these cells')),
@@ -49,20 +48,11 @@ export const fakeChangesetStore = (
         fallback = derived
       }
       const name = request.slug ?? fallback
-      if (request.slug !== undefined) {
-        return Effect.succeed(IntentStagedNamed.make({
-          path: RelativePath.make(`${name}.md`),
-          packages: request.packages.map((pkg) => ({ name: pkg, bump: request.bump })),
-          bump: request.bump,
-          summary: request.summary,
-        }))
-      }
-      return Effect.succeed(IntentStagedDerived.make({
+      return Effect.succeed({
         path: RelativePath.make(`${name}.md`),
         packages: request.packages.map((pkg) => ({ name: pkg, bump: request.bump })),
-        bump: request.bump,
         summary: request.summary,
-      }))
+      })
     },
   })
   return { layer, written }

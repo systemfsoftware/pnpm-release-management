@@ -6,12 +6,12 @@ import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import * as fc from 'effect/testing/FastCheck'
+import { makeFakeProcess } from '../../tests/__fixtures__/FakeProcess.js'
+import { type FakeRegistrySnapshot, makeFakeRegistry } from '../../tests/__fixtures__/FakeRegistry.js'
+import { makeFakeWorkspace } from '../../tests/__fixtures__/FakeWorkspace.js'
 import { TrustCommand } from '../select-trust-candidates.workflow.js'
 import { stageNpmTrustCell, TrustRequest } from '../stage-npm-trust.js'
 import { type TrustCandidateState, type TrustWorkItem } from '../stage-trust.schema.js'
-import { makeFakeProcess } from '../testing/FakeProcess.js'
-import { type FakeRegistrySnapshot, makeFakeRegistry } from '../testing/FakeRegistry.js'
-import { makeFakeWorkspace } from '../testing/FakeWorkspace.js'
 
 const command = S.toArbitrary(TrustCommand)(fc)
 

@@ -1,46 +1,5 @@
 import * as S from 'effect/Schema'
-import { Count, PackageName, PackageVersion, RelativePath } from './Workspace.schema.js'
-
-const VersionDecisionTypeId: unique symbol = Symbol.for(
-  '@systemfsoftware/pnpm-release-management/VersionDecision',
-)
-type VersionDecisionTypeId = typeof VersionDecisionTypeId
-
-export class VersionBumped extends S.TaggedClass<VersionBumped>()(
-  'VersionBumped',
-  {
-    version: PackageVersion,
-    moved: S.Array(PackageName),
-    changelogs: S.Array(RelativePath),
-  },
-) {
-  readonly [VersionDecisionTypeId] = VersionDecisionTypeId
-}
-
-export class VersionConsumed extends S.TaggedClass<VersionConsumed>()(
-  'VersionConsumed',
-  {
-    consumed: Count,
-  },
-) {
-  readonly [VersionDecisionTypeId] = VersionDecisionTypeId
-}
-
-export class VersionIdle extends S.TaggedClass<VersionIdle>()(
-  'VersionIdle',
-  {
-    pending: Count,
-  },
-) {
-  readonly [VersionDecisionTypeId] = VersionDecisionTypeId
-}
-
-export const VersionDecision = S.Union([
-  VersionBumped,
-  VersionConsumed,
-  VersionIdle,
-])
-export type VersionDecision = S.Schema.Type<typeof VersionDecision>
+import { PackageName, PackageVersion, RelativePath } from './Workspace.schema.js'
 
 export const VersionIntentMalformed = S.TaggedStruct('VersionIntentMalformed', {
   path: RelativePath,

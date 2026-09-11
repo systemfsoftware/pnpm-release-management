@@ -1,16 +1,38 @@
 import { Workflow } from '@systemfsoftware/effect-cell-types'
-import type { PinDistributionMissing, PinVersionUnusable } from '@systemfsoftware/release-language'
-import { PackageVersion, PinName, RepoRoot } from '@systemfsoftware/release-language'
+import { DecisionTypeId, FsPath, PackageVersion, RepoRoot } from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
-import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import { PinRootManifestCommand } from './pin-root-manifest.schema.js'
+import { PinName, PinRootManifestCommand } from './pin-root-manifest.schema.js'
 
-const PinDecisionTypeId: unique symbol = Symbol.for(
-  '@systemfsoftware/pnpm-release-management/PinDecision',
-)
-type PinDecisionTypeId = typeof PinDecisionTypeId
+export class PinVersionUnusable extends S.TaggedError<PinVersionUnusable>()(
+  'PinVersionUnusable',
+  {
+    given: S.optional(S.String),
+  },
+) {}
+
+export class PinDistributionMissing extends S.TaggedError<PinDistributionMissing>()(
+  'PinDistributionMissing',
+  {
+    root: RepoRoot,
+  },
+) {}
+
+export class PinManifestInvalid extends S.TaggedError<PinManifestInvalid>()(
+  'PinManifestInvalid',
+  {
+    path: FsPath,
+    reason: S.String,
+  },
+) {}
+
+export const PinRefusal = S.Union([
+  PinVersionUnusable,
+  PinDistributionMissing,
+  PinManifestInvalid,
+])
+export type PinRefusal = S.Schema.Type<typeof PinRefusal>
 
 export class WorkspaceVersionRepinned extends S.TaggedClass<WorkspaceVersionRepinned>()(
   'WorkspaceVersionRepinned',
@@ -20,7 +42,7 @@ export class WorkspaceVersionRepinned extends S.TaggedClass<WorkspaceVersionRepi
     text: S.String,
   },
 ) {
-  readonly [PinDecisionTypeId] = PinDecisionTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
 export class WorkspaceVersionAlreadyCurrent extends S.TaggedClass<
@@ -33,24 +55,34 @@ export class WorkspaceVersionAlreadyCurrent extends S.TaggedClass<
     text: S.String,
   },
 ) {
-  readonly [PinDecisionTypeId] = PinDecisionTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
-const PinCase = S.Union([
-  S.TaggedStruct('VersionUnusable', { given: S.optional(S.String) }),
-  S.TaggedStruct('NoDistribution', { root: RepoRoot }),
-  S.TaggedStruct('RevisionUnchanged', {
-    version: PackageVersion,
-    pins: S.Array(PinName),
-    text: S.String,
-  }),
-  S.TaggedStruct('RevisionChanged', {
-    version: PackageVersion,
-    pins: S.Array(PinName),
-    text: S.String,
-  }),
-])
-type PinCase = S.Schema.Type<typeof PinCase>
+export type PinDecision = WorkspaceVersionRepinned | WorkspaceVersionAlreadyCurrent
+
+const VersionUnusableCase = S.TaggedStruct('VersionUnusable', { given: S.optional(S.String) })
+const NoDistributionCase = S.TaggedStruct('NoDistribution', { root: RepoRoot })
+const RevisionUnchangedCase = S.TaggedStruct('RevisionUnchanged', {
+  version: PackageVersion,
+  pins: S.Array(PinName),
+  text: S.String,
+})
+const RevisionChangedCase = S.TaggedStruct('RevisionChanged', {
+  version: PackageVersion,
+  pins: S.Array(PinName),
+  text: S.String,
+})
+
+type VersionUnusableCase = S.Schema.Type<typeof VersionUnusableCase>
+type NoDistributionCase = S.Schema.Type<typeof NoDistributionCase>
+type RevisionUnchangedCase = S.Schema.Type<typeof RevisionUnchangedCase>
+type RevisionChangedCase = S.Schema.Type<typeof RevisionChangedCase>
+
+type PinCase =
+  | VersionUnusableCase
+  | NoDistributionCase
+  | RevisionUnchangedCase
+  | RevisionChangedCase
 
 const renderedManifest = (command: PinRootManifestCommand, version: PackageVersion): string =>
   `${
@@ -65,71 +97,40 @@ const renderedManifest = (command: PinRootManifestCommand, version: PackageVersi
     )
   }${'\n'.repeat(Number(command.trailingNewline))}`
 
-const revisionCaseOf = (command: PinRootManifestCommand, version: PackageVersion): PinCase => {
+const pinCaseOf = (command: PinRootManifestCommand): PinCase => {
+  if (command.suffixes === undefined) return NoDistributionCase.make({ root: command.repoRoot })
+  if (command.requestedVersion !== undefined && command.requestedUsable === undefined) {
+    return VersionUnusableCase.make({ given: command.requestedVersion })
+  }
+  const version = command.requestedUsable ?? command.declaredUsable
+  if (version === undefined) return VersionUnusableCase.make({ given: command.requestedVersion })
   const text = renderedManifest(command, version)
-  return Option.match(
-    Option.filter(Option.some(text), (candidate) => candidate === command.manifestText),
-    {
-      onNone: (): PinCase => ({ _tag: 'RevisionChanged', version, pins: [...command.pinNames], text }),
-      onSome: (): PinCase => ({
-        _tag: 'RevisionUnchanged',
-        version,
-        pins: [...command.pinNames],
-        text: command.manifestText,
-      }),
-    },
-  )
+  if (text === command.manifestText) {
+    return RevisionUnchangedCase.make({
+      version,
+      pins: [...command.pinNames],
+      text: command.manifestText,
+    })
+  }
+  return RevisionChangedCase.make({ version, pins: [...command.pinNames], text })
 }
-
-const versionOf = (command: PinRootManifestCommand): Option.Option<PackageVersion> =>
-  Option.orElse(
-    Option.fromNullishOr(command.requestedUsable),
-    () => Option.fromNullishOr(command.declaredUsable),
-  )
-
-const versionCaseOf = (command: PinRootManifestCommand): PinCase =>
-  Option.match(versionOf(command), {
-    onNone: (): PinCase => ({ _tag: 'VersionUnusable', given: command.requestedVersion }),
-    onSome: (version): PinCase => revisionCaseOf(command, version),
-  })
-
-const requestedUnusableOf = (command: PinRootManifestCommand): Option.Option<PinCase> =>
-  Option.map(
-    Option.filter(
-      Option.fromNullishOr(command.requestedVersion),
-      () => command.requestedUsable === undefined,
-    ),
-    (given): PinCase => ({ _tag: 'VersionUnusable', given }),
-  )
-
-const unusableCaseOf = (command: PinRootManifestCommand): PinCase =>
-  Option.match(requestedUnusableOf(command), {
-    onNone: (): PinCase => versionCaseOf(command),
-    onSome: (unusable): PinCase => unusable,
-  })
-
-const caseOf = (command: PinRootManifestCommand): PinCase =>
-  Option.match(Option.fromNullishOr(command.suffixes), {
-    onNone: (): PinCase => ({ _tag: 'NoDistribution', root: command.repoRoot }),
-    onSome: (): PinCase => unusableCaseOf(command),
-  })
 
 export const pinRootManifest = Workflow.make(
   PinRootManifestCommand,
   (
     command,
   ): Result.Result<
-    WorkspaceVersionRepinned | WorkspaceVersionAlreadyCurrent,
+    PinDecision,
     PinVersionUnusable | PinDistributionMissing
   > =>
-    Match.value(caseOf(command)).pipe(
+    Match.value(pinCaseOf(command)).pipe(
       Match.tag(
         'VersionUnusable',
-        (unusable) => Result.fail({ _tag: 'PinVersionUnusable' as const, given: unusable.given }),
+        (unusable) => Result.fail(PinVersionUnusable.make({ given: unusable.given })),
       ),
       Match.tag(
         'NoDistribution',
-        (missing) => Result.fail({ _tag: 'PinDistributionMissing' as const, root: missing.root }),
+        (missing) => Result.fail(PinDistributionMissing.make({ root: missing.root })),
       ),
       Match.tag(
         'RevisionUnchanged',

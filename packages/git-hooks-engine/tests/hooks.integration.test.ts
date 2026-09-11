@@ -3,21 +3,17 @@ import { Gherkin, Given, it, layer, makeFeature, Then, When } from '@systemfsoft
 import {
   commitMessageCell,
   CommitRejected,
-  makeFakeGitPort,
-  makeFakeProcessPort,
   stagedChecksCell,
+  type StagedChecksDecision,
 } from '@systemfsoftware/git-hooks-engine'
-import type {
-  ProcessCompleted,
-  PublishRefusal,
-  StagedChecksDecision,
-  WorkspaceCommand,
-} from '@systemfsoftware/release-language'
+import type { ProcessCompleted, PublishRefusal, WorkspaceCommand } from '@systemfsoftware/release-language'
 import { Effect } from 'effect'
 import * as Layer from 'effect/Layer'
 import * as Match from 'effect/Match'
 import * as S from 'effect/Schema'
 import { expect } from 'vitest'
+import { makeFakeGitPort } from './__fixtures__/FakeGitPort.js'
+import { makeFakeProcessPort } from './__fixtures__/FakeProcessPort.js'
 
 const Feature = makeFeature({ it, layer })
 

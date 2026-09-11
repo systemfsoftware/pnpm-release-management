@@ -13,11 +13,6 @@ on:
         required: false
         type: string
         default: ""
-      deno-version:
-        description: reserved, unused; kept so existing callers keep working
-        required: false
-        type: string
-        default: v2.x
       node-version:
         description: node version used for pnpm
         required: false

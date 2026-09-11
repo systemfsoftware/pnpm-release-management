@@ -1,16 +1,6 @@
 import { Cell } from '@systemfsoftware/effect-cell-types'
 import { Gherkin, Given, it, layer, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
-import {
-  githubReleaseCell,
-  makeFakeChangesetStore,
-  makeFakeCycleStore,
-  makeFakeForge,
-  makeFakeGit,
-  makeFakeWorkspaceStore,
-  planCell,
-  pullRequestCell,
-  tagCell,
-} from '@systemfsoftware/github-release-engine'
+import { githubReleaseCell, planCell, pullRequestCell, tagCell } from '@systemfsoftware/github-release-engine'
 import {
   Count,
   FsPath,
@@ -32,6 +22,11 @@ import {
 import { Effect, Layer, Result, Schema as S } from 'effect'
 import * as Match from 'effect/Match'
 import { expect } from 'vitest'
+import { makeFakeChangesetStore } from './__fixtures__/FakeChangesetStore.js'
+import { makeFakeCycleStore } from './__fixtures__/FakeCycleStore.js'
+import { makeFakeForge } from './__fixtures__/FakeForge.js'
+import { makeFakeGit } from './__fixtures__/FakeGit.js'
+import { makeFakeWorkspaceStore } from './__fixtures__/FakeWorkspaceStore.js'
 
 const Feature = makeFeature({ it, layer })
 

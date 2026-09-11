@@ -4,12 +4,11 @@ import {
   Count,
   type Intent,
   IntentFrontmatter,
+  IntentFrontmatterMalformed,
   type IntentRefusal,
   IntentSlug,
-  IntentStagedDerived,
-  IntentStagedNamed,
+  IntentSlugTaken,
   IntentSummary,
-  type NewIntentDecision,
   type NewIntentRefusal,
   type NewIntentRequest,
   PackageName,
@@ -20,17 +19,18 @@ import {
 import { Effect, Layer } from 'effect'
 import { currentTimeMillis } from 'effect/Clock'
 import { FileSystem } from 'effect/FileSystem'
-import * as Match from 'effect/Match'
 import * as Option from 'effect/Option'
 import { Path } from 'effect/Path'
 import * as S from 'effect/Schema'
-import { isRegularFile, readDirectoryEntries, readTextFile, removeFile, writeTextFile } from './StoreFile.js'
+import { createTextFile, isRegularFile, readDirectoryEntries, readTextFile, removeFile } from './StoreFile.js'
 
 const FENCE = /^---\s*$/
 const ENTRY = /^\s*["']?([^"'\s:]+)["']?\s*:\s*([^\s]+)\s*$/
 const INTENT_SUFFIX = '.md'
 const README_FILE = 'README.md'
 const SLUG_LIMIT = 48
+
+const malformed = (file: RelativePath): IntentRefusal => IntentFrontmatterMalformed.make({ path: file })
 
 const splitDocument = (text: string): Option.Option<{ readonly frontmatter: string; readonly body: string }> => {
   const [first, ...rest] = text.split('\n')
@@ -104,26 +104,22 @@ export const ChangesetStoreLive = (options: {
       const path = yield* Path
       const { root, changesetDir } = options
 
-      const unreadable = (file: RelativePath): IntentRefusal => ({ _tag: 'IntentFrontmatterMalformed', path: file })
-
       const listIntents = (): Effect.Effect<ReadonlyArray<RelativePath>, IntentRefusal> =>
         Effect.gen(function*() {
           const dir = path.join(root, changesetDir)
-          const absent: ReadonlyArray<string> = []
           const names = yield* readDirectoryEntries(fs, dir).pipe(
-            Effect.catchTag('Missing', () => Effect.succeed(absent)),
-            Effect.mapError(() => unreadable(changesetDir)),
+            Effect.catchTag('Missing', () => Effect.succeed<ReadonlyArray<string>>([])),
+            Effect.mapError(() => malformed(changesetDir)),
           )
+          const candidates = names.filter((name) => name.endsWith(INTENT_SUFFIX) && name !== README_FILE)
           const intents: Array<RelativePath> = []
-          for (const name of names) {
-            if (!name.endsWith(INTENT_SUFFIX)) continue
-            if (name === README_FILE) continue
+          for (const name of candidates) {
             const file = yield* S.decodeUnknownEffect(RelativePath)(`${changesetDir}/${name}`).pipe(
-              Effect.mapError(() => unreadable(changesetDir)),
+              Effect.mapError(() => malformed(changesetDir)),
             )
             const regular = yield* isRegularFile(fs, path.join(dir, name)).pipe(
               Effect.catchTag('Missing', () => Effect.succeed(false)),
-              Effect.mapError(() => unreadable(file)),
+              Effect.mapError(() => malformed(file)),
             )
             if (regular) intents.push(file)
           }
@@ -133,45 +129,37 @@ export const ChangesetStoreLive = (options: {
       const readIntent = (intentPath: RelativePath): Effect.Effect<Intent, IntentRefusal> =>
         Effect.gen(function*() {
           const text = yield* readTextFile(fs, path.join(root, intentPath)).pipe(
-            Effect.mapError(() => unreadable(intentPath)),
+            Effect.mapError(() => malformed(intentPath)),
           )
           const parsed = parseIntent(intentPath, text)
           if (Option.isNone(parsed)) {
-            return yield* Effect.fail(unreadable(intentPath))
+            return yield* Effect.fail(malformed(intentPath))
           }
           return parsed.value
         })
 
-      const writeIntent = (request: NewIntentRequest): Effect.Effect<NewIntentDecision, NewIntentRefusal> =>
+      const writeIntent = (request: NewIntentRequest): Effect.Effect<Intent, NewIntentRefusal> =>
         Effect.gen(function*() {
           const slug = request.slug ?? derivedSlug(request.packages)
-          const now = yield* currentTimeMillis
-          const file = RelativePath.make(`${changesetDir}/${slug}-${now.toString(36)}.md`)
-          yield* writeTextFile(fs, path.join(root, file), intentDocument(request), 'exclusive').pipe(
-            Effect.matchEffect({
-              onFailure: (fault): Effect.Effect<void, NewIntentRefusal> =>
-                Match.value(fault).pipe(
-                  Match.tag('AlreadyExists', () => Effect.fail<NewIntentRefusal>({ _tag: 'IntentSlugTaken', slug })),
-                  Match.orElse(() => Effect.die(new Error(`cannot stage intent ${file}: ${fault.reason}`))),
-                ),
-              onSuccess: () => Effect.void,
-            }),
+          const stamp = yield* currentTimeMillis
+          const file = RelativePath.make(`${changesetDir}/${slug}-${stamp.toString(36)}.md`)
+          yield* createTextFile(fs, path.join(root, file), intentDocument(request)).pipe(
+            Effect.catchTag('AlreadyExists', () => Effect.fail(IntentSlugTaken.make({ slug }))),
+            Effect.catchTags({ Missing: Effect.die, Unavailable: Effect.die }),
           )
-          const packages = request.packages.map((name) => ({ name, bump: request.bump }))
-          if (request.slug !== undefined) {
-            return IntentStagedNamed.make({ path: file, packages, bump: request.bump, summary: request.summary })
+          return {
+            path: file,
+            packages: request.packages.map((name) => ({ name, bump: request.bump })),
+            summary: request.summary,
           }
-          return IntentStagedDerived.make({ path: file, packages, bump: request.bump, summary: request.summary })
         })
 
       const deleteIntents = (intents: ReadonlyArray<RelativePath>): Effect.Effect<Count, IntentRefusal> =>
         Effect.gen(function*() {
           let deleted = 0
           for (const intentPath of intents) {
-            const full = path.join(root, intentPath)
-            const removed = yield* removeFile(fs, full).pipe(
-              Effect.mapError((fault) => new Error(`cannot delete ${full}: ${fault.reason}`)),
-              Effect.orDie,
+            const removed = yield* removeFile(fs, path.join(root, intentPath)).pipe(
+              Effect.mapError(() => malformed(intentPath)),
             )
             if (removed) deleted += 1
           }
@@ -181,9 +169,7 @@ export const ChangesetStoreLive = (options: {
       const readReadme = (): Effect.Effect<RootFile, IntentRefusal> =>
         Effect.gen(function*() {
           const file = RelativePath.make(`${changesetDir}/${README_FILE}`)
-          const text = yield* readTextFile(fs, path.join(root, file)).pipe(
-            Effect.mapError(() => unreadable(file)),
-          )
+          const text = yield* readTextFile(fs, path.join(root, file)).pipe(Effect.mapError(() => malformed(file)))
           return { path: file, text }
         })
 

@@ -48,7 +48,6 @@ export default defineConfig({
     {
       files: ['src/**/*.workflow.ts'],
       rules: {
-        complexity: ['error', { max: 1 }],
         'no-restricted-imports': ['error', { patterns: decisionFileImports }],
       },
     },

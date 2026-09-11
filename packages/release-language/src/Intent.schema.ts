@@ -39,24 +39,6 @@ export const Intent = S.Struct({
 })
 export type Intent = S.Schema.Type<typeof Intent>
 
-export const IntentReleaseable = S.TaggedStruct('IntentReleaseable', {
-  path: RelativePath,
-  packages: IntentPackages,
-  summary: IntentSummary,
-  bump: ReleaseBump,
-})
-export type IntentReleaseable = S.Schema.Type<typeof IntentReleaseable>
-
-export const IntentNoted = S.TaggedStruct('IntentNoted', {
-  path: RelativePath,
-  packages: IntentPackages,
-  summary: IntentSummary,
-})
-export type IntentNoted = S.Schema.Type<typeof IntentNoted>
-
-export const IntentVerdict = S.Union([IntentReleaseable, IntentNoted])
-export type IntentVerdict = S.Schema.Type<typeof IntentVerdict>
-
 export const IntentFrontmatterMalformed = S.TaggedStruct(
   'IntentFrontmatterMalformed',
   {

@@ -1,14 +1,32 @@
-export { commitMessageCell, CommitMessageInput, CommitRejected } from './commit-message.js'
-export { CommitAllowed, commitMessage, CommitMessageCommand, CommitWaived } from './commit-message.workflow.js'
+export { commitMessageCell, CommitMessageInput } from './commit-message.js'
+export { CommitMessageCommand } from './commit-message.schema.js'
+export {
+  CommitAccepted,
+  CommitAiAttribution,
+  CommitEmpty,
+  CommitHeaderMalformed,
+  CommitHeaderPunctuation,
+  CommitIgnored,
+  CommitIgnoreKind,
+  CommitMessageDecision,
+  CommitMessageRefusal,
+  CommitProductionUntouched,
+  CommitRejected,
+  CommitScope,
+  CommitScopeUnknown,
+  CommitShape,
+  CommitShapeMismatched,
+  CommitSubjectEmpty,
+  CommitType,
+  CommitTypeUnknown,
+} from './commit-message.workflow.js'
 export type { CommitRefusal } from './commit-message.workflow.js'
 export { stagedChecksCell, StagedChecksInput } from './staged-checks.js'
 export {
-  stagedChecks,
+  MergeChecksSkipped,
   StagedChecksCommand,
-  StagedChecksIdle,
-  StagedChecksRan,
-  StagedChecksSkipped,
-} from './staged-checks.workflow.js'
-export { makeFakeGitPort } from './testing/FakeGitPort.js'
-export type { FakeGitState } from './testing/FakeGitPort.js'
-export { makeFakeProcessPort } from './testing/FakeProcessPort.js'
+  StagedChecksDecision,
+  StagedChecksPassed,
+  StagedVacant,
+} from './staged-checks.schema.js'
+export { StagedChecksIdle, StagedChecksRan, StagedChecksSkipped } from './staged-checks.workflow.js'

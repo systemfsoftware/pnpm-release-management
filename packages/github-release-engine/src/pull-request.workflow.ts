@@ -1,50 +1,62 @@
 import { Workflow } from '@systemfsoftware/effect-cell-types'
-import { Count, FsPath, GitRef, PrTitle, PullRequestLookup } from '@systemfsoftware/release-language'
+import {
+  Count,
+  DecisionTypeId,
+  FsPath,
+  GitRef,
+  PrTitle,
+  PullRequestLookup,
+  PullRequestNumber,
+  ReleaseLabel,
+  RemoteName,
+  RepoSlug,
+} from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
-import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 
-const PullRequestReleaseDecisionTypeId: unique symbol = Symbol.for(
-  '@systemfsoftware/pnpm-release-management/PullRequestReleaseDecision',
-)
-type PullRequestReleaseDecisionTypeId = typeof PullRequestReleaseDecisionTypeId
+export const BranchDeleted = S.Struct({
+  branch: GitRef,
+  deleted: S.Boolean,
+})
 
-export class PullRequestReleaseOpened extends S.TaggedClass<PullRequestReleaseOpened>()(
-  'PullRequestReleaseOpened',
-  { number: S.Finite },
+export type BranchDeleted = S.Schema.Type<typeof BranchDeleted>
+
+export class PullRequestCreated extends S.TaggedClass<PullRequestCreated>()(
+  'PullRequestCreated',
+  { number: PullRequestNumber },
 ) {
-  readonly [PullRequestReleaseDecisionTypeId] = PullRequestReleaseDecisionTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
-export class PullRequestReleaseRefreshed extends S.TaggedClass<PullRequestReleaseRefreshed>()(
-  'PullRequestReleaseRefreshed',
-  { number: S.Finite },
+export class PullRequestUpdated extends S.TaggedClass<PullRequestUpdated>()(
+  'PullRequestUpdated',
+  { number: PullRequestNumber },
 ) {
-  readonly [PullRequestReleaseDecisionTypeId] = PullRequestReleaseDecisionTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
-export class PullRequestReleaseClosed extends S.TaggedClass<PullRequestReleaseClosed>()(
-  'PullRequestReleaseClosed',
-  { number: S.Finite, branch: S.String },
+export class PullRequestClosed extends S.TaggedClass<PullRequestClosed>()(
+  'PullRequestClosed',
+  { number: PullRequestNumber, branch: BranchDeleted },
 ) {
-  readonly [PullRequestReleaseDecisionTypeId] = PullRequestReleaseDecisionTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
-export class PullRequestReleaseVacant extends S.TaggedClass<PullRequestReleaseVacant>()(
-  'PullRequestReleaseVacant',
-  { branch: S.String },
+export class PullRequestVacant extends S.TaggedClass<PullRequestVacant>()(
+  'PullRequestVacant',
+  { branch: GitRef },
 ) {
-  readonly [PullRequestReleaseDecisionTypeId] = PullRequestReleaseDecisionTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
-export class BodyFileUnreadable extends S.TaggedError<BodyFileUnreadable>()(
-  'BodyFileUnreadable',
+export class PullRequestBodyUnreadable extends S.TaggedError<PullRequestBodyUnreadable>()(
+  'PullRequestBodyUnreadable',
   { path: FsPath },
 ) {}
 
-export class HeadRefInvalid extends S.TaggedError<HeadRefInvalid>()(
-  'HeadRefInvalid',
+export class PullRequestHeadInvalid extends S.TaggedError<PullRequestHeadInvalid>()(
+  'PullRequestHeadInvalid',
   { branch: GitRef },
 ) {}
 
@@ -58,84 +70,73 @@ export class PullRequestCommand extends S.TaggedClass<PullRequestCommand>()(
     title: PrTitle,
     body: S.String,
     bodyIssue: S.optional(FsPath),
+    slug: RepoSlug,
+    remote: RemoteName,
+    labels: S.Array(ReleaseLabel),
   },
 ) {}
 
-const BodyBadCase = S.TaggedStruct('PullRequestBodyBad', { path: FsPath })
-const HeadBadCase = S.TaggedStruct('PullRequestHeadBad', { branch: GitRef })
-const DirtyFoundCase = S.TaggedStruct('PullRequestDirtyFound', { number: S.Finite })
-const DirtyAbsentCase = S.TaggedStruct('PullRequestDirtyAbsent', {})
-const CleanFoundCase = S.TaggedStruct('PullRequestCleanFound', { number: S.Finite })
-const CleanAbsentCase = S.TaggedStruct('PullRequestCleanAbsent', {})
+export type PullRequestDecision =
+  | PullRequestCreated
+  | PullRequestUpdated
+  | PullRequestClosed
+  | PullRequestVacant
+
+const BodyBadCase = S.TaggedStruct('BodyBad', { path: FsPath })
+const HeadBadCase = S.TaggedStruct('HeadBad', { branch: GitRef })
+const RefreshingCase = S.TaggedStruct('Refreshing', { number: PullRequestNumber })
+const ClosingCase = S.TaggedStruct('Closing', { number: PullRequestNumber, branch: GitRef })
+const VacantCase = S.TaggedStruct('Vacant', { branch: GitRef })
 const PullRequestCase = S.Union([
   BodyBadCase,
   HeadBadCase,
-  DirtyFoundCase,
-  DirtyAbsentCase,
-  CleanFoundCase,
-  CleanAbsentCase,
+  RefreshingCase,
+  ClosingCase,
+  VacantCase,
 ])
 type PullRequestCase = S.Schema.Type<typeof PullRequestCase>
 
-const cleanCaseOf = (command: PullRequestCommand): PullRequestCase =>
-  Match.value(command.existing).pipe(
-    Match.tag('PullRequestFound', (found) => CleanFoundCase.make({ number: found.number })),
-    Match.tag('PullRequestAbsent', () => CleanAbsentCase.make({})),
+const pullRequestCaseOf = (command: PullRequestCommand): PullRequestCase => {
+  const bodyIssue = command.bodyIssue
+  if (bodyIssue !== undefined) {
+    return BodyBadCase.make({ path: bodyIssue })
+  }
+  const branch = command.branch
+  if (branch === command.base) {
+    return HeadBadCase.make({ branch })
+  }
+  return Match.value(command.existing).pipe(
+    Match.tag('PullRequestFound', (found): PullRequestCase => {
+      if (command.pending > 0) {
+        return RefreshingCase.make({ number: found.number })
+      }
+      return ClosingCase.make({ number: found.number, branch })
+    }),
+    Match.tag('PullRequestAbsent', (): PullRequestCase => VacantCase.make({ branch })),
     Match.exhaustive,
   )
-
-const dirtyCaseOf = (command: PullRequestCommand): PullRequestCase =>
-  Match.value(command.existing).pipe(
-    Match.tag('PullRequestFound', (found) => DirtyFoundCase.make({ number: found.number })),
-    Match.tag('PullRequestAbsent', () => DirtyAbsentCase.make({})),
-    Match.exhaustive,
-  )
-
-const pendingCaseOf = (command: PullRequestCommand): PullRequestCase =>
-  Match.value(command.pending > 0).pipe(
-    Match.when(true, () => dirtyCaseOf(command)),
-    Match.when(false, () => cleanCaseOf(command)),
-    Match.exhaustive,
-  )
-
-const headCaseOf = (command: PullRequestCommand): PullRequestCase =>
-  Match.value(command.branch === command.base).pipe(
-    Match.when(true, () => HeadBadCase.make({ branch: command.branch })),
-    Match.when(false, () => pendingCaseOf(command)),
-    Match.exhaustive,
-  )
-
-const classify = (command: PullRequestCommand): PullRequestCase =>
-  Match.value(Option.fromNullishOr(command.bodyIssue)).pipe(
-    Match.tag('Some', (issue) => BodyBadCase.make({ path: issue.value })),
-    Match.tag('None', () => headCaseOf(command)),
-    Match.exhaustive,
-  )
+}
 
 export const pullRequest = Workflow.make(
   PullRequestCommand,
   (
     command,
   ): Result.Result<
-    | PullRequestReleaseOpened
-    | PullRequestReleaseRefreshed
-    | PullRequestReleaseClosed
-    | PullRequestReleaseVacant,
-    BodyFileUnreadable | HeadRefInvalid
+    PullRequestCreated | PullRequestUpdated | PullRequestClosed | PullRequestVacant,
+    PullRequestBodyUnreadable | PullRequestHeadInvalid
   > =>
-    Match.value(classify(command)).pipe(
-      Match.tag('PullRequestBodyBad', (bad) => Result.fail(BodyFileUnreadable.make({ path: bad.path }))),
-      Match.tag('PullRequestHeadBad', (bad) => Result.fail(HeadRefInvalid.make({ branch: bad.branch }))),
-      Match.tag('PullRequestDirtyFound', (dirty) =>
-        Result.succeed(PullRequestReleaseRefreshed.make({ number: dirty.number }))),
-      Match.tag('PullRequestDirtyAbsent', () =>
-        Result.succeed(PullRequestReleaseVacant.make({ branch: command.branch }))),
-      Match.tag('PullRequestCleanFound', (clean) =>
+    Match.value(pullRequestCaseOf(command)).pipe(
+      Match.tag('BodyBad', (bad) => Result.fail(PullRequestBodyUnreadable.make({ path: bad.path }))),
+      Match.tag('HeadBad', (bad) => Result.fail(PullRequestHeadInvalid.make({ branch: bad.branch }))),
+      Match.tag('Refreshing', (refreshing) => Result.succeed(PullRequestUpdated.make({ number: refreshing.number }))),
+      Match.tag('Closing', (closing) =>
         Result.succeed(
-          PullRequestReleaseClosed.make({ number: clean.number, branch: command.branch }),
+          PullRequestClosed.make({
+            number: closing.number,
+            branch: BranchDeleted.make({ branch: closing.branch, deleted: false }),
+          }),
         )),
-      Match.tag('PullRequestCleanAbsent', () =>
-        Result.succeed(PullRequestReleaseVacant.make({ branch: command.branch }))),
+      Match.tag('Vacant', (vacant) => Result.succeed(PullRequestVacant.make({ branch: vacant.branch }))),
       Match.exhaustive,
     ),
 )

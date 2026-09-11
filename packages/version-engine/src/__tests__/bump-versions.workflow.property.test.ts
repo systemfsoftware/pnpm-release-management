@@ -88,6 +88,8 @@ const toCommand = (input: {
     manifestVersion: input.manifestVersion,
     changelogDir: input.changelogDir,
     rootChangelog: input.rootChangelog,
+    manifest: { file: 'package.json', surface: { kind: 'json', path: 'package.json' } },
+    surfaces: [],
     consolidated: derived.consolidated,
     consolidatedNext: derived.consolidatedNext,
     nexts: derived.nexts,

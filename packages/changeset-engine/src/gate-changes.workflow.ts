@@ -1,9 +1,14 @@
 import { Workflow } from '@systemfsoftware/effect-cell-types'
-import type { GateIntentMissing, GateUnknownPackage, RelativePath } from '@systemfsoftware/release-language'
-import { Intent, Member, PackageName } from '@systemfsoftware/release-language'
-import * as Array from 'effect/Array'
+import {
+  DecisionTypeId,
+  type GateIntentMissing,
+  type GateUnknownPackage,
+  Intent,
+  Member,
+  PackageName,
+  RelativePath,
+} from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
-import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 
@@ -14,18 +19,13 @@ export class GateCommand extends S.TaggedClass<GateCommand>()('GateCommand', {
   skipLiveness: S.optional(S.Boolean),
 }) {}
 
-const ChangesDecisionTypeId: unique symbol = Symbol.for(
-  '@systemfsoftware/changeset-engine/ChangesDecision',
-)
-type ChangesDecisionTypeId = typeof ChangesDecisionTypeId
-
 export class ChangesVacant extends S.TaggedClass<ChangesVacant>()(
   'ChangesVacant',
   {
     members: S.Array(PackageName),
   },
 ) {
-  readonly [ChangesDecisionTypeId] = ChangesDecisionTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
 export class ChangesGated extends S.TaggedClass<ChangesGated>()(
@@ -34,105 +34,97 @@ export class ChangesGated extends S.TaggedClass<ChangesGated>()(
     touched: S.Array(PackageName),
   },
 ) {
-  readonly [ChangesDecisionTypeId] = ChangesDecisionTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
-type ChangesDecision = ChangesVacant | ChangesGated
-type GateVerdict = Result.Result<ChangesDecision, GateUnknownPackage | GateIntentMissing>
+const ForeignCase = S.TaggedStruct('Foreign', {
+  path: RelativePath,
+  package: PackageName,
+})
+type ForeignCase = S.Schema.Type<typeof ForeignCase>
 
-type ForeignEntry = { readonly path: RelativePath; readonly name: PackageName }
-type NonEmpty = readonly [PackageName, ...PackageName[]]
+const VacantCase = S.TaggedStruct('Vacant', {
+  members: S.Array(PackageName),
+})
+type VacantCase = S.Schema.Type<typeof VacantCase>
 
-type GateFacts = {
-  readonly members: ReadonlyArray<PackageName>
-  readonly moved: ReadonlyArray<PackageName>
-  readonly unnamed: Option.Option<NonEmpty>
-  readonly foreign: Option.Option<ForeignEntry>
+const UnnamedCase = S.TaggedStruct('Unnamed', {
+  packages: S.NonEmptyArray(PackageName),
+})
+type UnnamedCase = S.Schema.Type<typeof UnnamedCase>
+
+const GatedCase = S.TaggedStruct('Gated', {
+  touched: S.Array(PackageName),
+})
+type GatedCase = S.Schema.Type<typeof GatedCase>
+
+type GateCase = ForeignCase | VacantCase | UnnamedCase | GatedCase
+
+const foreignCaseOf = (
+  command: GateCommand,
+  memberNames: ReadonlyArray<PackageName>,
+): ForeignCase | undefined => {
+  if (command.skipLiveness === true) return undefined
+  const entry = command.intents
+    .flatMap((intent) => intent.packages.map((entry) => ({ path: intent.path, package: entry.name })))
+    .find((entry) => !memberNames.includes(entry.package))
+  if (entry === undefined) return undefined
+  return { _tag: 'Foreign', path: entry.path, package: entry.package }
 }
 
-const named = (command: GateCommand, name: PackageName): boolean =>
-  Array.some(
-    command.intents,
-    (intent) => Array.some(intent.packages, (entry) => entry.name === name),
+const movedSoFar = (command: GateCommand): ReadonlyArray<PackageName> =>
+  [...command.touched]
+    .filter((name) => command.members.some((member) => member.publishable && member.name === name))
+    .sort()
+
+const unnamedCaseOf = (
+  command: GateCommand,
+  moved: ReadonlyArray<PackageName>,
+): UnnamedCase | undefined => {
+  const unnamed = moved.filter((name) =>
+    !command.intents.some((intent) => intent.packages.some((entry) => entry.name === name))
   )
-
-const memberNames = (command: GateCommand): ReadonlyArray<PackageName> =>
-  Array.map(command.members, (member) => member.name)
-
-const publishableNames = (command: GateCommand): ReadonlyArray<PackageName> =>
-  Array.map(
-    Array.filter(command.members, (member) => member.publishable),
-    (member) => member.name,
-  )
-
-const moved = (command: GateCommand): ReadonlyArray<PackageName> =>
-  Array.filter(
-    command.touched,
-    (name) => Array.contains(publishableNames(command), name),
-  ).sort()
-
-const firstNonEmpty = (names: ReadonlyArray<PackageName>): Option.Option<NonEmpty> =>
-  Array.match(names, {
-    onEmpty: (): Option.Option<NonEmpty> => Option.none(),
-    onNonEmpty: (nonEmpty): Option.Option<NonEmpty> => Option.some(nonEmpty),
-  })
-
-const foreignEntry = (command: GateCommand): Option.Option<ForeignEntry> =>
-  Match.value(command.skipLiveness).pipe(
-    Match.when(true, (): Option.Option<ForeignEntry> => Option.none()),
-    Match.orElse(() =>
-      Array.findFirst(
-        Array.flatMap(
-          command.intents,
-          (intent) => Array.map(intent.packages, (entry) => ({ path: intent.path, name: entry.name })),
-        ),
-        (entry) => !Array.contains(memberNames(command), entry.name),
-      )
-    ),
-  )
-
-const gateFacts = (command: GateCommand): GateFacts => {
-  const names = moved(command)
-  return {
-    members: memberNames(command),
-    moved: names,
-    unnamed: firstNonEmpty(Array.filter(names, (name) => !named(command, name))),
-    foreign: foreignEntry(command),
-  }
+  const first = unnamed[0]
+  if (first === undefined) return undefined
+  return { _tag: 'Unnamed', packages: [first, ...unnamed.slice(1)] }
 }
 
-const refuseForeign = (foreign: ForeignEntry): GateVerdict =>
-  Result.fail<GateUnknownPackage>({
-    _tag: 'GateUnknownPackage',
-    path: foreign.path,
-    package: foreign.name,
-  })
-
-const stageVacant = (members: ReadonlyArray<PackageName>): GateVerdict =>
-  Result.succeed(ChangesVacant.make({ members }))
-
-const refuseUnnamed = (packages: NonEmpty): GateVerdict =>
-  Result.fail<GateIntentMissing>({ _tag: 'GateIntentMissing', packages })
-
-const stageGated = (movedNames: ReadonlyArray<PackageName>): GateVerdict =>
-  Result.succeed(ChangesGated.make({ touched: movedNames }))
+const gateCaseOf = (command: GateCommand): GateCase => {
+  const memberNames = command.members.map((member) => member.name)
+  const foreign = foreignCaseOf(command, memberNames)
+  if (foreign !== undefined) return foreign
+  const moved = movedSoFar(command)
+  if (moved.length === 0) return { _tag: 'Vacant', members: memberNames }
+  const unnamed = unnamedCaseOf(command, moved)
+  if (unnamed !== undefined) return unnamed
+  return { _tag: 'Gated', touched: moved }
+}
 
 export const gateChanges = Workflow.make(
   GateCommand,
-  (command): GateVerdict =>
-    Match.value(gateFacts(command)).pipe(
-      Match.when(
-        { foreign: Option.isSome },
-        (facts): GateVerdict => refuseForeign(facts.foreign.value),
+  (
+    command,
+  ): Result.Result<
+    ChangesVacant | ChangesGated,
+    GateUnknownPackage | GateIntentMissing
+  > =>
+    Match.value(gateCaseOf(command)).pipe(
+      Match.tag(
+        'Foreign',
+        (foreign): Result.Result<ChangesVacant, GateUnknownPackage> =>
+          Result.fail({
+            _tag: 'GateUnknownPackage',
+            path: foreign.path,
+            package: foreign.package,
+          }),
       ),
-      Match.when(
-        ({ moved: names }) => names.length === 0,
-        (facts): GateVerdict => stageVacant(facts.members),
+      Match.tag('Vacant', (vacant) => Result.succeed(ChangesVacant.make({ members: vacant.members }))),
+      Match.tag(
+        'Unnamed',
+        (unnamed): Result.Result<ChangesGated, GateIntentMissing> =>
+          Result.fail({ _tag: 'GateIntentMissing', packages: unnamed.packages }),
       ),
-      Match.when(
-        { unnamed: Option.isSome },
-        (facts): GateVerdict => refuseUnnamed(facts.unnamed.value),
-      ),
-      Match.orElse((facts): GateVerdict => stageGated(facts.moved)),
+      Match.tag('Gated', (gated) => Result.succeed(ChangesGated.make({ touched: gated.touched }))),
+      Match.exhaustive,
     ),
 )

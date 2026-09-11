@@ -36,11 +36,11 @@ pnpm --dir .release-tools build
 node .release-tools/apps/github-release-management/dist/main.js plan --output "$GITHUB_OUTPUT"
 ```
 
-Subcommands are declared with `Flag`/`Argument`, handlers return an
-`Effect` whose failure channel is `ToolError`, and the entry module holds the
-one `NodeRuntime.runMain` edge. A `ToolError` surfaces as a `::error::`
-workflow annotation and a non-zero exit; a refusal that has already explained
-itself on stderr just exits non-zero.
+Each app is a composition root: `main.ts` declares the `Flag`/`Argument`
+surface and holds the one `NodeRuntime.runMain` edge, `boundary.ts` decodes the
+invocation into the cell's request, and `render.ts` turns the decision or the
+refusal into the lines that go out. A refusal surfaces as a `::error::`
+workflow annotation and exit 1.
 
 ## What it does
 
@@ -240,8 +240,7 @@ step so all three agree on what this cycle owns.
 `tools-ref` pins the revision of this repository that a release runs from;
 `@main` tracks the tip. Both workflows check this repository out into
 `.release-tools`, build it with pnpm, and run its `dist/main.js` bundles
-against the caller's workspace. (`deno-version` is still accepted as an input
-so existing callers keep working, but nothing installs Deno to run the tools.)
+against the caller's workspace.
 
 The publish job needs an npm trusted publisher configured for the repository, as
 `pnpm publish --provenance` is keyless OIDC. A package that has never been

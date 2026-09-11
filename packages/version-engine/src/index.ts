@@ -1,18 +1,26 @@
+export { VersionBumped, VersionConsumed, type VersionDecision, VersionIdle } from './bump-versions.workflow.js'
 export { bumpCell } from './bump.js'
-export { BumpCommand, BumpInput } from './bump.schema.js'
+export { BumpInput } from './bump.schema.js'
 export { pinRootManifestCell } from './pin-root-manifest.js'
-export { PinRootManifestCommand, PinRootManifestInput } from './pin-root-manifest.schema.js'
+export { PinRootManifestInput } from './pin-root-manifest.schema.js'
+export {
+  type PinDecision,
+  PinDistributionMissing,
+  PinManifestInvalid,
+  PinRefusal,
+  PinVersionUnusable,
+  WorkspaceVersionAlreadyCurrent,
+  WorkspaceVersionRepinned,
+} from './pin-root-manifest.workflow.js'
+export {
+  SyncActionUnknown,
+  SyncAligned,
+  type SyncDecision,
+  SyncRealigned,
+  SyncRefusal,
+  SyncStrategyMismatch,
+  SyncSurfacesDrifted,
+  SyncVersionMissing,
+} from './sync-surfaces.workflow.js'
 export { syncCell } from './sync.js'
-export { SyncCommand, SyncInput } from './sync.schema.js'
-export { makeFakeChangelogStore } from './testing/FakeChangelogStore.js'
-export type { FakeChangelogState } from './testing/FakeChangelogStore.js'
-export { makeFakeChangesetStore } from './testing/FakeChangesetStore.js'
-export type { FakeChangesetState } from './testing/FakeChangesetStore.js'
-export { makeFakeCycleStore } from './testing/FakeCycleStore.js'
-export type { FakeCycleState } from './testing/FakeCycleStore.js'
-export { makeFakeProcessPort } from './testing/FakeProcessPort.js'
-export type { FakeProcessState } from './testing/FakeProcessPort.js'
-export { makeFakeSurfaceStore } from './testing/FakeSurfaceStore.js'
-export type { FakeSurfaceState } from './testing/FakeSurfaceStore.js'
-export { makeFakeWorkspaceStore } from './testing/FakeWorkspaceStore.js'
-export type { FakeWorkspaceState } from './testing/FakeWorkspaceStore.js'
+export { SyncInput } from './sync.schema.js'

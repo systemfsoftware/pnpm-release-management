@@ -1,6 +1,6 @@
 import { Context, type Effect } from 'effect'
 import type { Intent, IntentRefusal } from './Intent.schema.js'
-import type { NewIntentDecision, NewIntentRefusal, NewIntentRequest } from './NewIntent.schema.js'
+import type { NewIntentRefusal, NewIntentRequest } from './NewIntent.schema.js'
 import type { Count, RelativePath, RootFile } from './Workspace.schema.js'
 
 export interface ChangesetStore {
@@ -14,7 +14,7 @@ export interface ChangesetStore {
   ) => Effect.Effect<Intent, IntentRefusal, never>
   readonly writeIntent: (
     request: NewIntentRequest,
-  ) => Effect.Effect<NewIntentDecision, NewIntentRefusal, never>
+  ) => Effect.Effect<Intent, NewIntentRefusal, never>
   readonly deleteIntents: (
     paths: ReadonlyArray<RelativePath>,
   ) => Effect.Effect<Count, IntentRefusal, never>

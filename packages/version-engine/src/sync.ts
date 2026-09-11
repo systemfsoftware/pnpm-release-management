@@ -1,92 +1,45 @@
 import { Cell } from '@systemfsoftware/effect-cell-types'
-import {
-  type PackageVersion,
-  type RelativePath,
-  SurfaceStore,
-  type SyncActionUnknown,
-  SyncAligned,
-  type SyncDecision,
-  SyncRealigned,
-  type SyncRefusal,
-  type SyncStrategyMismatch,
-  type SyncSurfacesDrifted,
-  type SyncVersionMissing,
-  type VersionRefusal,
-} from '@systemfsoftware/release-language'
+import { Count, PackageVersion, SurfaceStore, type VersionRefusal } from '@systemfsoftware/release-language'
 import { Effect } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import {
-  type SyncAligned as LocalSyncAligned,
-  type SyncRealigned as LocalSyncRealigned,
-  syncSurfaces,
-} from './sync-surfaces.workflow.js'
+import { type SyncDecision, type SyncRefusal, syncSurfaces } from './sync-surfaces.workflow.js'
 import { SyncCommand, type SyncInput } from './sync.schema.js'
 
-class RawSync {
-  constructor(
-    readonly request: SyncInput,
-    readonly expected: PackageVersion,
-    readonly entries: ReadonlyArray<{
-      readonly file: RelativePath
-      readonly found: PackageVersion
-    }>,
-  ) {}
+const pinnedOf = (
+  given: string | undefined,
+): Result.Result<PackageVersion | undefined, S.SchemaError> => {
+  if (given === undefined) return Result.succeed(undefined)
+  return S.decodeUnknownResult(PackageVersion)(given)
 }
 
 const read = (
   request: SyncInput,
-): Effect.Effect<RawSync, VersionRefusal, SurfaceStore> =>
+): Effect.Effect<SyncCommand, VersionRefusal | S.SchemaError, SurfaceStore> =>
   Effect.gen(function*() {
     const surfaces = yield* SurfaceStore
     const expected = yield* surfaces.readSurface(request.manifest.file, request.manifest.surface)
+    const pinned = yield* Effect.fromResult(pinnedOf(request.version))
     const entries = yield* Effect.forEach(request.surfaces, (surface) =>
       Effect.map(
         surfaces.readSurface(surface.file, surface.surface),
-        (found) => ({ file: surface.file, found }),
+        (found) => ({ file: surface.file, surface: surface.surface, found }),
       ))
-    return new RawSync(request, expected, entries)
+    return SyncCommand.make({
+      strategy: request.strategy,
+      action: request.action,
+      pinned,
+      expected,
+      manifest: request.manifest,
+      entries: [...entries],
+      count: Count.make(request.surfaces.length),
+    })
   })
-
-const decode = (raw: RawSync) =>
-  S.decodeUnknownResult(SyncCommand)({
-    _tag: 'SyncCommand',
-    strategy: raw.request.strategy,
-    action: raw.request.action,
-    pinned: raw.request.version,
-    expected: raw.expected,
-    manifestFile: raw.request.manifest.file,
-    entries: [...raw.entries],
-    count: raw.request.surfaces.length,
-  })
-
-const toDecision = (decision: LocalSyncAligned | LocalSyncRealigned): SyncDecision =>
-  Match.value(decision).pipe(
-    Match.tag(
-      'SyncAligned',
-      (aligned) => SyncAligned.make({ version: aligned.version, surfaces: aligned.surfaces }),
-    ),
-    Match.tag(
-      'SyncRealigned',
-      (realigned) => SyncRealigned.make({ version: realigned.version, rewritten: [...realigned.rewritten] }),
-    ),
-    Match.exhaustive,
-  )
-
-const encode = (
-  outcome: Result.Result<
-    LocalSyncAligned | LocalSyncRealigned,
-    SyncStrategyMismatch | SyncSurfacesDrifted | SyncVersionMissing | SyncActionUnknown
-  >,
-): Result.Result<
-  SyncDecision,
-  SyncStrategyMismatch | SyncSurfacesDrifted | SyncVersionMissing | SyncActionUnknown
-> => Result.map(outcome, toDecision)
 
 const write = (
   output: Result.Result<SyncDecision, SyncRefusal>,
-  raw: RawSync,
+  command: SyncCommand,
 ): Effect.Effect<SyncDecision, SyncRefusal | VersionRefusal, SurfaceStore> => {
   if (Result.isFailure(output)) return Effect.fail(output.failure)
   return Match.value(output.success).pipe(
@@ -95,13 +48,13 @@ const write = (
       Effect.gen(function*() {
         const surfaces = yield* SurfaceStore
         yield* surfaces.writeSurface(
-          raw.request.manifest.file,
-          raw.request.manifest.surface,
+          command.manifest.file,
+          command.manifest.surface,
           realigned.version,
         )
         yield* Effect.forEach(
-          raw.request.surfaces,
-          (surface) => surfaces.writeSurface(surface.file, surface.surface, realigned.version),
+          command.entries,
+          (entry) => surfaces.writeSurface(entry.file, entry.surface, realigned.version),
           { discard: true },
         )
         return realigned
@@ -112,8 +65,6 @@ const write = (
 
 export const syncCell = Cell.layer({
   read,
-  decode,
   decide: syncSurfaces,
-  encode,
   write,
 })

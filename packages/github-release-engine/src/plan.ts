@@ -6,15 +6,8 @@ import {
   CycleStore,
   FsPath,
   GitPort,
-  type Member,
-  type PackageName,
-  PlanDecision,
-  PlanPublish,
   type PlanRefusal,
-  PlanSettled,
-  PlanVersion,
   RelativePath,
-  type ReleaseTag,
   RemoteName,
   WorkspaceStore,
 } from '@systemfsoftware/release-language'
@@ -23,17 +16,8 @@ import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import { cycleOf, dropExcluded } from './cycle.js'
-import {
-  DeferredPackagesUnknown,
-  PlanCommand,
-  planRelease,
-  type PlanReleasePublish,
-  type PlanReleaseSettled,
-  type PlanReleaseVersion,
-} from './plan-release.workflow.js'
-import { PlanPhase, PlanReport } from './plan.schema.js'
-
-export { PlanReport } from './plan.schema.js'
+import { PlanCommand, type PlanDeferredUnknown, planRelease } from './plan-release.workflow.js'
+import { type PlanDecision, PlanReport } from './plan.schema.js'
 
 export const PlanRequest = Wire.wire({
   deferred: Wire.mint(S.optional(FsPath)),
@@ -41,18 +25,10 @@ export const PlanRequest = Wire.wire({
   changelogDir: Wire.mint(RelativePath),
 })
 
-interface RawPlan {
-  readonly intents: ReadonlyArray<RelativePath>
-  readonly members: ReadonlyArray<Member>
-  readonly tags: ReadonlyArray<ReleaseTag>
-  readonly deferred: ReadonlyArray<PackageName>
-  readonly changelogDir: RelativePath
-}
-
 const read = (
   request: S.Schema.Type<typeof PlanRequest>,
 ): Effect.Effect<
-  RawPlan,
+  PlanCommand,
   PlanRefusal | IntentRefusal | MemberRefusal | TagRefusal,
   ChangesetStore | WorkspaceStore | GitPort | CycleStore
 > =>
@@ -66,85 +42,49 @@ const read = (
     const members = yield* workspace.listMembers()
     const tags = yield* git.remoteTags(remote)
     const deferred = yield* cycles.readDeferred(request.deferred)
-    return {
-      intents,
-      members,
-      tags,
+    return PlanCommand.make({
+      pending: Count.make(intents.length),
+      cycle: dropExcluded(cycleOf(members, tags, request.changelogDir), deferred),
       deferred: [...deferred],
-      changelogDir: request.changelogDir,
-    }
+      unknownDeferred: [],
+      members: members.map((member) => member.name),
+    })
   })
 
-const noUnknownDeferred: ReadonlyArray<PackageName> = []
-
-const decode = (raw: RawPlan): Result.Result<PlanCommand, never> =>
-  Result.succeed(
-    PlanCommand.make({
-      pending: Count.make(raw.intents.length),
-      cycle: dropExcluded(cycleOf(raw.members, raw.tags, raw.changelogDir), raw.deferred),
-      deferred: [...raw.deferred],
-      unknownDeferred: noUnknownDeferred,
+const write = (
+  outcome: Result.Result<PlanDecision, PlanDeferredUnknown>,
+  raw: PlanCommand,
+): Effect.Effect<PlanReport, PlanRefusal, never> => {
+  if (Result.isFailure(outcome)) {
+    return Effect.fail(outcome.failure)
+  }
+  const decision = outcome.success
+  const projected = Match.value(decision).pipe(
+    Match.tag('PlanVersion', (version) => ({
+      phase: 'version' as const,
+      thisCycle: Count.make(version.cycle.length),
+    })),
+    Match.tag('PlanPublish', (publish) => ({
+      phase: 'publish' as const,
+      thisCycle: Count.make(publish.cycle.length),
+    })),
+    Match.tag('PlanSettled', (settled) => ({
+      phase: 'none' as const,
+      thisCycle: Count.make(settled.cycle),
+    })),
+    Match.exhaustive,
+  )
+  return Effect.succeed(
+    PlanReport.make({
+      decision,
+      phase: projected.phase,
+      pendingIntents: raw.pending,
+      thisCycle: projected.thisCycle,
+      deferred: Count.make(raw.deferred.length),
+      unpublished: raw.deferred.filter((name) => raw.members.includes(name) === false),
     }),
   )
-
-const phaseOf = (decision: PlanDecision): PlanPhase =>
-  Match.value(decision).pipe(
-    Match.tag('PlanVersion', (): PlanPhase => 'version'),
-    Match.tag('PlanPublish', (): PlanPhase => 'publish'),
-    Match.tag('PlanSettled', (): PlanPhase => 'none'),
-    Match.exhaustive,
-  )
-
-const cycleCountOf = (decision: PlanDecision): Count =>
-  Match.value(decision).pipe(
-    Match.tag('PlanVersion', (version) => Count.make(version.cycle.length)),
-    Match.tag('PlanPublish', (publish) => Count.make(publish.cycle.length)),
-    Match.tag('PlanSettled', (settled) => settled.cycle),
-    Match.exhaustive,
-  )
-
-const unpublishedOf = (raw: RawPlan): ReadonlyArray<PackageName> => {
-  const known = raw.members.map((member) => member.name)
-  return raw.deferred.filter((name) => known.includes(name) === false)
 }
-
-const encode = (
-  outcome: Result.Result<
-    PlanReleasePublish | PlanReleaseVersion | PlanReleaseSettled,
-    DeferredPackagesUnknown
-  >,
-): Result.Result<PlanDecision, DeferredPackagesUnknown> =>
-  Result.map(outcome, (decision) =>
-    Match.value(decision).pipe(
-      Match.tag('PlanReleasePublish', (publish) => PlanPublish.make({ cycle: [...publish.cycle] })),
-      Match.tag(
-        'PlanReleaseVersion',
-        (version) => PlanVersion.make({ pending: version.pending, cycle: [...version.cycle] }),
-      ),
-      Match.tag('PlanReleaseSettled', (settled) =>
-        PlanSettled.make({
-          pending: settled.pending,
-          cycle: Count.make(settled.cycleCount),
-        })),
-      Match.exhaustive,
-    ))
-
-const write = (
-  output: Result.Result<PlanDecision, DeferredPackagesUnknown>,
-  raw: RawPlan,
-): Effect.Effect<PlanReport, never, never> =>
-  Effect.map(
-    Effect.orDie(Effect.fromResult(output)),
-    (decision) =>
-      PlanReport.make({
-        decision,
-        phase: phaseOf(decision),
-        pendingIntents: Count.make(raw.intents.length),
-        thisCycle: cycleCountOf(decision),
-        deferred: Count.make(raw.deferred.length),
-        unpublished: [...unpublishedOf(raw)],
-      }),
-  )
 
 export const planCell: Cell.Cell<
   S.Schema.Type<typeof PlanRequest>,
@@ -153,8 +93,6 @@ export const planCell: Cell.Cell<
   ChangesetStore | WorkspaceStore | GitPort | CycleStore
 > = Cell.layer({
   read,
-  decode,
   decide: planRelease,
-  encode,
   write,
 })

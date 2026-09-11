@@ -1,5 +1,5 @@
 import { it } from '@effect/vitest'
-import { fakeChangesetStore, fakeWorkspaceStore, newIntentCell } from '@systemfsoftware/changeset-engine'
+import { newIntentCell } from '@systemfsoftware/changeset-engine'
 import { Cell } from '@systemfsoftware/effect-cell-types'
 import type { Member } from '@systemfsoftware/release-language'
 import { PackageName as PackageNameSchema } from '@systemfsoftware/release-language'
@@ -10,6 +10,8 @@ import * as Layer from 'effect/Layer'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as fc from 'effect/testing/FastCheck'
+import { fakeChangesetStore } from '../../tests/__fixtures__/FakeChangesetStore.js'
+import { fakeWorkspaceStore } from '../../tests/__fixtures__/FakeWorkspaceStore.js'
 
 const nameArb = fc.stringMatching(/^[a-z][a-z0-9-]{0,9}$/)
 const slugArb = fc.stringMatching(/^[a-z0-9]+(-[a-z0-9]+)*$/)
@@ -90,15 +92,9 @@ const newIntentEffect = (scenario: {
       const writtenOk = fake.written.length === 1 && first !== undefined &&
         first.packages.join(',') === scenario.request.packages.join(',')
       if (scenario.request.slug !== undefined) {
-        return Match.value(outcome.success).pipe(
-          Match.tag('IntentStagedNamed', () => writtenOk),
-          Match.orElse(() => false),
-        )
+        return outcome.success.path === `${scenario.request.slug}.md` && writtenOk
       }
-      return Match.value(outcome.success).pipe(
-        Match.tag('IntentStagedDerived', () => writtenOk),
-        Match.orElse(() => false),
-      )
+      return writtenOk
     },
   )
 }

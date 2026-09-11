@@ -1,14 +1,6 @@
 import { Cell, Wire } from '@systemfsoftware/effect-cell-types'
-import type {
-  IntentRefusal,
-  PullRequestDecision,
-  PullRequestLookup,
-  PullRequestRefusal,
-  RepoSlug,
-  TagRefusal,
-} from '@systemfsoftware/release-language'
+import type { IntentRefusal, PullRequestRefusal, TagRefusal } from '@systemfsoftware/release-language'
 import {
-  BranchDeleted,
   ChangesetStore,
   Count,
   ForgePort,
@@ -16,13 +8,6 @@ import {
   GitPort,
   GitRef,
   PrTitle,
-  PullRequestBodyUnreadable,
-  PullRequestClosed,
-  PullRequestCreated,
-  PullRequestHeadInvalid,
-  PullRequestNumber,
-  PullRequestUpdated,
-  PullRequestVacant,
   RelativePath,
   ReleaseLabel,
   RemoteName,
@@ -33,14 +18,12 @@ import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import {
-  type BodyFileUnreadable,
-  type HeadRefInvalid,
   pullRequest,
+  PullRequestClosed,
   PullRequestCommand,
-  type PullRequestReleaseClosed,
-  type PullRequestReleaseOpened,
-  type PullRequestReleaseRefreshed,
-  type PullRequestReleaseVacant,
+  PullRequestCreated,
+  type PullRequestDecision,
+  PullRequestVacant,
 } from './pull-request.workflow.js'
 
 export const PullRequestRequest = Wire.wire({
@@ -52,19 +35,6 @@ export const PullRequestRequest = Wire.wire({
   remote: Wire.mint(S.optional(RemoteName)),
   labels: Wire.mint(S.Array(ReleaseLabel)),
 })
-
-interface RawPullRequest {
-  readonly pending: Count
-  readonly existing: PullRequestLookup
-  readonly branch: GitRef
-  readonly base: GitRef
-  readonly title: PrTitle
-  readonly body: string
-  readonly bodyIssue: FsPath | undefined
-  readonly slug: RepoSlug
-  readonly remote: RemoteName
-  readonly labels: ReadonlyArray<ReleaseLabel>
-}
 
 interface BodyScan {
   readonly text: string
@@ -91,7 +61,7 @@ const readBody = (
 const read = (
   request: S.Schema.Type<typeof PullRequestRequest>,
 ): Effect.Effect<
-  RawPullRequest,
+  PullRequestCommand,
   IntentRefusal | TagRefusal | PullRequestRefusal,
   ChangesetStore | WorkspaceStore | GitPort | ForgePort
 > =>
@@ -105,7 +75,7 @@ const read = (
     const slug = yield* git.repoSlug()
     const existing = yield* forge.openPullRequest(slug, request.branch)
     const body = yield* readBody(workspace, request.body, request.bodyFile)
-    return {
+    return PullRequestCommand.make({
       pending: Count.make(intents.length),
       existing,
       branch: request.branch,
@@ -116,64 +86,11 @@ const read = (
       slug,
       remote,
       labels: [...request.labels],
-    }
+    })
   })
 
-const decode = (raw: RawPullRequest): Result.Result<PullRequestCommand, never> =>
-  Result.succeed(
-    PullRequestCommand.make({
-      pending: raw.pending,
-      existing: raw.existing,
-      branch: raw.branch,
-      base: raw.base,
-      title: raw.title,
-      body: raw.body,
-      bodyIssue: raw.bodyIssue,
-    }),
-  )
-
-const toRefusal = (bad: BodyFileUnreadable | HeadRefInvalid): PullRequestRefusal =>
-  Match.value(bad).pipe(
-    Match.tag('BodyFileUnreadable', (unreadable) => PullRequestBodyUnreadable.make({ path: unreadable.path })),
-    Match.tag('HeadRefInvalid', (invalid) => PullRequestHeadInvalid.make({ branch: invalid.branch })),
-    Match.exhaustive,
-  )
-
-const toDecision = (
-  decision:
-    | PullRequestReleaseOpened
-    | PullRequestReleaseRefreshed
-    | PullRequestReleaseClosed
-    | PullRequestReleaseVacant,
-): PullRequestDecision =>
-  Match.value(decision).pipe(
-    Match.tag('PullRequestReleaseOpened', (opened) =>
-      PullRequestCreated.make({ number: PullRequestNumber.make(opened.number) })),
-    Match.tag('PullRequestReleaseRefreshed', (refreshed) =>
-      PullRequestUpdated.make({ number: PullRequestNumber.make(refreshed.number) })),
-    Match.tag('PullRequestReleaseClosed', (closed) =>
-      PullRequestClosed.make({
-        number: PullRequestNumber.make(closed.number),
-        branch: BranchDeleted.make({ branch: GitRef.make(closed.branch), deleted: false }),
-      })),
-    Match.tag('PullRequestReleaseVacant', (vacant) =>
-      PullRequestVacant.make({ branch: GitRef.make(vacant.branch) })),
-    Match.exhaustive,
-  )
-
-const encode = (
-  outcome: Result.Result<
-    | PullRequestReleaseOpened
-    | PullRequestReleaseRefreshed
-    | PullRequestReleaseClosed
-    | PullRequestReleaseVacant,
-    BodyFileUnreadable | HeadRefInvalid
-  >,
-): Result.Result<PullRequestDecision, PullRequestRefusal> =>
-  Result.mapError(outcome, toRefusal).pipe(Result.map(toDecision))
-
 const openRequest = (
-  raw: RawPullRequest,
+  raw: PullRequestCommand,
   vacant: PullRequestVacant,
 ): Effect.Effect<PullRequestDecision, PullRequestRefusal, GitPort | ForgePort> => {
   if (raw.pending <= 0) {
@@ -197,13 +114,13 @@ const openRequest = (
 }
 
 const write = (
-  output: Result.Result<PullRequestDecision, PullRequestRefusal>,
-  raw: RawPullRequest,
+  outcome: Result.Result<PullRequestDecision, PullRequestRefusal>,
+  raw: PullRequestCommand,
 ): Effect.Effect<PullRequestDecision, PullRequestRefusal, GitPort | ForgePort> => {
-  if (Result.isFailure(output)) {
-    return Effect.fail(output.failure)
+  if (Result.isFailure(outcome)) {
+    return Effect.fail(outcome.failure)
   }
-  return Match.value(output.success).pipe(
+  return Match.value(outcome.success).pipe(
     Match.tag('PullRequestClosed', (closed) =>
       Effect.gen(function*() {
         const git = yield* GitPort
@@ -234,8 +151,6 @@ export const pullRequestCell: Cell.Cell<
   ChangesetStore | WorkspaceStore | GitPort | ForgePort
 > = Cell.layer({
   read,
-  decode,
   decide: pullRequest,
-  encode,
   write,
 })

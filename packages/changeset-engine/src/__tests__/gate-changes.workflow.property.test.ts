@@ -1,10 +1,5 @@
 import { it } from '@effect/vitest'
-import {
-  fakeChangeEvidencePort,
-  fakeChangesetStore,
-  fakeWorkspaceStore,
-  gateChangesCell,
-} from '@systemfsoftware/changeset-engine'
+import { gateChangesCell } from '@systemfsoftware/changeset-engine'
 import { Cell } from '@systemfsoftware/effect-cell-types'
 import {
   GitRef,
@@ -18,6 +13,9 @@ import {
 } from '@systemfsoftware/release-language'
 import { Effect, Layer } from 'effect'
 import * as fc from 'effect/testing/FastCheck'
+import { fakeChangeEvidencePort } from '../../tests/__fixtures__/FakeChangeEvidencePort.js'
+import { fakeChangesetStore } from '../../tests/__fixtures__/FakeChangesetStore.js'
+import { fakeWorkspaceStore } from '../../tests/__fixtures__/FakeWorkspaceStore.js'
 
 const nameArb = fc.stringMatching(/^[a-z][a-z0-9-]{0,9}$/)
 const pkgArb = nameArb.map((name) => PackageName.make(name))

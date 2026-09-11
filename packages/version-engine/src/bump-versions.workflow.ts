@@ -1,16 +1,17 @@
 import { Workflow } from '@systemfsoftware/effect-cell-types'
-import type { VersionIntentMalformed, VersionUnknownPackage } from '@systemfsoftware/release-language'
-import { Count, PackageName, PackageVersion, RelativePath } from '@systemfsoftware/release-language'
+import {
+  Count,
+  DecisionTypeId,
+  PackageName,
+  PackageVersion,
+  RelativePath,
+  type VersionIntentMalformed,
+  type VersionUnknownPackage,
+} from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
-import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import { BumpCommand } from './bump.schema.js'
-
-const VersionDecisionTypeId: unique symbol = Symbol.for(
-  '@systemfsoftware/pnpm-release-management/VersionDecision',
-)
-type VersionDecisionTypeId = typeof VersionDecisionTypeId
 
 export class VersionBumped extends S.TaggedClass<VersionBumped>()(
   'VersionBumped',
@@ -20,7 +21,7 @@ export class VersionBumped extends S.TaggedClass<VersionBumped>()(
     changelogs: S.Array(RelativePath),
   },
 ) {
-  readonly [VersionDecisionTypeId] = VersionDecisionTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
 export class VersionConsumed extends S.TaggedClass<VersionConsumed>()(
@@ -29,7 +30,7 @@ export class VersionConsumed extends S.TaggedClass<VersionConsumed>()(
     consumed: Count,
   },
 ) {
-  readonly [VersionDecisionTypeId] = VersionDecisionTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
 export class VersionIdle extends S.TaggedClass<VersionIdle>()(
@@ -38,111 +39,96 @@ export class VersionIdle extends S.TaggedClass<VersionIdle>()(
     pending: Count,
   },
 ) {
-  readonly [VersionDecisionTypeId] = VersionDecisionTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
-const BumpCase = S.Union([
-  S.TaggedStruct('NoIntents', {}),
-  S.TaggedStruct('UnknownPackage', { package: PackageName }),
-  S.TaggedStruct('IntentMalformed', { path: RelativePath }),
-  S.TaggedStruct('OnlyNone', { count: Count }),
-  S.TaggedStruct('Bumped', {
-    version: PackageVersion,
-    moved: S.Array(PackageName),
-    changelogs: S.Array(RelativePath),
-  }),
-])
-type BumpCase = S.Schema.Type<typeof BumpCase>
+export type VersionDecision = VersionBumped | VersionConsumed | VersionIdle
+
+const NoIntentsCase = S.TaggedStruct('NoIntents', { pending: Count })
+const UnknownPackageCase = S.TaggedStruct('UnknownPackage', { package: PackageName })
+const IntentMalformedCase = S.TaggedStruct('IntentMalformed', { path: RelativePath })
+const OnlyNoneCase = S.TaggedStruct('OnlyNone', { count: Count })
+const BumpedCase = S.TaggedStruct('Bumped', {
+  version: PackageVersion,
+  moved: S.Array(PackageName),
+  changelogs: S.Array(RelativePath),
+})
+
+type NoIntentsCase = S.Schema.Type<typeof NoIntentsCase>
+type UnknownPackageCase = S.Schema.Type<typeof UnknownPackageCase>
+type IntentMalformedCase = S.Schema.Type<typeof IntentMalformedCase>
+type OnlyNoneCase = S.Schema.Type<typeof OnlyNoneCase>
+type BumpedCase = S.Schema.Type<typeof BumpedCase>
+
+type BumpCase =
+  | NoIntentsCase
+  | UnknownPackageCase
+  | IntentMalformedCase
+  | OnlyNoneCase
+  | BumpedCase
 
 const CORE_PATTERN = /^(\d+)\.(\d+)\.(\d+)/
 const CORE_WIDTH = 12
 
-const coreKeyOf = (version: string): string =>
-  Option.match(Option.fromNullishOr(CORE_PATTERN.exec(version)), {
-    onNone: () => '0'.repeat(CORE_WIDTH * 3),
-    onSome: (hit) => hit.slice(1, 4).map((part) => part.padStart(CORE_WIDTH, '0')).join(''),
-  })
+const coreKeyOf = (version: string): string => {
+  const hit = CORE_PATTERN.exec(version)
+  if (hit === null) return '0'.repeat(CORE_WIDTH * 3)
+  return hit.slice(1, 4).map((part) => part.padStart(CORE_WIDTH, '0')).join('')
+}
 
 const highestCoreOf = (
   versions: ReadonlyArray<PackageVersion>,
 ): PackageVersion | undefined => [...versions].sort((left, right) => coreKeyOf(right).localeCompare(coreKeyOf(left)))[0]
 
-const surfacesNextOf = (command: BumpCommand): Option.Option<PackageVersion> =>
-  Option.map(
-    Option.filter(Option.some(command.strategy), (strategy) => strategy === 'surfaces'),
-    () => command.consolidatedNext,
-  )
+const bumpedVersionOf = (command: BumpCommand): PackageVersion => {
+  if (command.strategy === 'surfaces') return command.consolidatedNext
+  const highest = highestCoreOf(command.nexts.map((entry) => entry.next))
+  if (highest === undefined) return command.consolidatedNext
+  return highest
+}
 
-const highestNextOf = (command: BumpCommand): PackageVersion =>
-  Option.getOrElse(
-    Option.fromNullishOr(highestCoreOf(command.nexts.map((entry) => entry.next))),
-    () => command.consolidatedNext,
-  )
-
-const versionOf = (command: BumpCommand): PackageVersion =>
-  Option.getOrElse(surfacesNextOf(command), () => highestNextOf(command))
-
-const bumpedCaseOf = (command: BumpCommand): BumpCase => ({
-  _tag: 'Bumped',
-  version: versionOf(command),
-  moved: [...command.moved],
-  changelogs: command.changelogPaths.map((entry) => entry.path),
-})
-
-const onlyNoneOf = (command: BumpCommand): Option.Option<Count> =>
-  Option.map(
-    Option.filter(Option.some(command.consolidated), (consolidated) => consolidated === 'none'),
-    () => command.intentCount,
-  )
-
-const consolidatedCaseOf = (command: BumpCommand): BumpCase =>
-  Option.match(onlyNoneOf(command), {
-    onNone: (): BumpCase => bumpedCaseOf(command),
-    onSome: (count): BumpCase => ({ _tag: 'OnlyNone', count }),
+const bumpCaseOf = (command: BumpCommand): BumpCase => {
+  if (command.intents.length === 0) return NoIntentsCase.make({ pending: command.intentCount })
+  if (command.unknownPackage !== undefined) {
+    return UnknownPackageCase.make({ package: command.unknownPackage })
+  }
+  if (command.malformedPath !== undefined) {
+    return IntentMalformedCase.make({ path: command.malformedPath })
+  }
+  if (command.consolidated === 'none') return OnlyNoneCase.make({ count: command.intentCount })
+  return BumpedCase.make({
+    version: bumpedVersionOf(command),
+    moved: [...command.moved],
+    changelogs: command.changelogPaths.map((entry) => entry.path),
   })
-
-const malformedPathCaseOf = (command: BumpCommand): BumpCase =>
-  Option.match(Option.fromNullishOr(command.malformedPath), {
-    onNone: (): BumpCase => consolidatedCaseOf(command),
-    onSome: (path): BumpCase => ({ _tag: 'IntentMalformed', path }),
-  })
-
-const unknownPackageCaseOf = (command: BumpCommand): BumpCase =>
-  Option.match(Option.fromNullishOr(command.unknownPackage), {
-    onNone: (): BumpCase => malformedPathCaseOf(command),
-    onSome: (unknown): BumpCase => ({ _tag: 'UnknownPackage', package: unknown }),
-  })
-
-const caseOf = (command: BumpCommand): BumpCase =>
-  Option.match(Option.fromNullishOr(command.intents[0]), {
-    onNone: (): BumpCase => ({ _tag: 'NoIntents' }),
-    onSome: (): BumpCase => unknownPackageCaseOf(command),
-  })
+}
 
 export const bumpVersions = Workflow.make(
   BumpCommand,
   (
     command,
   ): Result.Result<
-    VersionBumped | VersionConsumed | VersionIdle,
+    VersionDecision,
     VersionUnknownPackage | VersionIntentMalformed
   > =>
-    Match.value(caseOf(command)).pipe(
+    Match.value(bumpCaseOf(command)).pipe(
       Match.tag(
         'NoIntents',
-        () => Result.succeed(VersionIdle.make({ pending: command.intentCount })),
+        (none) => Result.succeed(VersionIdle.make({ pending: none.pending })),
       ),
       Match.tag(
         'UnknownPackage',
-        (unknown) => Result.fail({ _tag: 'VersionUnknownPackage' as const, package: unknown.package }),
+        (unknown): Result.Result<never, VersionUnknownPackage> =>
+          Result.fail({ _tag: 'VersionUnknownPackage', package: unknown.package }),
       ),
       Match.tag(
         'IntentMalformed',
-        (malformed) => Result.fail({ _tag: 'VersionIntentMalformed' as const, path: malformed.path }),
+        (malformed): Result.Result<never, VersionIntentMalformed> =>
+          Result.fail({ _tag: 'VersionIntentMalformed', path: malformed.path }),
       ),
       Match.tag(
         'OnlyNone',
-        (idle) => Result.succeed(VersionConsumed.make({ consumed: idle.count })),
+        (none) => Result.succeed(VersionConsumed.make({ consumed: none.count })),
       ),
       Match.tag(
         'Bumped',

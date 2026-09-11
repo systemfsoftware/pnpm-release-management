@@ -1,9 +1,14 @@
 import { Workflow } from '@systemfsoftware/effect-cell-types'
-import type { IntentUnknownPackage } from '@systemfsoftware/release-language'
-import { Bump, IntentSlug, IntentSummary, Member, PackageName } from '@systemfsoftware/release-language'
-import * as Array from 'effect/Array'
+import {
+  Bump,
+  DecisionTypeId,
+  IntentSlug,
+  IntentSummary,
+  type IntentUnknownPackage,
+  Member,
+  PackageName,
+} from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
-import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 
@@ -18,18 +23,13 @@ export class NewIntentCommand extends S.TaggedClass<NewIntentCommand>()(
   },
 ) {}
 
-const NewIntentDecisionTypeId: unique symbol = Symbol.for(
-  '@systemfsoftware/changeset-engine/NewIntentDecision',
-)
-type NewIntentDecisionTypeId = typeof NewIntentDecisionTypeId
-
 export class IntentNamed extends S.TaggedClass<IntentNamed>()('IntentNamed', {
   packages: S.NonEmptyArray(PackageName),
   bump: Bump,
   summary: IntentSummary,
   slug: IntentSlug,
 }) {
-  readonly [NewIntentDecisionTypeId] = NewIntentDecisionTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
 export class IntentDerived extends S.TaggedClass<IntentDerived>()(
@@ -40,57 +40,82 @@ export class IntentDerived extends S.TaggedClass<IntentDerived>()(
     summary: IntentSummary,
   },
 ) {
-  readonly [NewIntentDecisionTypeId] = NewIntentDecisionTypeId
+  readonly [DecisionTypeId] = DecisionTypeId
 }
 
-type NewIntentDecision = IntentNamed | IntentDerived
-type NewIntentVerdict = Result.Result<NewIntentDecision, IntentUnknownPackage>
+const UnknownPackageCase = S.TaggedStruct('UnknownPackage', {
+  package: PackageName,
+})
+type UnknownPackageCase = S.Schema.Type<typeof UnknownPackageCase>
 
-const firstUnknownPackage = (
-  command: NewIntentCommand,
-): Option.Option<PackageName> =>
-  Array.findFirst(
-    command.packages,
-    (name) => !Array.some(command.members, (member) => member.name === name),
-  )
+const NamedCase = S.TaggedStruct('Named', {
+  packages: S.NonEmptyArray(PackageName),
+  bump: Bump,
+  summary: IntentSummary,
+  slug: IntentSlug,
+})
+type NamedCase = S.Schema.Type<typeof NamedCase>
 
-const refuseUnknown = (packageName: PackageName): NewIntentVerdict =>
-  Result.fail<IntentUnknownPackage>({ _tag: 'IntentUnknownPackage', package: packageName })
+const DerivedCase = S.TaggedStruct('Derived', {
+  packages: S.NonEmptyArray(PackageName),
+  bump: Bump,
+  summary: IntentSummary,
+})
+type DerivedCase = S.Schema.Type<typeof DerivedCase>
 
-const stageNamed = (command: NewIntentCommand, slug: IntentSlug): NewIntentVerdict =>
-  Result.succeed(
-    IntentNamed.make({
+type NewIntentCase = UnknownPackageCase | NamedCase | DerivedCase
+
+const newIntentCaseOf = (command: NewIntentCommand): NewIntentCase => {
+  const unknown = command.packages.find((name) => !command.members.some((member) => member.name === name))
+  if (unknown !== undefined) return { _tag: 'UnknownPackage', package: unknown }
+  if (command.slug !== undefined) {
+    return {
+      _tag: 'Named',
       packages: command.packages,
       bump: command.bump,
       summary: command.summary,
-      slug,
-    }),
-  )
-
-const stageDerived = (command: NewIntentCommand): NewIntentVerdict =>
-  Result.succeed(
-    IntentDerived.make({
-      packages: command.packages,
-      bump: command.bump,
-      summary: command.summary,
-    }),
-  )
+      slug: command.slug,
+    }
+  }
+  return {
+    _tag: 'Derived',
+    packages: command.packages,
+    bump: command.bump,
+    summary: command.summary,
+  }
+}
 
 export const newIntent = Workflow.make(
   NewIntentCommand,
-  (command): NewIntentVerdict =>
-    Match.value({
-      unknown: firstUnknownPackage(command),
-      slug: Option.fromNullishOr(command.slug),
-    }).pipe(
-      Match.when(
-        { unknown: Option.isSome },
-        (facts): NewIntentVerdict => refuseUnknown(facts.unknown.value),
+  (
+    command,
+  ): Result.Result<IntentNamed | IntentDerived, IntentUnknownPackage> =>
+    Match.value(newIntentCaseOf(command)).pipe(
+      Match.tag(
+        'UnknownPackage',
+        (unknown): Result.Result<IntentDerived, IntentUnknownPackage> =>
+          Result.fail({
+            _tag: 'IntentUnknownPackage',
+            package: unknown.package,
+          }),
       ),
-      Match.when(
-        { slug: Option.isSome },
-        (facts): NewIntentVerdict => stageNamed(command, facts.slug.value),
-      ),
-      Match.orElse((): NewIntentVerdict => stageDerived(command)),
+      Match.tag('Named', (named) =>
+        Result.succeed(
+          IntentNamed.make({
+            packages: named.packages,
+            bump: named.bump,
+            summary: named.summary,
+            slug: named.slug,
+          }),
+        )),
+      Match.tag('Derived', (derived) =>
+        Result.succeed(
+          IntentDerived.make({
+            packages: derived.packages,
+            bump: derived.bump,
+            summary: derived.summary,
+          }),
+        )),
+      Match.exhaustive,
     ),
 )

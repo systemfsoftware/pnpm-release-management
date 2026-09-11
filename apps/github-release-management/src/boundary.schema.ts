@@ -1,22 +1,12 @@
 import {
-  ChangelogUnreadable,
-  ChangelogUnwritable,
+  ChangelogRefusal,
   FsPath,
-  IntentFrontmatterMalformed,
-  IntentSlugTaken,
-  IntentUnknownPackage,
-  ManifestInvalid,
-  ManifestUnreadable,
-  PublishCapturedRequired,
-  PublishCommandRefused,
-  PublishFiltersUnreadable,
-  RootManifestUnwritable,
-  VersionIntentMalformed,
-  VersionSurfaceMissing,
-  VersionUnknownPackage,
+  IntentRefusal,
+  MemberRefusal,
+  PublishRefusal,
+  VersionRefusal,
 } from '@systemfsoftware/release-language'
 import * as S from 'effect/Schema'
-import { SchemaError } from 'effect/Schema'
 
 export const InvalidFlags = S.TaggedStruct('InvalidFlags', { reason: S.String })
 export type InvalidFlags = S.Schema.Type<typeof InvalidFlags>
@@ -37,21 +27,11 @@ export const BoundaryRefusal = S.Union([InvalidFlags, OutputUnwritable, OutputUn
 export type BoundaryRefusal = S.Schema.Type<typeof BoundaryRefusal>
 
 export const BumpRefusal = S.Union([
-  ChangelogUnreadable,
-  ChangelogUnwritable,
-  IntentFrontmatterMalformed,
-  IntentSlugTaken,
-  IntentUnknownPackage,
-  ManifestInvalid,
-  ManifestUnreadable,
-  PublishCapturedRequired,
-  PublishCommandRefused,
-  PublishFiltersUnreadable,
-  RootManifestUnwritable,
-  S.instanceOf(SchemaError),
-  VersionIntentMalformed,
-  VersionSurfaceMissing,
-  VersionUnknownPackage,
+  ChangelogRefusal,
+  IntentRefusal,
+  MemberRefusal,
+  PublishRefusal,
+  VersionRefusal,
 ])
 export type BumpRefusal = S.Schema.Type<typeof BumpRefusal>
 

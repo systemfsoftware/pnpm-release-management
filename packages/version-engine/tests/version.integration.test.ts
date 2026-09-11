@@ -4,12 +4,10 @@ import {
   Intent,
   Member,
   PackageVersion,
-  PinRefusal,
   type ProcessCompleted,
   type PublishRefusal,
   RelativePath,
   RepoRoot,
-  SyncRefusal,
   VersionRefusal,
   type WorkspaceCommand,
 } from '@systemfsoftware/release-language'
@@ -17,22 +15,24 @@ import {
   bumpCell,
   type BumpInput,
   BumpInput as BumpInputSchema,
-  makeFakeChangelogStore,
-  makeFakeChangesetStore,
-  makeFakeProcessPort,
-  makeFakeSurfaceStore,
-  makeFakeWorkspaceStore,
+  PinRefusal,
   pinRootManifestCell,
   type PinRootManifestInput,
   PinRootManifestInput as PinInputSchema,
   syncCell,
   type SyncInput,
   SyncInput as SyncInputSchema,
+  SyncRefusal,
 } from '@systemfsoftware/version-engine'
 import { Effect, Layer } from 'effect'
 import * as Match from 'effect/Match'
 import * as S from 'effect/Schema'
 import { expect } from 'vitest'
+import { makeFakeChangelogStore } from './__fixtures__/FakeChangelogStore.js'
+import { makeFakeChangesetStore } from './__fixtures__/FakeChangesetStore.js'
+import { makeFakeProcessPort } from './__fixtures__/FakeProcessPort.js'
+import { makeFakeSurfaceStore } from './__fixtures__/FakeSurfaceStore.js'
+import { makeFakeWorkspaceStore } from './__fixtures__/FakeWorkspaceStore.js'
 
 const Feature = makeFeature({ it, layer })
 

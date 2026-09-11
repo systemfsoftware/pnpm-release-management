@@ -23,20 +23,20 @@ export interface FakeWorkspace {
 }
 
 const manifestOf = (member: FakeMemberSeed): Lang.PackageManifest => {
-  let publishConfig: Lang.PackageManifest['publishConfig'] = undefined
+  let publishConfig: { readonly provenance: boolean } | undefined = undefined
   if (member.provenance !== undefined) {
     publishConfig = { provenance: member.provenance }
   }
-  let scripts: Lang.PackageManifest['scripts'] = undefined
+  let scripts: Record<string, string> | undefined = undefined
   if (member.build === true) {
-    scripts = { build: S.decodeSync(Lang.ScriptCommand)('run build') }
+    scripts = { build: 'run build' }
   }
-  return {
-    name: S.decodeSync(Lang.PackageName)(member.name),
-    version: S.decodeSync(Lang.PackageVersion)(member.version),
+  return S.decodeSync(Lang.PackageManifest)({
+    name: member.name,
+    version: member.version,
     publishConfig,
     scripts,
-  }
+  })
 }
 
 export const makeFakeWorkspace = (seed: FakeWorkspaceSeed = {}): FakeWorkspace => {

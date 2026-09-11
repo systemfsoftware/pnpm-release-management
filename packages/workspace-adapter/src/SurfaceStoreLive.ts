@@ -4,11 +4,14 @@ import {
   type RelativePath,
   type RepoRoot,
   type RootFile,
+  RootManifestUnwritable,
   SurfaceStore,
   type SurfaceWrite,
   type TomlHeader,
+  VersionIntentMalformed,
   type VersionRefusal,
   type VersionSurface,
+  VersionSurfaceMissing,
 } from '@systemfsoftware/release-language'
 import { Effect, Layer } from 'effect'
 import { FileSystem } from 'effect/FileSystem'
@@ -16,7 +19,7 @@ import * as Match from 'effect/Match'
 import * as Option from 'effect/Option'
 import { Path } from 'effect/Path'
 import * as S from 'effect/Schema'
-import { readTextFile, writeTextFile } from './StoreFile.js'
+import { overwriteTextFile, readTextFile } from './StoreFile.js'
 import type { StoreFault } from './StoreFile.schema.js'
 import { JsonDocument, JsonVersion, PackageSection, WorkspaceSection } from './Surface.schema.js'
 
@@ -27,15 +30,15 @@ const JSON_INDENT = /^(\s+)"/m
 
 type LocatedToml = { readonly sections: ReadonlyArray<string>; readonly version: unknown }
 
-const malformed = (file: RelativePath): VersionRefusal => ({ _tag: 'VersionIntentMalformed', path: file })
+const malformed = (file: RelativePath): VersionRefusal => VersionIntentMalformed.make({ path: file })
 
 const versionOf = (raw: unknown, file: RelativePath): Effect.Effect<PackageVersion, VersionRefusal> =>
   S.decodeUnknownEffect(PackageVersion)(raw).pipe(Effect.mapError(() => malformed(file)))
 
 const surfaceFault = (file: RelativePath, fault: StoreFault): VersionRefusal =>
   Match.value(fault).pipe(
-    Match.tag('Missing', (): VersionRefusal => ({ _tag: 'VersionSurfaceMissing', path: file })),
-    Match.orElse((): VersionRefusal => malformed(file)),
+    Match.tag('Missing', () => VersionSurfaceMissing.make({ path: file })),
+    Match.orElse(() => malformed(file)),
   )
 
 const parseTomlText = (text: string, file: RelativePath): Effect.Effect<Record<string, unknown>, VersionRefusal> =>
@@ -47,17 +50,14 @@ const parseTomlText = (text: string, file: RelativePath): Effect.Effect<Record<s
 const locateToml = (parsed: Record<string, unknown>): Option.Option<LocatedToml> => {
   const pkg = S.decodeUnknownOption(PackageSection)(parsed)
   const workspace = S.decodeUnknownOption(WorkspaceSection)(parsed)
-  if (Option.isSome(pkg) && Option.isNone(workspace)) {
-    return Option.some({ sections: ['package'], version: pkg.value.package.version })
-  }
-  if (Option.isNone(pkg) && Option.isSome(workspace)) {
-    return Option.some({ sections: ['workspace.package'], version: workspace.value.workspace.package.version })
-  }
   if (Option.isSome(pkg) && Option.isSome(workspace)) {
     const version = pkg.value.package.version
-    if (version === workspace.value.workspace.package.version) {
-      return Option.some({ sections: ['package', 'workspace.package'], version })
-    }
+    if (version !== workspace.value.workspace.package.version) return Option.none()
+    return Option.some({ sections: ['package', 'workspace.package'], version })
+  }
+  if (Option.isSome(pkg)) return Option.some({ sections: ['package'], version: pkg.value.package.version })
+  if (Option.isSome(workspace)) {
+    return Option.some({ sections: ['workspace.package'], version: workspace.value.workspace.package.version })
   }
   return Option.none()
 }
@@ -192,9 +192,6 @@ export const SurfaceStoreLive = (root: RepoRoot): Layer.Layer<SurfaceStore, neve
       const fs = yield* FileSystem
       const path = yield* Path
 
-      const readFile = (file: RelativePath): Effect.Effect<string, VersionRefusal> =>
-        readTextFile(fs, path.join(root, file)).pipe(Effect.mapError((fault) => surfaceFault(file, fault)))
-
       const currentVersionOf = (
         text: string,
         file: RelativePath,
@@ -222,7 +219,9 @@ export const SurfaceStoreLive = (root: RepoRoot): Layer.Layer<SurfaceStore, neve
         surface: VersionSurface,
       ): Effect.Effect<PackageVersion, VersionRefusal> =>
         Effect.gen(function*() {
-          const text = yield* readFile(file)
+          const text = yield* readTextFile(fs, path.join(root, file)).pipe(
+            Effect.mapError((fault) => surfaceFault(file, fault)),
+          )
           return yield* currentVersionOf(text, file, surface)
         })
 
@@ -232,19 +231,21 @@ export const SurfaceStoreLive = (root: RepoRoot): Layer.Layer<SurfaceStore, neve
         version: PackageVersion,
       ): Effect.Effect<SurfaceWrite, VersionRefusal> =>
         Effect.gen(function*() {
-          const text = yield* readFile(file)
+          const text = yield* readTextFile(fs, path.join(root, file)).pipe(
+            Effect.mapError((fault) => surfaceFault(file, fault)),
+          )
           const current = yield* currentVersionOf(text, file, surface)
           if (current === version) return { path: file, moved: false }
           const next = yield* rewritten(text, file, surface, version, current)
-          yield* writeTextFile(fs, path.join(root, file), next, 'overwrite').pipe(
+          yield* overwriteTextFile(fs, path.join(root, file), next).pipe(
             Effect.mapError((fault) => surfaceFault(file, fault)),
           )
           return { path: file, moved: true }
         })
 
       const writeRootManifest = (file: RelativePath, text: string): Effect.Effect<RootFile, VersionRefusal> =>
-        writeTextFile(fs, path.join(root, file), text, 'overwrite').pipe(
-          Effect.mapError((): VersionRefusal => ({ _tag: 'RootManifestUnwritable', path: file })),
+        overwriteTextFile(fs, path.join(root, file), text).pipe(
+          Effect.mapError(() => RootManifestUnwritable.make({ path: file })),
           Effect.as({ path: file, text }),
         )
 
