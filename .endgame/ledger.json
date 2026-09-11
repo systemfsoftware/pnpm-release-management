@@ -6,7 +6,13 @@
       "carrier": "command",
       "carrier_signature": "the import-graph lint bans platform and I/O imports in core decision files",
       "id": "UNIT-P1",
-      "state": "open"
+      "state": "proven",
+      "last_proof": {
+        "command": "bash .endgame/gates/decision-file-gate.sh changeset-engine",
+        "exit": 1,
+        "output_hash": "df66577aeadc7a570b12e80e8a1a994728078f34e591382408528687c0c00de8",
+        "ts": "2026-09-11T05:59:45.931Z"
+      }
     },
     {
       "aliases": [],
@@ -15,10 +21,10 @@
       "id": "UNIT-P2",
       "state": "proven",
       "last_proof": {
-        "command": "bash .endgame/gates/decision-complexity-gate.sh version-engine",
+        "command": "bash .endgame/gates/decision-file-gate.sh npm-publish-engine",
         "exit": 1,
-        "output_hash": "daee48ccff3654b4f49e1ba2dab61edf5c6e614b53172ee7cbc1ead6c54c85e6",
-        "ts": "2026-09-11T05:53:09.437Z"
+        "output_hash": "9cc98194ea688fa0c03c61dbdabd9ca2cc3626160a10f5001388a192c2d1261c",
+        "ts": "2026-09-11T05:59:47.190Z"
       }
     },
     {
@@ -347,7 +353,16 @@
       "intercept": "packages/changeset-engine/src/gate-changes.workflow.ts",
       "kind": "branded-twin",
       "shape": "decide",
-      "state": "proposed"
+      "state": "eliminated",
+      "rule": "UNIT-P1",
+      "paste_back": {
+        "command": "bash .endgame/gates/decision-file-gate.sh changeset-engine",
+        "diagnostic": "  x typescript(no-unsafe-assignment): Unsafe assignment of an error typed value.\nFound 0 warnings and 3 errors.\n",
+        "exit_code": 1,
+        "path": "/tmp/endgame-strangler/9d2980ed4079/pasteback/branded-twin_packages_changeset-engine_src_gate-changes.workflow.ts/packages/changeset-engine/src/probe-decision.workflow.ts",
+        "snippet": "import { ProcessLive } from '@systemfsoftware/process-adapter'\n\nexport const probeDecision = (n: number): unknown => ({ n, process: ProcessLive })\n",
+        "ts": "2026-09-11T05:59:45.924Z"
+      }
     },
     {
       "id": "branded-twin:packages/changeset-engine/src/new-intent.workflow.ts",
@@ -496,7 +511,16 @@
       "intercept": "packages/npm-publish-engine/src/publish-status.workflow.ts",
       "kind": "branded-twin",
       "shape": "decide",
-      "state": "proposed"
+      "state": "eliminated",
+      "rule": "UNIT-P2",
+      "paste_back": {
+        "command": "bash .endgame/gates/decision-file-gate.sh npm-publish-engine",
+        "diagnostic": "Found 0 warnings and 2 errors.\n",
+        "exit_code": 1,
+        "path": "/tmp/endgame-strangler/9d2980ed4079/pasteback/branded-twin_packages_npm-publish-engine_src_publish-status.workflow.ts/packages/npm-publish-engine/src/probe-decision.workflow.ts",
+        "snippet": "import * as Result from 'effect/Result'\nimport * as S from 'effect/Schema'\n\nconst ProbeCommand = S.Struct({ n: S.Number })\n\nexport const probeDecision = (command: S.Schema.Type<typeof ProbeCommand>): Result.Result<number, never> => {\n  if (command.n > 0) {\n    return Result.succeed(1)\n  }\n  return Result.succeed(0)\n}\n",
+        "ts": "2026-09-11T05:59:47.182Z"
+      }
     },
     {
       "id": "observed-interaction:packages/process-adapter/src/ChangeEvidenceLive.ts",
