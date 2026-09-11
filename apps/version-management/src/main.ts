@@ -1,344 +1,208 @@
 import { NodeRuntime, NodeServices } from '@effect/platform-node'
-import { program, Reporter } from '@systemfsoftware/cli-adapter'
+import { program, Reporter, ReporterLive } from '@systemfsoftware/cli-adapter'
 import { Cell } from '@systemfsoftware/effect-cell-types'
 import { ProcessLive } from '@systemfsoftware/process-adapter'
-import {
-  ChangelogStore,
-  ChangesetStore,
-  JsonSurface,
-  ProcessPort,
-  RelativePath,
-  ReleaseConfig,
-  ReleaseConfigStore,
-  RepoRoot,
-  SurfaceStore,
-  TargetSuffix,
-  WorkspaceStore,
-} from '@systemfsoftware/release-language'
+import { RelativePath, ReleaseConfigStore, RepoRoot } from '@systemfsoftware/release-language'
 import {
   bumpCell,
-  type BumpInput,
+  BumpInput,
   pinRootManifestCell,
-  type PinRootManifestInput,
+  PinRootManifestInput,
   syncCell,
-  type SyncInput,
+  SyncInput,
 } from '@systemfsoftware/version-engine'
 import {
   ChangelogStoreLive,
   ChangesetStoreLive,
-  CycleStoreLive,
   ReleaseConfigStoreLive,
   SurfaceStoreLive,
   WorkspaceStoreLive,
 } from '@systemfsoftware/workspace-adapter'
-import { Context, Effect, Layer, Option } from 'effect'
+import { Effect, Layer } from 'effect'
+import { FileSystem } from 'effect/FileSystem'
 import * as Match from 'effect/Match'
+import * as Option from 'effect/Option'
+import { Path } from 'effect/Path'
+import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import { Argument, Command, Flag } from 'effect/unstable/cli'
-const describeRefusal = (refusal: unknown): string => {
-  if (typeof refusal !== 'object' || refusal === null) {
-    return 'unknown refusal'
-  }
-  const entries: Array<readonly [string, unknown]> = Object.entries(refusal)
-  const tagEntry = entries.find(([key]) => key === '_tag')
-  const tagValue: unknown = tagEntry?.[1]
-  if (typeof tagValue !== 'string') {
-    return 'unknown refusal'
-  }
-  const detail = entries
-    .filter(([key]) => key !== '_tag')
-    .map(([key, value]) => `${key}=${String(value)}`)
-    .join(' ')
-  if (detail.length === 0) {
-    return tagValue
-  }
-  return `${tagValue}: ${detail}`
-}
+import type { Directive } from './directive.schema.js'
+import { ManifestPathRefused, SyncActionMissing, WorkspaceRootRefused } from './refusal.schema.js'
+import {
+  renderPinDecision,
+  renderRefusal,
+  renderSyncDecision,
+  renderSyncRefusal,
+  renderVersionDecision,
+} from './render.js'
+import { bumpRequestOf, pinRequestOf, syncRequestOf } from './request.js'
 
-const failWith = (message: string): Effect.Effect<never, string> => Effect.fail(message)
+const configFlag = Flag.string('config').pipe(Flag.optional)
 
-const releaseContext: Effect.Effect<
-  { readonly config: ReleaseConfig },
-  string,
-  WorkspaceStore | ReleaseConfigStore
-> = Effect.gen(function*() {
-  const workspace = yield* WorkspaceStore
-  const configs = yield* ReleaseConfigStore
-  const config = yield* Effect.matchEffect(configs.loadConfig(workspace.root), {
-    onFailure: (refusal) => failWith(describeRefusal(refusal)),
-    onSuccess: (loaded) => Effect.succeed(loaded),
-  })
-  return { config }
-})
+const storesLive = (root: RepoRoot, changesetDir: RelativePath) =>
+  Layer.mergeAll(
+    WorkspaceStoreLive(root),
+    SurfaceStoreLive(root),
+    ChangelogStoreLive(root),
+    ChangesetStoreLive({ root, changesetDir }),
+  )
 
-type SurfaceEntry = {
-  readonly file: RelativePath
-  readonly surface: Extract<ReleaseConfig['versioning'], { strategy: 'surfaces' }>['surfaces'][number]
-}
-
-const manifestSurface = (file: RelativePath): typeof JsonSurface.Type => ({
-  kind: 'json',
-  path: file,
-})
-
-const surfaceEntries = (
-  versioning: Extract<ReleaseConfig['versioning'], { strategy: 'surfaces' }>,
-): ReadonlyArray<SurfaceEntry> => {
-  return versioning.surfaces.flatMap((surface): ReadonlyArray<SurfaceEntry> => {
-    if (surface.kind === 'json') {
-      return [{ file: surface.path, surface }]
-    }
-    if (surface.kind === 'toml') {
-      if (surface.path === undefined) {
-        return []
-      }
-      return [{ file: surface.path, surface }]
-    }
-    return [{ file: surface.path, surface }]
-  })
-}
-
-const bump = Command.make('bump', {
-  config: Flag.string('config').pipe(Flag.optional),
-}, (): Effect.Effect<
-  void,
-  string,
-  Reporter | WorkspaceStore | ReleaseConfigStore | ChangesetStore | SurfaceStore | ChangelogStore | ProcessPort
-> =>
+const rootOf = (
+  given: Option.Option<string>,
+): Effect.Effect<RepoRoot, WorkspaceRootRefused, FileSystem | Path> =>
   Effect.gen(function*() {
-    const reporter = yield* Reporter
-    const { config } = yield* releaseContext
-    const versioning = config.versioning
-    let input: BumpInput
-    if (versioning.strategy === 'pnpm') {
-      input = {
-        strategy: 'pnpm',
-        changelogDir: config.changelogDir,
-        manifest: {
-          file: RelativePath.make('package.json'),
-          surface: manifestSurface(RelativePath.make('package.json')),
-        },
-        surfaces: [],
-      }
-    } else {
-      input = {
-        strategy: 'surfaces',
-        changelogDir: config.changelogDir,
-        rootChangelog: versioning.changelog,
-        manifest: { file: versioning.manifest, surface: manifestSurface(versioning.manifest) },
-        surfaces: surfaceEntries(versioning),
-      }
-    }
-    return yield* Effect.matchEffect(Cell.run(bumpCell, input), {
-      onFailure: (refusal) => failWith(describeRefusal(refusal)),
-      onSuccess: (decision) =>
-        Match.value(decision).pipe(
-          Match.tag('VersionBumped', () => reporter.emit('versioned packages')),
-          Match.tag('VersionConsumed', () => reporter.emit('consumed intents without a version bump')),
-          Match.tag('VersionIdle', () => reporter.note('no change intents; nothing to version')),
+    const fs = yield* FileSystem
+    const path = yield* Path
+    const target = path.resolve(Option.getOrUndefined(given) ?? '.')
+    const info = yield* fs.stat(target).pipe(
+      Effect.mapError((error): WorkspaceRootRefused => ({
+        _tag: 'WorkspaceRootRefused',
+        given: target,
+        reason: error.message,
+      })),
+    )
+    let root = path.dirname(target)
+    if (info.type === 'Directory') root = target
+    return yield* S.decodeUnknownEffect(RepoRoot)(root).pipe(
+      Effect.mapError((error): WorkspaceRootRefused => ({
+        _tag: 'WorkspaceRootRefused',
+        given: root,
+        reason: error.message,
+      })),
+    )
+  })
+
+const deliver = (directives: ReadonlyArray<Directive>): Effect.Effect<void, never, Reporter> =>
+  Effect.flatMap(Reporter, (reporter) =>
+    Effect.forEach(
+      directives,
+      (directive) =>
+        Match.value(directive).pipe(
+          Match.tag('Say', (spoken) => reporter.emit(spoken.line)),
+          Match.tag('Note', (noted) => reporter.note(noted.line)),
+          Match.tag('Fail', (failed) => reporter.annotateError(failed.line)),
+          Match.tag('Exit', (exit) => reporter.exitCode(exit.code)),
           Match.exhaustive,
         ),
-    })
+      { discard: true },
+    ))
+
+const runBump = (configPath: Option.Option<string>) =>
+  Effect.gen(function*() {
+    const root = yield* rootOf(configPath)
+    const configs = yield* ReleaseConfigStore
+    const config = yield* configs.loadConfig(root)
+    const request = yield* S.decodeUnknownEffect(BumpInput)(bumpRequestOf(config))
+    return yield* Cell.run(Cell.provide(bumpCell, storesLive(root, config.changesetDir)), request)
+  })
+
+const runSync = (flags: {
+  readonly subcommand: Option.Option<string>
+  readonly version: Option.Option<string>
+  readonly config: Option.Option<string>
+}) =>
+  Effect.gen(function*() {
+    const root = yield* rootOf(flags.config)
+    const action = Option.getOrUndefined(flags.subcommand)
+    if (action === undefined) {
+      return yield* Effect.fail<SyncActionMissing>({ _tag: 'SyncActionMissing' })
+    }
+    const configs = yield* ReleaseConfigStore
+    const config = yield* configs.loadConfig(root)
+    const request = yield* S.decodeUnknownEffect(SyncInput)(
+      syncRequestOf(config, action, Option.getOrUndefined(flags.version)),
+    )
+    const outcome = yield* Cell.run(
+      Cell.provide(syncCell, storesLive(root, config.changesetDir)),
+      request,
+    ).pipe(Effect.result)
+    return { manifest: request.manifest.file, outcome }
+  })
+
+const runPin = (flags: {
+  readonly manifest: Option.Option<string>
+  readonly version: Option.Option<string>
+  readonly dryRun: boolean
+  readonly config: Option.Option<string>
+}) =>
+  Effect.gen(function*() {
+    const root = yield* rootOf(flags.config)
+    const configs = yield* ReleaseConfigStore
+    const config = yield* configs.loadConfig(root)
+    const requestedPath = Option.getOrUndefined(flags.manifest)
+    let manifest: string | undefined
+    if (requestedPath !== undefined) {
+      manifest = yield* S.decodeUnknownEffect(RelativePath)(requestedPath).pipe(
+        Effect.mapError((): ManifestPathRefused => ({
+          _tag: 'ManifestPathRefused',
+          given: requestedPath,
+        })),
+      )
+    }
+    const fromEnvironment = yield* Effect.sync(() => process.env['VERSION'])
+    const request = yield* S.decodeUnknownEffect(PinRootManifestInput)(
+      pinRequestOf(config, {
+        manifest,
+        version: Option.getOrUndefined(flags.version) ?? fromEnvironment,
+        dryRun: flags.dryRun,
+      }),
+    )
+    const outcome = yield* Cell.run(
+      Cell.provide(pinRootManifestCell, storesLive(root, config.changesetDir)),
+      request,
+    ).pipe(Effect.result)
+    return { request, outcome }
+  })
+
+const bump = Command.make('bump', { config: configFlag }, (flags) =>
+  Effect.matchEffect(runBump(flags.config), {
+    onFailure: (refusal) => deliver(renderRefusal(refusal)),
+    onSuccess: (decision) => deliver(renderVersionDecision(decision)),
   }))
 
 const sync = Command.make('sync', {
   subcommand: Argument.string('subcommand').pipe(Argument.optional),
   version: Argument.string('version').pipe(Argument.optional),
-  config: Flag.string('config').pipe(Flag.optional),
-}, ({ subcommand, version }): Effect.Effect<
-  void,
-  string,
-  Reporter | WorkspaceStore | ReleaseConfigStore | SurfaceStore
-> =>
-  Effect.gen(function*() {
-    const reporter = yield* Reporter
-    const action = Option.getOrUndefined(subcommand)
-    const pinned = Option.getOrUndefined(version)
-    if (action !== 'check' && action !== 'bump') {
-      return yield* failWith(`usage: sync-versions.ts <check|bump> [version]`)
-    }
-    if (action === 'bump' && pinned === undefined) {
-      return yield* failWith(`usage: sync-versions.ts bump <version>`)
-    }
-    const { config } = yield* releaseContext
-    const versioning = config.versioning
-    if (versioning.strategy !== 'surfaces') {
-      return yield* failWith(`sync-versions only applies to a "surfaces" versioning config`)
-    }
-    const input: SyncInput = {
-      strategy: 'surfaces',
-      action,
-      version: pinned,
-      manifest: { file: versioning.manifest, surface: manifestSurface(versioning.manifest) },
-      surfaces: surfaceEntries(versioning),
-    }
-    return yield* Effect.matchEffect(Cell.run(syncCell, input), {
-      onFailure: (refusal) =>
-        Match.value(refusal).pipe(
-          Match.tag('SyncSurfacesDrifted', (drifted) =>
-            Effect.gen(function*() {
-              for (const diff of drifted.diffs) {
-                yield* reporter.annotateError(
-                  `${diff.path} ${diff.found} != ${versioning.manifest} ${drifted.expected}`,
-                )
-              }
-              yield* reporter.note('')
-              yield* reporter.note(`Run \`version sync bump <version>\` to bring every surface into line.`)
-              return yield* failWith(
-                `${drifted.diffs.length} surface(s) drifted from ${versioning.manifest} at ${drifted.expected}`,
-              )
-            })),
-          Match.tag('SyncStrategyMismatch', () =>
-            failWith(`sync-versions only applies to a "surfaces" versioning config`)),
-          Match.tag('SyncVersionMissing', () =>
-            failWith(`usage: sync-versions.ts bump <version>`)),
-          Match.tag('SyncActionUnknown', () => failWith(`usage: sync-versions.ts <check|bump> [version]`)),
-          Match.orElse((rest) => failWith(describeRefusal(rest))),
-        ),
-      onSuccess: (decision) =>
-        Match.value(decision).pipe(
-          Match.tag('SyncAligned', (aligned) =>
-            reporter.emit(`sync-versions: ok — ${aligned.version} across the manifest and every surface`)),
-          Match.tag('SyncRealigned', (realigned) =>
-            reporter.emit(`bumped to ${realigned.version}`)),
-          Match.exhaustive,
-        ),
-    })
+  config: configFlag,
+}, (flags) =>
+  Effect.matchEffect(runSync(flags), {
+    onFailure: (refusal) => deliver(renderRefusal(refusal)),
+    onSuccess: ({ manifest, outcome }) =>
+      deliver(
+        Result.match(outcome, {
+          onFailure: (refusal) => renderSyncRefusal(refusal, manifest),
+          onSuccess: (decision) => renderSyncDecision(decision),
+        }),
+      ),
   }))
 
 const syncRoot = Command.make('sync-root', {
   manifest: Flag.string('manifest').pipe(Flag.optional),
   version: Flag.string('version').pipe(Flag.optional),
   dryRun: Flag.boolean('dry-run').pipe(Flag.withDefault(false)),
-  config: Flag.string('config').pipe(Flag.optional),
-}, ({ manifest, version, dryRun }): Effect.Effect<
-  void,
-  string,
-  Reporter | WorkspaceStore | ReleaseConfigStore | SurfaceStore
-> =>
-  Effect.gen(function*() {
-    const reporter = yield* Reporter
-    const { config } = yield* releaseContext
-    const distribution = config.distribution
-    if (distribution === undefined) {
-      return yield* failWith(
-        `sync-root-manifest needs a "distribution" block — this repository ships no platform packages`,
-      )
-    }
-    const manifestFlag = Option.getOrUndefined(manifest)
-    const versionFlag = Option.getOrUndefined(version)
-    const requestedVersion = versionFlag ?? process.env['VERSION']
-    const manifestPath = manifestFlag ?? distribution.launcherManifest
-    const input: PinRootManifestInput = {
-      manifest: RelativePath.make(manifestPath),
-      requestedVersion,
-      suffixes: distribution.targets.map((target) => TargetSuffix.make(target.suffix)),
-      dryRun,
-    }
-    return yield* Effect.matchEffect(Cell.run(pinRootManifestCell, input), {
-      onFailure: (refusal) =>
-        Match.value(refusal).pipe(
-          Match.tag('PinVersionUnusable', (unusable) =>
-            failWith(
-              `sync-root-manifest: invalid version ${JSON.stringify(unusable.given)} — pass --version x.y.z`,
-            )),
-          Match.tag('PinDistributionMissing', () =>
-            failWith(
-              `sync-root-manifest needs a "distribution" block — this repository ships no platform packages`,
-            )),
-          Match.orElse((rest) => failWith(describeRefusal(rest))),
-        ),
-      onSuccess: (decision) =>
-        Match.value(decision).pipe(
-          Match.tag(
-            'WorkspaceVersionAlreadyCurrent',
-            (current) => reporter.emit(`unchanged — ${current.pins.length} pin(s) already at ${current.version}`),
-          ),
-          Match.tag('WorkspaceVersionRepinned', (pinned) => {
-            if (dryRun) {
-              return reporter.emit(pinned.text)
-            }
-            return Effect.gen(function*() {
-              yield* reporter.note(
-                `pinned ${pinned.pins.length} platform package(s) at ${pinned.version} in ${manifestPath}`,
-              )
-              yield* reporter.emit(`synced ${manifestPath}`)
-            })
-          }),
-          Match.exhaustive,
-        ),
-    })
+  config: configFlag,
+}, (flags) =>
+  Effect.matchEffect(runPin(flags), {
+    onFailure: (refusal) => deliver(renderRefusal(refusal)),
+    onSuccess: ({ request, outcome }) =>
+      deliver(
+        Result.match(outcome, {
+          onFailure: (refusal) => renderRefusal(refusal),
+          onSuccess: (decision) => renderPinDecision(decision, request.manifest, request.dryRun === true),
+        }),
+      ),
   }))
 
 const versionCommand = Command.make('version').pipe(
   Command.withDescription('Version packages and sync version surfaces'),
   Command.withSubcommands([bump, sync, syncRoot]),
 )
-const boundaryRoot: Effect.Effect<RepoRoot> = Effect.flatMap(
-  Effect.sync(() => process.cwd()),
-  (cwd) => S.decodeUnknownEffect(RepoRoot)(cwd),
-).pipe(Effect.orDie)
 
-const fallbackChangesetDir: Effect.Effect<RelativePath> = S.decodeUnknownEffect(RelativePath)(
-  '.changeset',
-).pipe(Effect.orDie)
-
-const WorkspaceStoreResolved = Layer.effect(
-  WorkspaceStore,
-  Effect.gen(function*() {
-    const root = yield* boundaryRoot
-    const context = yield* Layer.build(WorkspaceStoreLive(root))
-    return Context.get(context, WorkspaceStore)
-  }),
-)
-const SurfaceStoreResolved = Layer.effect(
-  SurfaceStore,
-  Effect.gen(function*() {
-    const workspace = yield* WorkspaceStore
-    const context = yield* Layer.build(SurfaceStoreLive(workspace.root))
-    return Context.get(context, SurfaceStore)
-  }),
-)
-
-const ChangelogStoreResolved = Layer.effect(
-  ChangelogStore,
-  Effect.gen(function*() {
-    const workspace = yield* WorkspaceStore
-    const context = yield* Layer.build(ChangelogStoreLive(workspace.root))
-    return Context.get(context, ChangelogStore)
-  }),
-)
-
-const ChangesetStoreResolved = Layer.effect(
-  ChangesetStore,
-  Effect.gen(function*() {
-    const workspace = yield* WorkspaceStore
-    const configs = yield* ReleaseConfigStore
-    const changesetDir = yield* Effect.matchEffect(
-      Effect.map(configs.loadConfig(workspace.root), (config) => config.changesetDir),
-      {
-        onFailure: () => fallbackChangesetDir,
-        onSuccess: (dir) => Effect.succeed(dir),
-      },
-    )
-    const context = yield* Layer.build(
-      ChangesetStoreLive({ root: workspace.root, changesetDir }),
-    )
-    return Context.get(context, ChangesetStore)
-  }),
-)
-
-const MainLive = Layer.mergeAll(
-  WorkspaceStoreResolved,
+const edgeLive = Layer.mergeAll(
   ReleaseConfigStoreLive,
-  CycleStoreLive,
   ProcessLive,
-  Layer.provide(SurfaceStoreResolved, WorkspaceStoreResolved),
-  Layer.provide(ChangelogStoreResolved, WorkspaceStoreResolved),
-  Layer.provide(
-    ChangesetStoreResolved,
-    Layer.mergeAll(WorkspaceStoreResolved, ReleaseConfigStoreLive),
-  ),
+  ReporterLive,
+  NodeServices.layer,
 ).pipe(Layer.provide(NodeServices.layer))
 
-NodeRuntime.runMain(Effect.provide(program(versionCommand, '0.0.0'), Layer.mergeAll(MainLive, NodeServices.layer)))
+NodeRuntime.runMain(Effect.provide(program(versionCommand, '0.0.0'), edgeLive))

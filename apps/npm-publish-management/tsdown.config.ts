@@ -6,6 +6,5 @@ export default defineConfig({
   dts: false,
   platform: 'node',
   outExtensions: () => ({ js: '.js' }),
-  alias: { 'jsonc-parser': 'jsonc-parser/lib/esm/main.js' },
   deps: { alwaysBundle: (id) => !id.startsWith('node:') },
 })

@@ -1,107 +1,64 @@
 import { NodeRuntime, NodeServices } from '@effect/platform-node'
-import { gateChangesCell, newIntentCell } from '@systemfsoftware/changeset-engine'
-import { program, Reporter } from '@systemfsoftware/cli-adapter'
+import { gateChangesCell, type GateReport, newIntentCell } from '@systemfsoftware/changeset-engine'
+import { program, Reporter, ReporterLive } from '@systemfsoftware/cli-adapter'
 import { Cell } from '@systemfsoftware/effect-cell-types'
 import { GitLive } from '@systemfsoftware/git-adapter'
 import { ChangeEvidenceLive } from '@systemfsoftware/process-adapter'
-import { GitRef, ReleaseConfigStore, RepoRoot, TaskName } from '@systemfsoftware/release-language'
-import type {
-  ChangesetStore,
-  ConfigRefusal,
-  MemberRefusal,
-  NewIntentRefusal,
-  RelativePath,
-  WorkspaceStore,
+import {
+  type ConfigRefusal,
+  type Gate,
+  type GateRefusal,
+  GitRef,
+  type IntentRefusal,
+  type MemberRefusal,
+  type NewIntentDecision,
+  type NewIntentRefusal,
+  type ReleaseConfig,
+  ReleaseConfigStore,
+  RepoRoot,
+  type TaskName,
 } from '@systemfsoftware/release-language'
 import { ChangesetStoreLive, ReleaseConfigStoreLive, WorkspaceStoreLive } from '@systemfsoftware/workspace-adapter'
 import { Effect, FileSystem, Layer, Option, Path } from 'effect'
 import * as Match from 'effect/Match'
 import * as S from 'effect/Schema'
 import { Argument, Command, Flag } from 'effect/unstable/cli'
-import { ChildProcessSpawner } from 'effect/unstable/process'
-const MainLive = Layer.mergeAll(
+import { type BaseRefInvalid, type BaseRefMissing, type RootNotAbsolute } from './Invocation.schema.js'
+
+const VERSION = '0.0.0'
+
+const AppLive = Layer.mergeAll(
   ReleaseConfigStoreLive,
   Layer.provide(ChangeEvidenceLive, GitLive),
-  Path.layer,
 ).pipe(Layer.provide(NodeServices.layer))
 
-interface StoreOptions {
+interface WorkspaceContext {
   readonly root: RepoRoot
-  readonly changesetDir: RelativePath
+  readonly release: ReleaseConfig
 }
 
-const provideStores = <I, A, E, R>(
-  cell: Cell.Cell<I, A, E, R>,
-  options: StoreOptions,
-): Cell.Cell<
-  I,
-  A,
-  E,
-  | Exclude<R, WorkspaceStore | ChangesetStore>
-  | ChildProcessSpawner.ChildProcessSpawner
-  | FileSystem.FileSystem
-  | Path.Path
-> =>
-  Cell.provide(
-    cell,
-    Layer.mergeAll(
-      WorkspaceStoreLive(options.root),
-      ChangesetStoreLive({ root: options.root, changesetDir: options.changesetDir }),
-    ),
-  )
+interface StagedIntent {
+  readonly root: RepoRoot
+  readonly decision: NewIntentDecision
+}
 
-const CONFIG_FILE = 'release.jsonc'
+type AppRefusal =
+  | ConfigRefusal
+  | MemberRefusal
+  | NewIntentRefusal
+  | GateRefusal
+  | IntentRefusal
+  | RootNotAbsolute
+  | BaseRefMissing
+  | BaseRefInvalid
 
-const resolveRoot = (
-  configFlag: string | undefined,
-): Effect.Effect<RepoRoot, string, Path.Path | FileSystem.FileSystem> =>
-  Effect.gen(function*() {
-    const path = yield* Path.Path
-    const fs = yield* FileSystem.FileSystem
-    let start: string
-    if (configFlag === undefined) {
-      start = process.cwd()
-    } else {
-      const stat = yield* fs.stat(configFlag).pipe(
-        Effect.mapError(() => `cannot stat --config "${configFlag}"`),
-      )
-      if (stat.type === 'Directory') {
-        start = configFlag
-      } else {
-        start = path.dirname(configFlag)
-      }
-    }
-    let dir = start
-    let found = false
-    do {
-      found = yield* fs.stat(path.join(dir, CONFIG_FILE)).pipe(
-        Effect.map(() => true),
-        Effect.orElseSucceed(() => false),
-      )
-      if (!found) {
-        const parent = path.dirname(dir)
-        if (parent === dir) {
-          return yield* Effect.fail(`cannot find ${CONFIG_FILE} above ${start}`)
-        }
-        dir = parent
-      }
-    } while (!found)
-    return yield* S.decodeUnknownEffect(RepoRoot)(dir).pipe(
-      Effect.mapError(() => `repository root "${dir}" is not an absolute path`),
-    )
-  })
-
-const reportFailure = (message: string): Effect.Effect<void, never, Reporter> =>
-  Effect.gen(function*() {
-    const reporter = yield* Reporter
-    yield* reporter.annotateError(message)
-    return yield* reporter.exitCode(1)
-  })
-
-const describeConfig = (refusal: ConfigRefusal): string =>
+const describeRefusal = (refusal: AppRefusal): string =>
   Match.value(refusal).pipe(
     Match.tag('ConfigUnreadable', (unreadable) => `cannot read config ${unreadable.path}`),
-    Match.tag('ConfigMalformed', (malformed) => `cannot parse config ${malformed.path}: ${malformed.reason}`),
+    Match.tag(
+      'ConfigMalformed',
+      (malformed) => `cannot parse config ${malformed.path}: ${malformed.reason}`,
+    ),
     Match.tag(
       'ConfigFieldMissing',
       (missing) => `config ${missing.path} is missing required field "${missing.field}"`,
@@ -110,66 +67,110 @@ const describeConfig = (refusal: ConfigRefusal): string =>
       'ConfigFieldInvalid',
       (invalid) => `config ${invalid.path} field "${invalid.field}" is invalid: ${invalid.reason}`,
     ),
-    Match.exhaustive,
-  )
-
-const describeNewIntentRefusal = (refusal: NewIntentRefusal | MemberRefusal): string =>
-  Match.value(refusal).pipe(
-    Match.tag('NewIntentInvalidBump', () => '--bump must be one of none | patch | minor | major'),
-    Match.tag('NewIntentSummaryMissing', () => '--summary is required, and must be one line'),
-    Match.tag('NewIntentPackagesEmpty', () => 'name at least one package'),
-    Match.tag('IntentUnknownPackage', (unknown) => `not workspace packages: ${unknown.package}`),
-    Match.tag('NewIntentPackageNameMalformed', (malformed) => `not workspace packages: ${malformed.given}`),
-    Match.tag('IntentSlugTaken', (taken) => `changeset slug "${taken.slug}" is already taken`),
     Match.tag('ManifestUnreadable', (unreadable) => `cannot read workspace manifest ${unreadable.path}`),
     Match.tag(
       'ManifestInvalid',
       (invalid) => `cannot parse workspace manifest ${invalid.path}: ${invalid.reason}`,
     ),
+    Match.tag(
+      'IntentFrontmatterMalformed',
+      (malformed) => `cannot parse changeset intent ${malformed.path}: malformed frontmatter`,
+    ),
+    Match.tag('IntentUnknownPackage', (unknown) => `not workspace packages: ${unknown.package}`),
+    Match.tag('IntentSlugTaken', (taken) => `changeset slug "${taken.slug}" is already taken`),
+    Match.tag('NewIntentInvalidBump', () => '--bump must be one of none | patch | minor | major'),
+    Match.tag('NewIntentSummaryMissing', () => '--summary is required, and must be one line'),
+    Match.tag('NewIntentPackagesEmpty', () => 'name at least one package'),
+    Match.tag('NewIntentPackageNameMalformed', (malformed) => `not workspace packages: ${malformed.given}`),
+    Match.tag(
+      'GateUnknownPackage',
+      (unknown) => `${unknown.path} names non-member package "${unknown.package}"`,
+    ),
+    Match.tag('GateIntentMissing', (missing) => `no intent names: ${missing.packages.join(', ')}`),
+    Match.tag(
+      'RootNotAbsolute',
+      (notAbsolute) => `repository root "${notAbsolute.given}" is not an absolute path`,
+    ),
+    Match.tag('BaseRefMissing', () => 'usage: changeset-management check <base-sha-or-ref>'),
+    Match.tag('BaseRefInvalid', (invalid) => `invalid base ref "${invalid.given}"`),
     Match.exhaustive,
   )
 
-const check = Command.make('check', {
-  base: Argument.string('base-sha-or-ref').pipe(Argument.optional),
-  baseFlag: Flag.string('base').pipe(Flag.optional),
-  skipLiveness: Flag.boolean('skip-liveness').pipe(Flag.withDefault(false)),
-  config: Flag.string('config').pipe(Flag.optional),
-}, ({ base, baseFlag, skipLiveness, config }) =>
+const announceRefusal = (refusal: AppRefusal): Effect.Effect<void, never, Reporter> =>
+  Effect.flatMap(
+    Reporter,
+    (reporter) => Effect.flatMap(reporter.annotateError(describeRefusal(refusal)), () => reporter.exitCode(1)),
+  )
+
+const announceGate = (report: GateReport): Effect.Effect<void, never, Reporter> =>
+  Effect.flatMap(Reporter, (reporter) =>
+    Match.value(report.ok).pipe(
+      Match.when(true, () => reporter.emit(report.text)),
+      Match.orElse(() => Effect.flatMap(reporter.annotateError(report.text), () => reporter.exitCode(1))),
+    ))
+
+const announceStaged = (staged: StagedIntent): Effect.Effect<void, never, Path.Path | Reporter> =>
+  Effect.flatMap(
+    Path.Path,
+    (path) => Effect.flatMap(Reporter, (reporter) => reporter.emit(path.join(staged.root, staged.decision.path))),
+  )
+
+const workspaceRootOf = (
+  config: Option.Option<string>,
+): Effect.Effect<RepoRoot, RootNotAbsolute, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function*() {
-    const ref = Option.getOrUndefined(base) ?? Option.getOrUndefined(baseFlag)
-    if (ref === undefined) return yield* Effect.fail('usage: changeset-management check <base-sha-or-ref>')
-    const root = yield* resolveRoot(Option.getOrUndefined(config))
-    const configs = yield* ReleaseConfigStore
-    const resolved = yield* configs.loadConfig(root).pipe(Effect.mapError(describeConfig))
-    const baseRef = yield* S.decodeUnknownEffect(GitRef)(ref).pipe(
-      Effect.mapError(() => `invalid base ref "${ref}"`),
+    const path = yield* Path.Path
+    const fs = yield* FileSystem.FileSystem
+    const named = path.resolve(Option.getOrUndefined(config) ?? process.cwd())
+    const located = yield* fs.stat(named).pipe(Effect.option)
+    const root = Option.match(Option.filter(located, (info) => info.type === 'File'), {
+      onNone: () => named,
+      onSome: () => path.dirname(named),
+    })
+    return yield* S.decodeUnknownEffect(RepoRoot)(root).pipe(
+      Effect.mapError((): RootNotAbsolute => ({ _tag: 'RootNotAbsolute', given: root })),
     )
-    let task: TaskName | undefined
-    if (resolved.gate.strategy === 'turbo') {
-      const configured = resolved.gate.task
-      if (configured === undefined) {
-        task = yield* S.decodeUnknownEffect(TaskName)('build').pipe(Effect.orDie)
-      } else {
-        task = configured
-      }
-    } else {
-      task = undefined
-    }
-    const gate = provideStores(gateChangesCell, { root, changesetDir: resolved.changesetDir })
-    const report = yield* Cell.run(gate, {
-      root,
-      ref: baseRef,
-      strategy: resolved.gate.strategy,
-      task,
-      skipLiveness,
-    }).pipe(
-      Effect.mapError((failure) => `changeset gate failed: ${JSON.stringify(failure)}`),
-    )
-    const reporter = yield* Reporter
-    if (report.ok) return yield* reporter.emit(report.text)
-    yield* reporter.annotateError(report.text)
-    return yield* reporter.exitCode(1)
-  }).pipe(Effect.catchIf((): boolean => true, reportFailure)))
+  })
+
+const releaseWorkspaceOf = (
+  config: Option.Option<string>,
+): Effect.Effect<
+  WorkspaceContext,
+  ConfigRefusal | RootNotAbsolute,
+  ReleaseConfigStore | FileSystem.FileSystem | Path.Path
+> =>
+  Effect.gen(function*() {
+    const root = yield* workspaceRootOf(config)
+    const store = yield* ReleaseConfigStore
+    const release = yield* store.loadConfig(root)
+    return { root, release }
+  })
+
+const storesOf = (context: WorkspaceContext) =>
+  Layer.mergeAll(
+    WorkspaceStoreLive(context.root),
+    ChangesetStoreLive({ root: context.root, changesetDir: context.release.changesetDir }),
+  )
+
+const baseRefOf = (
+  positional: Option.Option<string>,
+  flag: Option.Option<string>,
+): Effect.Effect<GitRef, BaseRefMissing | BaseRefInvalid> =>
+  Option.match(Option.orElse(positional, () => flag), {
+    onNone: () => Effect.fail<BaseRefMissing>({ _tag: 'BaseRefMissing' }),
+    onSome: (given) =>
+      S.decodeUnknownEffect(GitRef)(given).pipe(
+        Effect.mapError((): BaseRefInvalid => ({ _tag: 'BaseRefInvalid', given })),
+      ),
+  })
+
+const taskOf = (gate: Gate): TaskName | undefined =>
+  Match.value(gate).pipe(
+    Match.discriminatorsExhaustive('strategy')({
+      turbo: (turbo) => turbo.task,
+      paths: () => undefined,
+    }),
+  )
 
 const newIntent = Command.make('new', {
   names: Argument.variadic(Argument.string('package')),
@@ -177,26 +178,52 @@ const newIntent = Command.make('new', {
   summary: Flag.string('summary').pipe(Flag.withAlias('s'), Flag.optional),
   slug: Flag.string('slug').pipe(Flag.optional),
   config: Flag.string('config').pipe(Flag.optional),
-}, ({ names, bump, summary, slug, config }) =>
-  Effect.gen(function*() {
-    const path = yield* Path.Path
-    const root = yield* resolveRoot(Option.getOrUndefined(config))
-    const configs = yield* ReleaseConfigStore
-    const resolved = yield* configs.loadConfig(root).pipe(Effect.mapError(describeConfig))
-    const stage = provideStores(newIntentCell, { root, changesetDir: resolved.changesetDir })
-    const decision = yield* Cell.run(stage, {
-      packages: [...names],
-      bump: Option.getOrUndefined(bump),
-      summary: Option.getOrUndefined(summary),
-      slug: Option.getOrUndefined(slug),
-    }).pipe(Effect.mapError(describeNewIntentRefusal))
-    const reporter = yield* Reporter
-    yield* reporter.emit(path.join(root, decision.path))
-  }).pipe(Effect.catchIf((): boolean => true, reportFailure)))
+}, ({ names, bump, summary, slug, config }) => {
+  const staged = Effect.flatMap(releaseWorkspaceOf(config), (context) =>
+    Effect.map(
+      Cell.run(Cell.provide(newIntentCell, storesOf(context)), {
+        packages: names,
+        bump: Option.getOrUndefined(bump),
+        summary: Option.getOrUndefined(summary),
+        slug: Option.getOrUndefined(slug),
+      }),
+      (decision) => ({ root: context.root, decision }),
+    ))
+  return Effect.matchEffect(staged, { onFailure: announceRefusal, onSuccess: announceStaged })
+})
+
+const check = Command.make('check', {
+  base: Argument.string('base-sha-or-ref').pipe(Argument.optional),
+  baseFlag: Flag.string('base').pipe(Flag.optional),
+  skipLiveness: Flag.boolean('skip-liveness').pipe(Flag.withDefault(false)),
+  config: Flag.string('config').pipe(Flag.optional),
+}, ({ base, baseFlag, skipLiveness, config }) => {
+  const gate = Effect.flatMap(
+    baseRefOf(base, baseFlag),
+    (ref) =>
+      Effect.flatMap(
+        releaseWorkspaceOf(config),
+        (context) =>
+          Cell.run(Cell.provide(gateChangesCell, storesOf(context)), {
+            root: context.root,
+            ref,
+            strategy: context.release.gate.strategy,
+            task: taskOf(context.release.gate),
+            skipLiveness,
+          }),
+      ),
+  )
+  return Effect.matchEffect(gate, { onFailure: announceRefusal, onSuccess: announceGate })
+})
 
 const changeset = Command.make('changeset').pipe(
   Command.withDescription('Author and gate the change intents that drive a release'),
   Command.withSubcommands([newIntent, check]),
 )
 
-NodeRuntime.runMain(Effect.provide(program(changeset, '0.0.0'), Layer.mergeAll(MainLive, NodeServices.layer)))
+NodeRuntime.runMain(
+  Effect.provide(
+    program(changeset, VERSION),
+    Layer.mergeAll(AppLive, ReporterLive, NodeServices.layer),
+  ),
+)

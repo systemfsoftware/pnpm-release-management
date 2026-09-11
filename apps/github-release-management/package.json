@@ -13,8 +13,7 @@
     "@systemfsoftware/release-language": "workspace:*",
     "@systemfsoftware/version-engine": "workspace:*",
     "@systemfsoftware/workspace-adapter": "workspace:*",
-    "effect": "^4.0.0-rc.112",
-    "jsonc-parser": "^3.3.1"
+    "effect": "^4.0.0-rc.112"
   },
   "devDependencies": {
     "@effect/vitest": "^4.0.0-rc.112",

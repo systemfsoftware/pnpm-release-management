@@ -6,13 +6,13 @@
     "@effect/platform-node": "^4.0.0-rc.112",
     "@systemfsoftware/cli-adapter": "workspace:*",
     "@systemfsoftware/effect-cell-types": "^6.0.1",
+    "@systemfsoftware/git-adapter": "workspace:*",
     "@systemfsoftware/npm-publish-engine": "workspace:*",
     "@systemfsoftware/process-adapter": "workspace:*",
     "@systemfsoftware/registry-adapter": "workspace:*",
     "@systemfsoftware/release-language": "workspace:*",
     "@systemfsoftware/workspace-adapter": "workspace:*",
-    "effect": "^4.0.0-rc.112",
-    "jsonc-parser": "^3.3.1"
+    "effect": "^4.0.0-rc.112"
   },
   "devDependencies": {
     "@effect/vitest": "^4.0.0-rc.112",

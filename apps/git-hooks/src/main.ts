@@ -1,172 +1,223 @@
-import { NodeRuntime } from '@effect/platform-node'
-import { program, Reporter } from '@systemfsoftware/cli-adapter'
+import { NodeRuntime, NodeServices } from '@effect/platform-node'
+import { program, Reporter, ReporterLive } from '@systemfsoftware/cli-adapter'
 import { Cell } from '@systemfsoftware/effect-cell-types'
 import { GitLive } from '@systemfsoftware/git-adapter'
 import { commitMessageCell, CommitRejected, stagedChecksCell } from '@systemfsoftware/git-hooks-engine'
 import { ProcessLive } from '@systemfsoftware/process-adapter'
-import type { GitPort, ProcessPort } from '@systemfsoftware/release-language'
+import {
+  type CommitMessageDecision,
+  GitPort,
+  type ProcessPort,
+  type StagedChecksDecision,
+  type StagedChecksRefusal,
+  type StagedPath,
+} from '@systemfsoftware/release-language'
 import { Effect, FileSystem, Layer, Option } from 'effect'
 import * as Match from 'effect/Match'
+import * as S from 'effect/Schema'
 import { Argument, Command } from 'effect/unstable/cli'
-import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
+import { MessageFile, type MessageUnreadable } from './Invocation.schema.js'
 
-const TYPE_NAMES =
-  'ai / api / build / chore / ci / deps / docs / e2e / feat / fix / improvement / perf / refactor / revert / security / style / test'
-const SCOPE_NAMES =
-  'ci / deps / docs / e2e / gate / global / nix / plan / publish / release / repo / solutions / tag / version'
-const TYPES_TRAILER =
-  'ai, api, build, chore, ci, deps, docs, e2e, feat, fix, improvement, perf, refactor, revert, security, style, test'
-const SCOPES_TRAILER = 'ci, deps, docs, e2e, gate, global, nix, plan, publish, release, repo, solutions, tag, version'
+const VERSION = '0.0.0'
 
-const causeMessage = (cause: unknown): string => {
-  if (cause instanceof Error) {
-    return cause.message
-  }
-  if (typeof cause === 'string') {
-    return cause
-  }
-  return 'unknown'
+const COMMIT_TYPES: ReadonlyArray<string> = [
+  'ai',
+  'api',
+  'build',
+  'chore',
+  'ci',
+  'deps',
+  'docs',
+  'e2e',
+  'feat',
+  'fix',
+  'improvement',
+  'perf',
+  'refactor',
+  'revert',
+  'security',
+  'style',
+  'test',
+]
+
+const COMMIT_SCOPES: ReadonlyArray<string> = [
+  'ci',
+  'deps',
+  'docs',
+  'e2e',
+  'gate',
+  'global',
+  'nix',
+  'plan',
+  'publish',
+  'release',
+  'repo',
+  'solutions',
+  'tag',
+  'version',
+]
+
+const COMMIT_TYPE_TRAILER = COMMIT_TYPES.join(', ')
+const COMMIT_SCOPE_TRAILER = COMMIT_SCOPES.join(', ')
+
+interface Rendered {
+  readonly lines: ReadonlyArray<string>
+  readonly annotation: Option.Option<string>
+  readonly exitCode: number
 }
 
-const compareStrings = (left: string, right: string): number => {
-  if (left < right) {
-    return -1
-  }
-  if (left > right) {
-    return 1
-  }
-  return 0
-}
+const silent: Rendered = { lines: [], annotation: Option.none(), exitCode: 0 }
 
-const gitLines = (
-  args: ReadonlyArray<string>,
-): Effect.Effect<Array<string>, never, ChildProcessSpawner.ChildProcessSpawner> =>
-  Effect.gen(function*() {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-    const lines = yield* spawner.lines(ChildProcess.make('git', [...args])).pipe(
-      Effect.orElseSucceed((): Array<string> => []),
-    )
-    return lines.map((line) => line.trim()).filter((line) => line.length > 0)
-  })
-const preCommit = Command.make('pre-commit', {}, () =>
-  Effect.gen(function*() {
-    const reporter = yield* Reporter
-    const allScripts = yield* gitLines(['ls-files', 'scripts'])
-    const scripts = allScripts.filter((file) => file.endsWith('.ts'))
-    yield* Cell.run(stagedChecksCell, { scripts }).pipe(
-      Effect.tap((decision) =>
-        Match.value(decision).pipe(
-          Match.tag('StagedChecksPassed', (passed) => {
-            if (passed.checks.includes('format')) {
-              return reporter.note(`pre-commit: formatting ${passed.staged} staged file(s)`)
-            }
-            return Effect.void
+const report = (rendered: Rendered): Effect.Effect<void, never, Reporter> =>
+  Effect.flatMap(Reporter, (reporter) =>
+    Effect.andThen(
+      Effect.forEach(rendered.lines, (line) => reporter.note(line), { discard: true }),
+      () =>
+        Effect.andThen(
+          Option.match(rendered.annotation, {
+            onNone: () => Effect.void,
+            onSome: (text) => reporter.annotateError(text),
           }),
-          Match.orElse(() => Effect.void),
-        )
-      ),
-      Effect.catchIf((): boolean => true, (error) =>
-        Match.value(error).pipe(
-          Match.tag('SchemaError', (parseError) => Effect.fail(parseError)),
-          Match.tag('FormatRefused', (refused) =>
-            Effect.andThen(
-              reporter.note(`pre-commit: format failed: ${refused.reason}`),
-              () => reporter.exitCode(1),
-            )),
-          Match.tag('TypecheckRefused', (refused) =>
-            Effect.andThen(
-              reporter.note(`pre-commit: typecheck failed: ${refused.reason}`),
-              () => reporter.exitCode(1),
-            )),
-          Match.tag('LintRefused', (refused) =>
-            Effect.andThen(
-              reporter.note(`pre-commit: lint failed: ${refused.reason}`),
-              () => reporter.exitCode(1),
-            )),
-          Match.tag('StagedStateUnreadable', (refused) =>
-            Effect.andThen(
-              reporter.note(`pre-commit: ${refused.reason}`),
-              () => reporter.exitCode(1),
-            )),
-          Match.exhaustive,
-        )),
-    )
-  }))
+          () => reporter.exitCode(rendered.exitCode),
+        ),
+    ))
+
+const preCommitDecision = (decision: StagedChecksDecision): Rendered =>
+  Match.value(decision).pipe(
+    Match.tag('StagedChecksPassed', (passed) =>
+      Match.value(passed.checks.includes('format')).pipe(
+        Match.when(true, (): Rendered => ({
+          lines: [`pre-commit: formatting ${passed.staged} staged file(s)`],
+          annotation: Option.none(),
+          exitCode: 0,
+        })),
+        Match.when(false, () => silent),
+        Match.exhaustive,
+      )),
+    Match.tag('StagedVacant', () => silent),
+    Match.tag('MergeChecksSkipped', () => silent),
+    Match.exhaustive,
+  )
+
+const preCommitFailure = (failure: S.SchemaError | StagedChecksRefusal): Rendered =>
+  Match.value(failure).pipe(
+    Match.tag('SchemaError', (schema): Rendered => ({
+      lines: [],
+      annotation: Option.some(schema.message),
+      exitCode: 1,
+    })),
+    Match.tag('FormatRefused', (refused): Rendered => ({
+      lines: [`pre-commit: format failed: ${refused.reason}`],
+      annotation: Option.none(),
+      exitCode: 1,
+    })),
+    Match.tag('TypecheckRefused', (refused): Rendered => ({
+      lines: [`pre-commit: typecheck failed: ${refused.reason}`],
+      annotation: Option.none(),
+      exitCode: 1,
+    })),
+    Match.tag('LintRefused', (refused): Rendered => ({
+      lines: [`pre-commit: lint failed: ${refused.reason}`],
+      annotation: Option.none(),
+      exitCode: 1,
+    })),
+    Match.tag('StagedStateUnreadable', (refused): Rendered => ({
+      lines: [`pre-commit: ${refused.reason}`],
+      annotation: Option.none(),
+      exitCode: 1,
+    })),
+    Match.exhaustive,
+  )
+
+const commitMessageDecision = (decision: CommitMessageDecision): Rendered =>
+  Match.value(decision).pipe(
+    Match.tag('CommitAccepted', () => silent),
+    Match.tag('CommitIgnored', () => silent),
+    Match.exhaustive,
+  )
+
+const commitMessageFailure = (
+  failure: S.SchemaError | MessageUnreadable | StagedChecksRefusal | CommitRejected,
+): Rendered =>
+  Match.value(failure).pipe(
+    Match.tag('SchemaError', (schema): Rendered => ({
+      lines: [],
+      annotation: Option.some(schema.message),
+      exitCode: 1,
+    })),
+    Match.tag('MessageUnreadable', (unreadable): Rendered => ({
+      lines: [],
+      annotation: Option.some(`commit-msg: cannot read ${unreadable.path}: ${unreadable.detail}`),
+      exitCode: 1,
+    })),
+    Match.tag(
+      'FormatRefused',
+      'TypecheckRefused',
+      'LintRefused',
+      'StagedStateUnreadable',
+      (refused): Rendered => ({
+        lines: [`commit-msg: ${refused.reason}`],
+        annotation: Option.none(),
+        exitCode: 1,
+      }),
+    ),
+    Match.tag('CommitRejected', (rejected): Rendered => ({
+      lines: [
+        `commit-msg: ${rejected.problem}`,
+        '',
+        '  <type>(<scope>): <subject>',
+        '',
+        `  types:  ${COMMIT_TYPE_TRAILER}`,
+        `  scopes: ${COMMIT_SCOPE_TRAILER}`,
+      ],
+      annotation: Option.none(),
+      exitCode: 1,
+    })),
+    Match.exhaustive,
+  )
+
+const stagedPathsOf: Effect.Effect<ReadonlyArray<StagedPath>, StagedChecksRefusal, GitPort> = Effect.flatMap(
+  GitPort,
+  (git) => git.stagedPaths(),
+)
+
+const preCommit = Command.make('pre-commit', {}, () =>
+  stagedPathsOf.pipe(
+    Effect.map((paths) => paths.filter((path) => path.startsWith('scripts/') && path.endsWith('.ts'))),
+    Effect.flatMap((scripts) => Cell.run(stagedChecksCell, { scripts })),
+    Effect.match({ onFailure: preCommitFailure, onSuccess: preCommitDecision }),
+    Effect.flatMap(report),
+  ))
 
 const commitMsg = Command.make(
   'commit-msg',
   { messageFile: Argument.string('path-to-commit-message').pipe(Argument.optional) },
   ({ messageFile }) =>
-    Effect.gen(function*() {
-      const reporter = yield* Reporter
-      const fs = yield* FileSystem.FileSystem
-      const messagePath = Option.getOrUndefined(messageFile)
-      if (messagePath === undefined) {
-        yield* reporter.note('usage: commit-msg.ts <path-to-commit-message>')
-        yield* reporter.exitCode(2)
-        return
-      }
-      const raw = yield* fs.readFileString(messagePath).pipe(
-        Effect.mapError((cause) =>
-          new Error(
-            `commit-msg: cannot read ${messagePath}: ${causeMessage(cause)}`,
-            { cause },
-          )
-        ),
-      )
-      const staged = yield* gitLines(['diff', '--cached', '--name-only'])
-      yield* Cell.run(commitMessageCell, { raw, staged }).pipe(
-        Effect.catchIf((): boolean => true, (error) => {
-          if (error instanceof CommitRejected) {
-            return Effect.gen(function*() {
-              const problem = Match.value(error.refusal).pipe(
-                Match.tag('CommitEmpty', () => 'the commit message is empty'),
-                Match.tag(
-                  'CommitHeaderMalformed',
-                  (malformed) => `"${malformed.header}" is not "<type>(<scope>): <subject>"`,
-                ),
-                Match.tag(
-                  'CommitTypeUnknown',
-                  (unknown) => `type "${unknown.type}" is not one of ${TYPE_NAMES}`,
-                ),
-                Match.tag(
-                  'CommitScopeUnknown',
-                  (unknown) => `scope "${unknown.scope}" is not one of ${SCOPE_NAMES}`,
-                ),
-                Match.tag('CommitSubjectEmpty', () => 'the subject is empty'),
-                Match.tag('CommitHeaderPunctuation', (punctuated) => {
-                  if (punctuated.header.endsWith('.')) {
-                    return 'the header must not end with a full stop'
-                  }
-                  return 'the subject must not end with a full stop'
-                }),
-                Match.tag(
-                  'CommitAiAttribution',
-                  () => 'AI co-authors and AI model references are not allowed in commit messages',
-                ),
-                Match.tag('CommitShapeMismatched', (mismatched) =>
-                  `"${mismatched.type}" with 100% ${mismatched.shape} paths — allowed types: ${
-                    [...mismatched.allowed].sort(compareStrings).join(' / ')
-                  }`),
-                Match.tag(
-                  'CommitProductionUntouched',
-                  (untouched) =>
-                    `"${untouched.type}" must touch at least one production source file`,
-                ),
-                Match.exhaustive,
-              )
-              yield* reporter.note(`commit-msg: ${problem}`)
-              yield* reporter.note('')
-              yield* reporter.note('  <type>(<scope>): <subject>')
-              yield* reporter.note('')
-              yield* reporter.note(`  types:  ${TYPES_TRAILER}`)
-              yield* reporter.note(`  scopes: ${SCOPES_TRAILER}`)
-              yield* reporter.exitCode(1)
-            })
-          }
-          return Effect.fail(error)
+    Option.match(messageFile, {
+      onNone: () =>
+        report({
+          lines: ['usage: commit-msg.ts <path-to-commit-message>'],
+          annotation: Option.none(),
+          exitCode: 2,
         }),
-      )
+      onSome: (given) =>
+        S.decodeUnknownEffect(MessageFile)(given).pipe(
+          Effect.flatMap((file) =>
+            Effect.flatMap(FileSystem.FileSystem, (fs) =>
+              Effect.mapError(
+                fs.readFileString(file),
+                (cause): MessageUnreadable => ({
+                  _tag: 'MessageUnreadable',
+                  path: file,
+                  detail: cause.message,
+                }),
+              ))
+          ),
+          Effect.flatMap((raw) => Effect.map(stagedPathsOf, (staged) => ({ raw, staged }))),
+          Effect.flatMap((request) => Cell.run(commitMessageCell, request)),
+          Effect.match({ onFailure: commitMessageFailure, onSuccess: commitMessageDecision }),
+          Effect.flatMap(report),
+        ),
     }),
 )
 
@@ -177,4 +228,6 @@ const hooks = Command.make('hooks').pipe(
 
 const MainLive: Layer.Layer<GitPort | ProcessPort> = Layer.mergeAll(GitLive, ProcessLive)
 
-NodeRuntime.runMain(Effect.provide(program(hooks, '0.0.0'), MainLive))
+NodeRuntime.runMain(
+  Effect.provide(program(hooks, VERSION), Layer.mergeAll(MainLive, ReporterLive, NodeServices.layer)),
+)

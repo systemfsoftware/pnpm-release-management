@@ -196,9 +196,6 @@ importers:
       effect:
         specifier: ^4.0.0-rc.112
         version: 4.0.0-rc.112
-      jsonc-parser:
-        specifier: ^3.3.1
-        version: 3.3.1
     devDependencies:
       '@effect/vitest':
         specifier: ^4.0.0-rc.112
@@ -233,6 +230,9 @@ importers:
       '@systemfsoftware/effect-cell-types':
         specifier: ^6.0.1
         version: 6.0.1(effect@4.0.0-rc.112)
+      '@systemfsoftware/git-adapter':
+        specifier: workspace:*
+        version: link:../../packages/git-adapter
       '@systemfsoftware/npm-publish-engine':
         specifier: workspace:*
         version: link:../../packages/npm-publish-engine
@@ -251,9 +251,6 @@ importers:
       effect:
         specifier: ^4.0.0-rc.112
         version: 4.0.0-rc.112
-      jsonc-parser:
-        specifier: ^3.3.1
-        version: 3.3.1
     devDependencies:
       '@effect/vitest':
         specifier: ^4.0.0-rc.112
@@ -2355,9 +2352,6 @@ packages:
   json-with-bigint@3.5.12:
     resolution: {integrity: sha512-uwbF/wSSuOgC7qqlq27Xp5B6a2MHVug3t0idZdTqu0JnlFvgJuH7ju+KAk/J06C7GfhoYy2gnb9wz2INqcne7w==}
 
-  jsonc-parser@3.3.1:
-    resolution: {integrity: sha512-HUgH65KyejrUFPvHFPbqOY0rsFip3Bo5wb4ngvdi1EpCYWUQDC5V+Y7mZws+DLkr4M//zQJoanu1SP+87Dv1oQ==}
-
   lazystream@1.0.1:
     resolution: {integrity: sha512-b94GiNHQNy6JNTrt5w6zNyffMrNkXZb3KTkCZJb2V1xaEGCk093vkZ2jk3tpaeP33/OiXC+WvK9AxUebnf5nbw==}
     engines: {node: '>= 0.6.3'}
@@ -4413,8 +4407,6 @@ snapshots:
   json-schema-traverse@1.0.0: {}
 
   json-with-bigint@3.5.12: {}
-
-  jsonc-parser@3.3.1: {}
 
   lazystream@1.0.1:
     dependencies:
