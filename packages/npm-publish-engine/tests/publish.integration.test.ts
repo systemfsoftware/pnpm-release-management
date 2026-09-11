@@ -1,7 +1,6 @@
 import { Cell } from '@systemfsoftware/effect-cell-types'
 import { Gherkin, Given, it, layer, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
 import {
-  bootstrapNpmTrustCell,
   makeFakeCycleStore,
   makeFakeProcess,
   makeFakeRegistry,
@@ -9,6 +8,7 @@ import {
   publishPackagesCell,
   PublishRequest,
   publishStatusCell,
+  stageNpmTrustCell,
   StatusRequest,
   TrustRequest,
 } from '@systemfsoftware/npm-publish-engine'
@@ -675,7 +675,7 @@ Feature('Publishing packages to the registry').body(({ scenario }) => {
         When('bootstrapping registry trust')(
           'outcome',
           (s) =>
-            Effect.match(Cell.run(Cell.provide(bootstrapNpmTrustCell, live), s.input), {
+            Effect.match(Cell.run(Cell.provide(stageNpmTrustCell, live), s.input), {
               onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
               onSuccess: (decision) => ({ _tag: 'decided' as const, decision }),
             }),
@@ -727,7 +727,7 @@ Feature('Publishing packages to the registry').body(({ scenario }) => {
         When('bootstrapping registry trust')(
           'outcome',
           (s) =>
-            Effect.match(Cell.run(Cell.provide(bootstrapNpmTrustCell, live), s.input), {
+            Effect.match(Cell.run(Cell.provide(stageNpmTrustCell, live), s.input), {
               onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
               onSuccess: (decision) => ({ _tag: 'decided' as const, decision }),
             }),
@@ -763,7 +763,7 @@ Feature('Publishing packages to the registry').body(({ scenario }) => {
         When('bootstrapping registry trust')(
           'outcome',
           (s) =>
-            Effect.match(Cell.run(Cell.provide(bootstrapNpmTrustCell, live), s.input), {
+            Effect.match(Cell.run(Cell.provide(stageNpmTrustCell, live), s.input), {
               onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
               onSuccess: (decision) => ({ _tag: 'decided' as const, decision }),
             }),
@@ -804,7 +804,7 @@ Feature('Publishing packages to the registry').body(({ scenario }) => {
         When('bootstrapping registry trust')(
           'outcome',
           (s) =>
-            Effect.match(Cell.run(Cell.provide(bootstrapNpmTrustCell, live), s.input), {
+            Effect.match(Cell.run(Cell.provide(stageNpmTrustCell, live), s.input), {
               onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
               onSuccess: (decision) => ({ _tag: 'decided' as const, decision }),
             }),
@@ -843,7 +843,7 @@ Feature('Publishing packages to the registry').body(({ scenario }) => {
         When('bootstrapping registry trust')(
           'outcome',
           (s) =>
-            Effect.match(Cell.run(Cell.provide(bootstrapNpmTrustCell, live), s.input), {
+            Effect.match(Cell.run(Cell.provide(stageNpmTrustCell, live), s.input), {
               onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
               onSuccess: (decision) => ({ _tag: 'decided' as const, decision }),
             }),
@@ -885,7 +885,7 @@ Feature('Publishing packages to the registry').body(({ scenario }) => {
         When('bootstrapping registry trust')(
           'outcome',
           (s) =>
-            Effect.match(Cell.run(Cell.provide(bootstrapNpmTrustCell, live), s.input), {
+            Effect.match(Cell.run(Cell.provide(stageNpmTrustCell, live), s.input), {
               onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
               onSuccess: (decision) => ({ _tag: 'decided' as const, decision }),
             }),
@@ -929,7 +929,7 @@ Feature('Publishing packages to the registry').body(({ scenario }) => {
         When('bootstrapping registry trust')(
           'outcome',
           (s) =>
-            Effect.match(Cell.run(Cell.provide(bootstrapNpmTrustCell, live), s.input), {
+            Effect.match(Cell.run(Cell.provide(stageNpmTrustCell, live), s.input), {
               onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
               onSuccess: (decision) => ({ _tag: 'decided' as const, decision }),
             }),

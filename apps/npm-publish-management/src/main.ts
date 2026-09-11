@@ -2,10 +2,10 @@ import { NodeRuntime, NodeServices } from '@effect/platform-node'
 import { program, Reporter } from '@systemfsoftware/cli-adapter'
 import { Cell } from '@systemfsoftware/effect-cell-types'
 import {
-  bootstrapNpmTrustCell,
   publishPackagesCell,
   PublishRequest,
   publishStatusCell,
+  stageNpmTrustCell,
   StatusRequest,
   TrustRequest,
 } from '@systemfsoftware/npm-publish-engine'
@@ -437,7 +437,7 @@ const trust = Command.make('trust', {
       slug,
       launcherManifest: resolved.distribution?.launcherManifest,
     }).pipe(Effect.mapError((cause) => new Error(cause.message)))
-    const runnable = Cell.provide(bootstrapNpmTrustCell, makeMainLive({ root, baseUrl: registryValue }))
+    const runnable = Cell.provide(stageNpmTrustCell, makeMainLive({ root, baseUrl: registryValue }))
     const decision = yield* Cell.run(runnable, request).pipe(
       Effect.mapError((refusal): Error =>
         Match.value(refusal).pipe(

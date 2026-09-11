@@ -1,6 +1,6 @@
-export { bootstrapNpmTrustCell, TrustRequest } from './bootstrap-npm-trust.js'
 export { publishPackagesCell, PublishRequest } from './publish-packages.js'
 export { publishStatusCell, StatusRequest } from './publish-status.js'
+export { stageNpmTrustCell, TrustRequest } from './stage-npm-trust.js'
 export { StatusMode, StatusReport, StatusRow } from './status.schema.js'
 export {
   type FakeCycle,
