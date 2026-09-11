@@ -4,7 +4,7 @@ import * as Match from 'effect/Match'
 import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import { TrustCandidateState, TrustWorkItem, type TrustWorkMode } from './stage-trust.schema.js'
+import { TrustCandidateState, TrustWorkItem, type TrustWorkMode, type TrustWorkStep } from './stage-trust.schema.js'
 
 export class PlanStagedWorkCommand extends S.TaggedClass<PlanStagedWorkCommand>()(
   'PlanStagedWorkCommand',
@@ -55,11 +55,32 @@ type PlanCase = S.Schema.Type<typeof PlanCase>
 const debutMode: TrustWorkMode = 'debut'
 const untrustedMode: TrustWorkMode = 'untrusted'
 
+const buildStep: TrustWorkStep = 'build'
+const publishStep: TrustWorkStep = 'publish'
+const githubStep: TrustWorkStep = 'trust-github'
+const listStep: TrustWorkStep = 'trust-list'
+
+const untrustedSteps: ReadonlyArray<TrustWorkStep> = [githubStep, listStep]
+
 const modeOf = (candidate: TrustCandidateState): TrustWorkMode =>
   Option.match(Option.fromNullishOr(candidate.snapshot.latest), {
     onNone: () => debutMode,
     onSome: () => untrustedMode,
   })
+
+const debutStepsOf = (candidate: TrustCandidateState): ReadonlyArray<TrustWorkStep> =>
+  Match.value(candidate.hasBuild).pipe(
+    Match.when(true, () => [buildStep, publishStep, githubStep, listStep]),
+    Match.when(false, () => [publishStep, githubStep, listStep]),
+    Match.exhaustive,
+  )
+
+const stepsOf = (candidate: TrustCandidateState): ReadonlyArray<TrustWorkStep> =>
+  Match.value(modeOf(candidate)).pipe(
+    Match.when(debutMode, () => debutStepsOf(candidate)),
+    Match.when(untrustedMode, () => untrustedSteps),
+    Match.exhaustive,
+  )
 
 const itemsIn = (
   command: PlanStagedWorkCommand,
@@ -69,6 +90,7 @@ const itemsIn = (
     version: candidate.version,
     mode: modeOf(candidate),
     hasBuild: candidate.hasBuild,
+    steps: [...stepsOf(candidate)],
   }))
 
 const debutsIn = (command: PlanStagedWorkCommand): ReadonlyArray<PackageName> =>

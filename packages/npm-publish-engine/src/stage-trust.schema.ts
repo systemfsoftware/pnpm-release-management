@@ -12,11 +12,15 @@ export type TrustCandidateState = S.Schema.Type<typeof TrustCandidateState>
 export const TrustWorkMode = S.Literals(['debut', 'untrusted'])
 export type TrustWorkMode = S.Schema.Type<typeof TrustWorkMode>
 
+export const TrustWorkStep = S.Literals(['build', 'publish', 'trust-github', 'trust-list'])
+export type TrustWorkStep = S.Schema.Type<typeof TrustWorkStep>
+
 export const TrustWorkItem = S.Struct({
   name: PackageName,
   version: PackageVersion,
   mode: TrustWorkMode,
   hasBuild: S.Boolean,
+  steps: S.Array(TrustWorkStep),
 })
 export type TrustWorkItem = S.Schema.Type<typeof TrustWorkItem>
 

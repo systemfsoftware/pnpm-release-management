@@ -1,5 +1,5 @@
 import { Workflow } from '@systemfsoftware/effect-cell-types'
-import { PackageName } from '@systemfsoftware/release-language'
+import { PackageName, RelativePath } from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
 import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
@@ -11,7 +11,8 @@ export class SplitDryRunCommand extends S.TaggedClass<SplitDryRunCommand>()('Spl
   items: S.Array(TrustWorkItem),
   debuts: S.Array(PackageName),
   dryRun: S.Boolean,
-  launcherReady: S.Boolean,
+  launcherManifest: S.optional(RelativePath),
+  launcherReadable: S.Boolean,
   workflowFile: S.NonEmptyString,
   slug: S.String,
 }) {}
@@ -23,6 +24,7 @@ type SplitDryRunTypeId = typeof SplitDryRunTypeId
 
 export class TrustIdle extends S.TaggedClass<TrustIdle>()('TrustIdle', {
   packages: S.Int,
+  stage: S.Array(TrustWorkItem),
 }) {
   readonly [SplitDryRunTypeId] = SplitDryRunTypeId
 }
@@ -31,6 +33,7 @@ export class TrustComplete extends S.TaggedClass<TrustComplete>()('TrustComplete
   processed: S.Int,
   debuts: S.Int,
   owed: S.Array(TrustWorkItem),
+  stage: S.Array(TrustWorkItem),
   dryRun: S.Boolean,
   workflowFile: S.NonEmptyString,
   slug: S.String,
@@ -50,13 +53,20 @@ const BlockedCase = S.TaggedStruct('Blocked', { package: PackageName })
 const SplitCase = S.Union([IdleCase, DryRunCase, StagedCase, BlockedCase])
 type SplitCase = S.Schema.Type<typeof SplitCase>
 
-const launcherCaseOf = (command: SplitDryRunCommand): SplitCase =>
-  Match.value(command.launcherReady).pipe(
+const missingCaseOf = (command: SplitDryRunCommand): SplitCase =>
+  Match.value(command.launcherReadable).pipe(
     Match.when(true, () => StagedCase.make({})),
     Match.when(false, () =>
       BlockedCase.make({
         package: Option.getOrThrow(Option.fromNullishOr(command.debuts[0])),
       })),
+    Match.exhaustive,
+  )
+
+const launcherCaseOf = (command: SplitDryRunCommand): SplitCase =>
+  Match.value(Option.fromNullishOr(command.launcherManifest)).pipe(
+    Match.tag('None', () => StagedCase.make({})),
+    Match.tag('Some', () => missingCaseOf(command)),
     Match.exhaustive,
   )
 
@@ -81,6 +91,16 @@ const classify = (command: SplitDryRunCommand): SplitCase =>
     Match.exhaustive,
   )
 
+const stageOf = (
+  command: SplitDryRunCommand,
+  dryRun: boolean,
+): ReadonlyArray<TrustWorkItem> =>
+  Match.value(dryRun).pipe(
+    Match.when(true, (): ReadonlyArray<TrustWorkItem> => []),
+    Match.when(false, () => [...command.items]),
+    Match.exhaustive,
+  )
+
 const completeOf = (
   command: SplitDryRunCommand,
   dryRun: boolean,
@@ -91,6 +111,7 @@ const completeOf = (
     owed: [...command.items],
     processed: command.items.length,
     slug: command.slug,
+    stage: [...stageOf(command, dryRun)],
     workflowFile: command.workflowFile,
   })
 
@@ -98,7 +119,7 @@ export const splitDryRun = Workflow.make(
   SplitDryRunCommand,
   (command): Result.Result<TrustIdle | TrustComplete, TrustLauncherMissing> =>
     Match.value(classify(command)).pipe(
-      Match.tag('Idle', (idle) => Result.succeed(TrustIdle.make({ packages: idle.packages }))),
+      Match.tag('Idle', (idle) => Result.succeed(TrustIdle.make({ packages: idle.packages, stage: [] }))),
       Match.tag('DryRun', () => Result.succeed(completeOf(command, true))),
       Match.tag('Staged', () => Result.succeed(completeOf(command, false))),
       Match.tag('Blocked', (blocked) => Result.fail(TrustLauncherMissing.make({ package: blocked.package }))),

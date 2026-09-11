@@ -1,5 +1,5 @@
 import { Workflow } from '@systemfsoftware/effect-cell-types'
-import { PackageName } from '@systemfsoftware/release-language'
+import { PackageName, RelativePath } from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
 import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
@@ -9,7 +9,8 @@ export class AssessLauncherReadinessCommand extends S.TaggedClass<AssessLauncher
   'AssessLauncherReadinessCommand',
   {
     debuts: S.Array(PackageName),
-    launcherReady: S.Boolean,
+    launcherManifest: S.optional(RelativePath),
+    launcherReadable: S.Boolean,
   },
 ) {}
 
@@ -42,8 +43,8 @@ const MissingCase = S.TaggedStruct('Missing', { package: PackageName })
 const LauncherCase = S.Union([UnneededCase, ReadyCase, MissingCase])
 type LauncherCase = S.Schema.Type<typeof LauncherCase>
 
-const readinessCaseOf = (command: AssessLauncherReadinessCommand): LauncherCase =>
-  Match.value(command.launcherReady).pipe(
+const configuredCaseOf = (command: AssessLauncherReadinessCommand): LauncherCase =>
+  Match.value(command.launcherReadable).pipe(
     Match.when(true, () => ReadyCase.make({ debuts: [...command.debuts] })),
     Match.when(false, () =>
       MissingCase.make({
@@ -52,10 +53,17 @@ const readinessCaseOf = (command: AssessLauncherReadinessCommand): LauncherCase 
     Match.exhaustive,
   )
 
+const manifestCaseOf = (command: AssessLauncherReadinessCommand): LauncherCase =>
+  Match.value(Option.fromNullishOr(command.launcherManifest)).pipe(
+    Match.tag('None', () => ReadyCase.make({ debuts: [...command.debuts] })),
+    Match.tag('Some', () => configuredCaseOf(command)),
+    Match.exhaustive,
+  )
+
 const classify = (command: AssessLauncherReadinessCommand): LauncherCase =>
   Match.value(Option.fromNullishOr(command.debuts[0])).pipe(
     Match.tag('None', () => UnneededCase.make({})),
-    Match.tag('Some', () => readinessCaseOf(command)),
+    Match.tag('Some', () => manifestCaseOf(command)),
     Match.exhaustive,
   )
 
