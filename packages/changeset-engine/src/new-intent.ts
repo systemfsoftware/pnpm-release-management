@@ -23,7 +23,7 @@ import * as Match from 'effect/Match'
 import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import { IntentDerivedStaged, IntentNamedStaged, newIntent, NewIntentCommand } from './new-intent.workflow.js'
+import { IntentDerived, IntentNamed, newIntent, NewIntentCommand } from './new-intent.workflow.js'
 
 export const NewIntentInput = Wire.wire({
   packages: Wire.mint(S.Array(S.String)),
@@ -40,6 +40,11 @@ type RawNewIntent = {
 }
 
 type NewIntentReadError = MemberRefusal
+
+type NewIntentVerdict = Result.Result<
+  IntentNamed | IntentDerived,
+  IntentUnknownPackage
+>
 
 const read = (
   request: NewIntentRequestInput,
@@ -77,12 +82,12 @@ const decodeSummary = (
     () => NewIntentSummaryMissing.make({ packages }),
   )
 
-const normalizeSlug = (given: string): string => given.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+const slugOf = (given: string): string => given.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 
 const requestedSlug = (given: string | undefined): Option.Option<IntentSlug> =>
   Option.flatMap(
     Option.fromNullishOr(given),
-    (text) => Option.getSuccess(S.decodeUnknownResult(IntentSlug)(normalizeSlug(text))),
+    (text) => Option.getSuccess(S.decodeUnknownResult(IntentSlug)(slugOf(text))),
   )
 
 const commandOf = (
@@ -106,25 +111,17 @@ const commandOf = (
   })
 
 const decode = (raw: RawNewIntent): Result.Result<NewIntentCommand, NewIntentRefusal> =>
-  Result.flatMap(
-    decodeBump(raw.request.bump),
-    (bump) =>
-      Result.flatMap(decodePackages(raw.request.packages), (packages) =>
-        Result.flatMap(decodeSummary(raw.request.summary, packages), (summary) =>
-          commandOf(raw, bump, packages, summary))),
-  )
+  Result.gen(function*() {
+    const bump = yield* decodeBump(raw.request.bump)
+    const packages = yield* decodePackages(raw.request.packages)
+    const summary = yield* decodeSummary(raw.request.summary, packages)
+    return yield* commandOf(raw, bump, packages, summary)
+  })
 
-type NewIntentStaging = Result.Result<
-  IntentNamedStaged | IntentDerivedStaged,
-  IntentUnknownPackage
->
-
-type NewIntentDocument = Result.Result<NewIntentRequest, IntentUnknownPackage>
-
-const documentOf = (staged: IntentNamedStaged | IntentDerivedStaged): NewIntentRequest =>
-  Match.value(staged).pipe(
+const requestOf = (decision: IntentNamed | IntentDerived): NewIntentRequest =>
+  Match.value(decision).pipe(
     Match.tag(
-      'IntentNamedStaged',
+      'IntentNamed',
       (named): NewIntentRequest => ({
         packages: named.packages,
         bump: named.bump,
@@ -133,7 +130,7 @@ const documentOf = (staged: IntentNamedStaged | IntentDerivedStaged): NewIntentR
       }),
     ),
     Match.tag(
-      'IntentDerivedStaged',
+      'IntentDerived',
       (derived): NewIntentRequest => ({
         packages: derived.packages,
         bump: derived.bump,
@@ -143,10 +140,11 @@ const documentOf = (staged: IntentNamedStaged | IntentDerivedStaged): NewIntentR
     Match.exhaustive,
   )
 
-const encode = (outcome: NewIntentStaging): NewIntentDocument => Result.map(outcome, documentOf)
+const encode = (outcome: NewIntentVerdict): Result.Result<NewIntentRequest, IntentUnknownPackage> =>
+  Result.map(outcome, requestOf)
 
 const write = (
-  document: NewIntentDocument,
+  document: Result.Result<NewIntentRequest, IntentUnknownPackage>,
 ): Effect.Effect<NewIntentDecision, NewIntentRefusal, ChangesetStore> =>
   Result.match(document, {
     onFailure: (refusal) => Effect.fail(refusal),

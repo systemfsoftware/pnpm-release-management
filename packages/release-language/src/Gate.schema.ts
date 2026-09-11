@@ -8,32 +8,6 @@ export const ChangeEvidence = S.Struct({
 })
 export type ChangeEvidence = S.Schema.Type<typeof ChangeEvidence>
 
-const GateDecisionTypeId: unique symbol = Symbol.for(
-  '@systemfsoftware/pnpm-release-management/GateDecision',
-)
-type GateDecisionTypeId = typeof GateDecisionTypeId
-
-export class GateSatisfied extends S.TaggedClass<GateSatisfied>()(
-  'GateSatisfied',
-  {
-    touched: S.Array(PackageName),
-  },
-) {
-  readonly [GateDecisionTypeId] = GateDecisionTypeId
-}
-
-export class GateVacant extends S.TaggedClass<GateVacant>()(
-  'GateVacant',
-  {
-    members: S.Array(PackageName),
-  },
-) {
-  readonly [GateDecisionTypeId] = GateDecisionTypeId
-}
-
-export const GateDecision = S.Union([GateSatisfied, GateVacant])
-export type GateDecision = S.Schema.Type<typeof GateDecision>
-
 export const GateUnknownPackage = S.TaggedStruct('GateUnknownPackage', {
   path: RelativePath,
   package: PackageName,

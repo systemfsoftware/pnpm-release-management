@@ -57,15 +57,7 @@ export {
 } from './Config.schema.js'
 export { CycleStore } from './CycleStore.js'
 export { ForgePort } from './ForgePort.js'
-export {
-  ChangeEvidence,
-  GateDecision,
-  GateIntentMissing,
-  GateRefusal,
-  GateSatisfied,
-  GateUnknownPackage,
-  GateVacant,
-} from './Gate.schema.js'
+export { ChangeEvidence, GateIntentMissing, GateRefusal, GateUnknownPackage } from './Gate.schema.js'
 export {
   CreatedRelease,
   GithubReleaseAsserted,
