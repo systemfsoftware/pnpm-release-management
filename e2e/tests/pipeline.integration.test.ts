@@ -12,6 +12,43 @@ const Feature = makeFeature({ it, layer })
 const repoRoot = decodeURIComponent(new URL('../..', import.meta.url).pathname)
 const artifacts = `${repoRoot}e2e/.artifacts/${new Date().toISOString().replace(/[:.]/g, '-')}`
 
+const CARGO_MANIFEST = `[workspace]
+members = ["crates/*"]
+
+[workspace.package]
+version = "1.1.0"
+edition = "2021"
+`
+
+const CARGO_MEMBER = `[package]
+name = "core"
+version.workspace = true
+edition = "2021"
+`
+
+const CARGO_RELEASE_JSONC = `{
+  "base": "main",
+  "branch": "changeset-release/main",
+  "changesetDir": ".changeset",
+  "changelogDir": ".changeset/changelogs",
+  "versioning": {
+    "strategy": "surfaces",
+    "manifest": "package.json",
+    "changelog": "CHANGELOG.md",
+    "surfaces": [
+      { "kind": "json", "path": "packages/alpha/package.json" },
+      { "kind": "json", "path": "packages/beta/package.json" },
+      { "kind": "cargo", "path": "Cargo.toml", "package": "@e2e/alpha" }
+    ]
+  },
+  "gate": { "strategy": "paths" },
+  "pr": {
+    "title": "chore(release): version packages",
+    "body": "Consumes the pending .changeset intents."
+  }
+}
+`
+
 const readVersion = async (world: World, name: string): Promise<string> => {
   const raw = await world.read(`${FIXTURE}/packages/${name}/package.json`)
   return S.decodeUnknownSync(Manifest)(parseJson(raw)).version
@@ -209,6 +246,42 @@ const runPhases = async (session: Session): Promise<void> => {
 
     const pulls = await fetchOpenPulls(world)
     expect(pulls.body?.length).toBe(0)
+  })
+
+  await session.phase('cargo surface keeps Cargo.lock in step with the bump', async (world) => {
+    await world.write(`${FIXTURE}/Cargo.toml`, CARGO_MANIFEST)
+    await world.write(`${FIXTURE}/crates/core/Cargo.toml`, CARGO_MEMBER)
+    await world.write(`${FIXTURE}/crates/core/src/lib.rs`, '')
+    await world.must('cargo generate-lockfile', { cwd: FIXTURE })
+    await world.write(`${FIXTURE}/release.jsonc`, CARGO_RELEASE_JSONC)
+    await world.must('git add -A && git commit -q -m "chore: cargo workspace"', { cwd: FIXTURE })
+
+    const before = await readVersion(world, 'alpha')
+
+    const created = await world.tool(
+      'changeset-management',
+      'new',
+      '@e2e/alpha --bump patch --summary "alpha picks up the cargo surface" --slug alpha-cargo',
+    )
+    expect(created.code).toBe(0)
+
+    const versioned = await world.tool('version-management', 'bump')
+    expect(versioned.code).toBe(0)
+
+    const bumped = await readVersion(world, 'alpha')
+    expect(bumped).not.toBe(before)
+
+    const cargoManifest = await world.read(`${FIXTURE}/Cargo.toml`)
+    expect(cargoManifest).toContain(`version = "${bumped}"`)
+
+    const memberManifest = await world.read(`${FIXTURE}/crates/core/Cargo.toml`)
+    expect(memberManifest).toContain('version.workspace = true')
+
+    const lock = await world.read(`${FIXTURE}/Cargo.lock`)
+    expect(lock).toContain(`name = "core"\nversion = "${bumped}"`)
+
+    const metadata = await world.must('cargo metadata --locked --offline --format-version 1', { cwd: FIXTURE })
+    expect(metadata.code).toBe(0)
   })
 }
 

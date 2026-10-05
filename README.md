@@ -150,15 +150,23 @@ Then add a `release.jsonc`:
 
 A surface is one of:
 
-| `kind` | Fields                                                          | Example           |
-| ------ | --------------------------------------------------------------- | ----------------- |
-| `json` | `path`                                                          | `package.json`    |
-| `toml` | `path` or `glob`, `header` (`[package]`, `[workspace.package]`) | `Cargo.toml`      |
-| `nix`  | `path`                                                          | `nix/version.nix` |
+| `kind`  | Fields                                                          | Example           |
+| ------- | --------------------------------------------------------------- | ----------------- |
+| `json`  | `path`                                                          | `package.json`    |
+| `toml`  | `path` or `glob`, `header` (`[package]`, `[workspace.package]`) | `Cargo.toml`      |
+| `cargo` | `path`, optional `package`                                      | `Cargo.toml`      |
+| `nix`   | `path`                                                          | `nix/version.nix` |
 
 `surfaces` versioning bumps the manifest, rewrites the version in every declared
 surface, and appends the release summary to the root changelog. `pnpm`
 versioning delegates to `pnpm version -r`.
+
+A `cargo` surface rewrites `[workspace.package] version` in the named manifest,
+any workspace member that pins a literal `[package] version`, and every
+workspace-member entry in the sibling `Cargo.lock` (registry and git
+dependencies carry a `source` line and are left alone). Its optional `package`
+names the workspace package whose bumped version the Cargo workspace follows;
+it is required under `pnpm` versioning, where there is no single version.
 
 ## Change intents
 

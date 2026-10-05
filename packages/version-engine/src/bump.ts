@@ -13,10 +13,12 @@ import {
   type PackageVersion,
   ProcessPort,
   SurfaceStore,
+  VersionCargoPackageMissing,
   type VersionRefusal,
+  VersionUnknownPackage,
   WorkspaceStore,
 } from '@systemfsoftware/release-language'
-import { Effect } from 'effect'
+import { Effect, HashSet } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import { deriveBump, rootBulletsOf, summaryForPackage } from './bump-derive.js'
@@ -38,6 +40,17 @@ const read = (
     const paths = yield* changesets.listIntents()
     const intents = yield* Effect.forEach(paths, (path) => changesets.readIntent(path))
     const members = yield* workspace.listMembers()
+    const known = HashSet.fromIterable(members.map((member) => member.name))
+    for (const target of request.surfaces) {
+      if (target.surface.kind !== 'cargo') continue
+      const named = target.surface.package
+      if (request.strategy === 'pnpm' && named === undefined) {
+        return yield* Effect.fail(VersionCargoPackageMissing.make({ path: target.file }))
+      }
+      if (named !== undefined && !HashSet.has(known, named)) {
+        return yield* Effect.fail(VersionUnknownPackage.make({ package: named }))
+      }
+    }
     const manifestVersion = yield* surfaces.readSurface(
       request.manifest.file,
       request.manifest.surface,
@@ -78,6 +91,15 @@ const commandVersionOf = (
   const manifest = manifests.find((candidate) => candidate.name === name)
   if (manifest === undefined) return fallback
   return manifest.version
+}
+
+const namedVersionOf = (
+  manifests: ReadonlyArray<PackageManifest>,
+  name: PackageName | undefined,
+  fallback: PackageVersion,
+): PackageVersion => {
+  if (name === undefined) return fallback
+  return commandVersionOf(manifests, name, fallback)
 }
 
 const writeMemberChangelogs = (
@@ -132,12 +154,13 @@ const writePnpm = (
   bumped: VersionBumped,
 ): Effect.Effect<
   void,
-  ChangelogRefusal | MemberRefusal | CommandRefusal,
-  ChangelogStore | ProcessPort | WorkspaceStore
+  ChangelogRefusal | MemberRefusal | CommandRefusal | VersionRefusal,
+  ChangelogStore | ProcessPort | WorkspaceStore | SurfaceStore
 > =>
   Effect.gen(function*() {
     const process = yield* ProcessPort
     const workspace = yield* WorkspaceStore
+    const surfaces = yield* SurfaceStore
     yield* process.runCommand({
       program: CommandName.make('pnpm'),
       args: [CommandArg.make('version'), CommandArg.make('-r')],
@@ -147,6 +170,19 @@ const writePnpm = (
     const manifests = yield* Effect.forEach(
       members,
       (member) => workspace.readManifest(member.dir),
+    )
+    yield* Effect.forEach(
+      command.surfaces.flatMap((target) => {
+        if (target.surface.kind === 'cargo') return [{ target, named: target.surface.package }]
+        return []
+      }),
+      ({ target, named }) =>
+        surfaces.writeSurface(
+          target.file,
+          target.surface,
+          namedVersionOf(manifests, named, bumped.version),
+        ),
+      { discard: true },
     )
     yield* writeMemberChangelogs(
       command,
