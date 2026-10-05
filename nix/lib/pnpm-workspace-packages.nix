@@ -96,8 +96,6 @@ let
 
       nativeBuildInputs = [ nodejs pnpm pkgs.pnpmConfigHook pkgs.jq ] ++ nativeBuildInputs;
 
-      pnpmInstallFlags = [ "--ignore-scripts" ];
-
       buildPhase = ''
         runHook preBuild
         pnpm --recursive --if-present ${lib.concatMapStringsSep " " (e: "--filter ${lib.escapeShellArg "${e.name}..."}") entries} run ${lib.escapeShellArg buildScript}
