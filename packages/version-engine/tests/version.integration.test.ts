@@ -344,7 +344,7 @@ Feature('Versioning packages').body(({ scenario }) => {
         Then('the unknown package is refused and the intent is kept')((s) => {
           Match.value(s.outcome).pipe(
             Match.tag('refused', (refused) => {
-              const refusal = S.decodeUnknownSync(VersionRefusal)(refused.refusal)
+              const refusal = Effect.runSync(S.decodeUnknownEffect(VersionRefusal)(refused.refusal))
               Match.value(refusal).pipe(
                 Match.tag('VersionUnknownPackage', (unknown) => {
                   expect(unknown.package).toEqual('ghost')
@@ -353,6 +353,8 @@ Feature('Versioning packages').body(({ scenario }) => {
                 }),
                 Match.tag('VersionIntentMalformed', () => failUnexpected('expected an unknown package')),
                 Match.tag('VersionSurfaceMissing', () => failUnexpected('expected an unknown package')),
+                Match.tag('VersionLockStale', () => failUnexpected('expected an unknown package')),
+                Match.tag('VersionCargoPackageMissing', () => failUnexpected('expected an unknown package')),
                 Match.tag('RootManifestUnwritable', () => failUnexpected('expected an unknown package')),
                 Match.exhaustive,
               )
@@ -1160,6 +1162,238 @@ Feature('Versioning packages').body(({ scenario }) => {
                 Match.exhaustive,
               )),
             Match.tag('refused', () => failUnexpected('expected a version decision')),
+            Match.exhaustive,
+          )
+        }),
+      ),
+    )
+  }
+
+  {
+    const members = membersOf([
+      { name: '@e2e/alpha', version: '1.0.0' },
+      { name: '@e2e/beta', version: '1.0.0' },
+    ])
+    const surfaces = makeFakeSurfaceStore(
+      new Map([
+        [brandPath('package.json'), brandVersion('1.0.0')],
+        [brandPath('Cargo.toml'), brandVersion('1.0.0')],
+      ]),
+    )
+    const workspace = makeFakeWorkspaceStore(members, brandRoot('/test'))
+    const changesets = makeFakeChangesetStore(
+      new Map(
+        intentsOf([{
+          path: '.changeset/alpha-patch.md',
+          name: '@e2e/alpha',
+          bump: 'patch',
+          summary: 'alpha patches',
+        }]).map((intent) => [intent.path, intent] as const),
+      ),
+    )
+    const changelogs = makeFakeChangelogStore()
+    const process = makeFakeProcessPort(
+      (command: WorkspaceCommand): Effect.Effect<ProcessCompleted, CommandRefusal> =>
+        Effect.sync(() => {
+          workspace.state.members.forEach((member, index) => {
+            const [major, minor, patch] = bumpCore(member.manifest.version)
+            const next = S.decodeUnknownSync(PackageVersion)(`${major}.${minor}.${patch + 1}`)
+            workspace.state.members[index] = {
+              ...member,
+              manifest: { ...member.manifest, version: next },
+            }
+          })
+          return { _tag: 'ProcessCompleted' as const, command }
+        }),
+    )
+    const live = Layer.mergeAll(
+      surfaces.layer,
+      workspace.layer,
+      changesets.layer,
+      changelogs.layer,
+      process.layer,
+    )
+    scenario(
+      'A cargo surface under pnpm follows its named member',
+      { scenarioLayer: live },
+      Gherkin.Do.pipe(
+        Given('a cargo surface bound to a package the manager will move')('input', () =>
+          Effect.succeed(bumpInputOf({
+            strategy: 'pnpm',
+            changelogDir: 'changelog',
+            manifest: { file: 'package.json', surface: jsonSurface('package.json') },
+            surfaces: [{
+              file: 'Cargo.toml',
+              surface: { kind: 'cargo', path: 'Cargo.toml', package: '@e2e/alpha' },
+            }],
+          }))),
+        When('the pending intents are versioned per package')(
+          'outcome',
+          (s) =>
+            Effect.match(Cell.run(Cell.provide(bumpCell, live), s.input), {
+              onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
+              onSuccess: (decision) => ({ _tag: 'decided' as const, decision }),
+            }),
+        ),
+        Then('the cargo workspace carries the named member version')((s) => {
+          Match.value(s.outcome).pipe(
+            Match.tag('decided', (decided) =>
+              Match.value(decided.decision).pipe(
+                Match.tag('VersionBumped', (bumped) => {
+                  expect(bumped.version).toEqual('1.0.1')
+                  expect(surfaces.state.versions.get(brandPath('Cargo.toml'))).toEqual('1.0.1')
+                }),
+                Match.tag('VersionConsumed', () => failUnexpected('expected a delegated bump')),
+                Match.tag('VersionIdle', () => failUnexpected('expected a delegated bump')),
+                Match.exhaustive,
+              )),
+            Match.tag('refused', () => failUnexpected('expected a version decision')),
+            Match.exhaustive,
+          )
+        }),
+      ),
+    )
+  }
+
+  {
+    const members = membersOf([{ name: '@e2e/alpha', version: '1.0.0' }])
+    const surfaces = makeFakeSurfaceStore(
+      new Map([
+        [brandPath('package.json'), brandVersion('1.0.0')],
+        [brandPath('Cargo.toml'), brandVersion('1.0.0')],
+      ]),
+    )
+    const workspace = makeFakeWorkspaceStore(members, brandRoot('/test'))
+    const changesets = makeFakeChangesetStore(
+      new Map(
+        intentsOf([{
+          path: '.changeset/alpha-patch.md',
+          name: '@e2e/alpha',
+          bump: 'patch',
+          summary: 'alpha patches',
+        }]).map((intent) => [intent.path, intent] as const),
+      ),
+    )
+    const changelogs = makeFakeChangelogStore()
+    const process = makeFakeProcessPort()
+    const live = Layer.mergeAll(
+      surfaces.layer,
+      workspace.layer,
+      changesets.layer,
+      changelogs.layer,
+      process.layer,
+    )
+    scenario(
+      'A cargo surface without a package is refused under pnpm',
+      { scenarioLayer: live },
+      Gherkin.Do.pipe(
+        Given('a cargo surface that names no member under the pnpm strategy')(
+          'input',
+          () =>
+            Effect.succeed(bumpInputOf({
+              strategy: 'pnpm',
+              changelogDir: 'changelog',
+              manifest: { file: 'package.json', surface: jsonSurface('package.json') },
+              surfaces: [{ file: 'Cargo.toml', surface: { kind: 'cargo', path: 'Cargo.toml' } }],
+            })),
+        ),
+        When('versioning runs')('outcome', (s) =>
+          Effect.match(Cell.run(Cell.provide(bumpCell, live), s.input), {
+            onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
+            onSuccess: (decision) => ({ _tag: 'decided' as const, decision }),
+          })),
+        Then('the missing package is refused by path')((s) => {
+          Match.value(s.outcome).pipe(
+            Match.tag('refused', (refused) => {
+              const refusal = Effect.runSync(S.decodeUnknownEffect(VersionRefusal)(refused.refusal))
+              Match.value(refusal).pipe(
+                Match.tag('VersionCargoPackageMissing', (missing) => {
+                  expect(missing.path).toEqual('Cargo.toml')
+                }),
+                Match.tag('VersionUnknownPackage', () => failUnexpected('expected a missing cargo package')),
+                Match.tag('VersionIntentMalformed', () => failUnexpected('expected a missing cargo package')),
+                Match.tag('VersionSurfaceMissing', () => failUnexpected('expected a missing cargo package')),
+                Match.tag('VersionLockStale', () => failUnexpected('expected a missing cargo package')),
+                Match.tag('RootManifestUnwritable', () => failUnexpected('expected a missing cargo package')),
+                Match.exhaustive,
+              )
+            }),
+            Match.tag('decided', () => failUnexpected('expected a refusal')),
+            Match.exhaustive,
+          )
+        }),
+      ),
+    )
+  }
+
+  {
+    const members = membersOf([{ name: '@e2e/alpha', version: '1.0.0' }])
+    const surfaces = makeFakeSurfaceStore(
+      new Map([
+        [brandPath('package.json'), brandVersion('1.0.0')],
+        [brandPath('Cargo.toml'), brandVersion('1.0.0')],
+      ]),
+    )
+    const workspace = makeFakeWorkspaceStore(members, brandRoot('/test'))
+    const changesets = makeFakeChangesetStore(
+      new Map(
+        intentsOf([{
+          path: '.changeset/alpha-patch.md',
+          name: '@e2e/alpha',
+          bump: 'patch',
+          summary: 'alpha patches',
+        }]).map((intent) => [intent.path, intent] as const),
+      ),
+    )
+    const changelogs = makeFakeChangelogStore()
+    const process = makeFakeProcessPort()
+    const live = Layer.mergeAll(
+      surfaces.layer,
+      workspace.layer,
+      changesets.layer,
+      changelogs.layer,
+      process.layer,
+    )
+    scenario(
+      'A cargo surface naming a package outside the workspace is refused',
+      { scenarioLayer: live },
+      Gherkin.Do.pipe(
+        Given('a cargo surface bound to a package the workspace does not hold')(
+          'input',
+          () =>
+            Effect.succeed(bumpInputOf({
+              strategy: 'surfaces',
+              changelogDir: 'changelog',
+              rootChangelog: 'CHANGELOG.md',
+              manifest: { file: 'package.json', surface: jsonSurface('package.json') },
+              surfaces: [{
+                file: 'Cargo.toml',
+                surface: { kind: 'cargo', path: 'Cargo.toml', package: 'ghost' },
+              }],
+            })),
+        ),
+        When('versioning runs')('outcome', (s) =>
+          Effect.match(Cell.run(Cell.provide(bumpCell, live), s.input), {
+            onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
+            onSuccess: (decision) => ({ _tag: 'decided' as const, decision }),
+          })),
+        Then('the unknown package is refused by name')((s) => {
+          Match.value(s.outcome).pipe(
+            Match.tag('refused', (refused) => {
+              const refusal = Effect.runSync(S.decodeUnknownEffect(VersionRefusal)(refused.refusal))
+              Match.value(refusal).pipe(
+                Match.tag('VersionUnknownPackage', (unknown) => {
+                  expect(unknown.package).toEqual('ghost')
+                }),
+                Match.tag('VersionCargoPackageMissing', () => failUnexpected('expected an unknown package')),
+                Match.tag('VersionIntentMalformed', () => failUnexpected('expected an unknown package')),
+                Match.tag('VersionSurfaceMissing', () => failUnexpected('expected an unknown package')),
+                Match.tag('VersionLockStale', () => failUnexpected('expected an unknown package')),
+                Match.tag('RootManifestUnwritable', () => failUnexpected('expected an unknown package')),
+                Match.exhaustive,
+              )
+            }),
+            Match.tag('decided', () => failUnexpected('expected a refusal')),
             Match.exhaustive,
           )
         }),

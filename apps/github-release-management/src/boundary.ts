@@ -157,7 +157,7 @@ export const bumpInput = (
         file: RelativePath.make('package.json'),
         surface: { kind: 'json', path: RelativePath.make('package.json') },
       },
-      surfaces: [],
+      surfaces: versioning.surfaces.flatMap(surfaceEntryOf),
     }
   }
   return {

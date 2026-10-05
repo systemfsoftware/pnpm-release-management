@@ -94,7 +94,9 @@ const surfaceTargetsOf = (
 
 const targetsOf = (release: ReleaseConfig): VersionTargets => {
   const { versioning } = release
-  if (versioning.strategy === 'pnpm') return { manifest: ROOT_TARGET, surfaces: [] }
+  if (versioning.strategy === 'pnpm') {
+    return { manifest: ROOT_TARGET, surfaces: surfaceTargetsOf(versioning.surfaces) }
+  }
   return {
     manifest: { file: versioning.manifest, surface: { kind: 'json', path: versioning.manifest } },
     surfaces: surfaceTargetsOf(versioning.surfaces),
