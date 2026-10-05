@@ -1,0 +1,56 @@
+name: Changeset Check
+
+on:
+  workflow_call:
+    inputs:
+      tools-ref:
+        description: ref of systemfsoftware/pnpm-release-management to run
+        required: false
+        type: string
+        default: main
+      base-sha:
+        description: commit the pull request is compared against
+        required: false
+        type: string
+        default: ""
+      node-version:
+        description: node version used for pnpm
+        required: false
+        type: string
+        default: "24"
+
+permissions: {}
+
+jobs:
+  require-intent:
+    name: a publishable-package change needs an intent
+    if: github.head_ref != 'changeset-release/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/checkout@v7
+        with:
+          repository: systemfsoftware/pnpm-release-management
+          ref: ${{ inputs.tools-ref }}
+          path: .release-tools
+
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Build the release tools
+        run: |
+          pnpm --dir .release-tools install --frozen-lockfile
+          pnpm --dir .release-tools build
+
+      - name: Require an intent for every publishable-package change
+        run: |
+          node .release-tools/apps/changeset-management/dist/main.js check \
+            "${{ inputs.base-sha || github.event.pull_request.base.sha }}"

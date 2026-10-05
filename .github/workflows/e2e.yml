@@ -1,0 +1,53 @@
+name: E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pipeline:
+    name: containerised release pipeline
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install the workspace
+        run: pnpm install --frozen-lockfile
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Cache the e2e image
+        run: |
+          docker buildx build \
+            --cache-from type=gha \
+            --cache-to type=gha,mode=max \
+            --load \
+            -t pnpm-release-management-e2e:local \
+            -f e2e/Dockerfile .
+
+      - name: Run the pipeline end to end
+        run: pnpm --filter @systemfsoftware/e2e test
+
+      - name: Upload the failing transcript
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-artifacts
+          path: e2e/.artifacts
+          if-no-files-found: ignore

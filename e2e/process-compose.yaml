@@ -1,0 +1,28 @@
+version: "0.5"
+
+processes:
+  github:
+    command: emulate start --service github --port 4000
+    readiness_probe:
+      http_get:
+        host: 127.0.0.1
+        port: 4000
+        path: /meta
+      initial_delay_seconds: 2
+      period_seconds: 2
+      timeout_seconds: 2
+      failure_threshold: 60
+
+  front:
+    command: nginx -c /e2e/nginx.conf
+    depends_on:
+      github:
+        condition: process_healthy
+    readiness_probe:
+      exec:
+        command: >-
+          curl -fsS https://api.github.com/meta > /dev/null
+      initial_delay_seconds: 1
+      period_seconds: 2
+      timeout_seconds: 3
+      failure_threshold: 60

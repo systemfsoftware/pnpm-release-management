@@ -1,0 +1,21 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directories:
+      - "/"
+    labels:
+      - "automerge"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "nix"
+    directories:
+      - "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"

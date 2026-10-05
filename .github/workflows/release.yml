@@ -1,0 +1,155 @@
+# The publish phase is never triggered by the release PR merging: closing it
+# destroys refs/pull/<n>/merge and cancels the queued run with zero jobs, so a
+# release triggered that way can vanish silently. Phase comes from repository
+# state instead, which also lets a half-finished release resume on the next push.
+name: Release
+
+on:
+  workflow_call:
+    inputs:
+      tools-ref:
+        description: ref of systemfsoftware/pnpm-release-management to run
+        required: false
+        type: string
+        default: main
+      artifacts-dir:
+        description: directory the captured cycle is written to
+        required: false
+        type: string
+        default: .release
+      node-version:
+        description: node version used for pnpm
+        required: false
+        type: string
+        default: "24"
+
+permissions: {}
+
+jobs:
+  plan:
+    name: plan · derive phase
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      phase: ${{ steps.plan.outputs.phase }}
+      pending_intents: ${{ steps.plan.outputs.pending_intents }}
+      this_cycle: ${{ steps.plan.outputs.this_cycle }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/checkout@v7
+        with:
+          repository: systemfsoftware/pnpm-release-management
+          ref: ${{ inputs.tools-ref }}
+          path: .release-tools
+
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Build the release tools
+        run: |
+          pnpm --dir .release-tools install --frozen-lockfile
+          pnpm --dir .release-tools build
+
+      - id: plan
+        name: Decide release phase from repository state
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node .release-tools/apps/github-release-management/dist/main.js plan --output "$GITHUB_OUTPUT"
+
+  version:
+    name: version · open release PR
+    needs: plan
+    if: needs.plan.outputs.phase == 'version'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - uses: actions/checkout@v7
+        with:
+          repository: systemfsoftware/pnpm-release-management
+          ref: ${{ inputs.tools-ref }}
+          path: .release-tools
+
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Build the release tools
+        run: |
+          pnpm --dir .release-tools install --frozen-lockfile
+          pnpm --dir .release-tools build
+
+      - name: Bump every version surface and consume the intents
+        run: node .release-tools/apps/version-management/dist/main.js bump
+
+      - name: Open or update the release PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .release-tools/apps/github-release-management/dist/main.js pr
+
+  release:
+    name: release · tag · GitHub releases
+    needs: plan
+    if: needs.plan.outputs.phase == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: true
+
+      - uses: actions/checkout@v7
+        with:
+          repository: systemfsoftware/pnpm-release-management
+          ref: ${{ inputs.tools-ref }}
+          path: .release-tools
+
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Build the release tools
+        run: |
+          pnpm --dir .release-tools install --frozen-lockfile
+          pnpm --dir .release-tools build
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Capture this cycle
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "${{ inputs.artifacts-dir }}"
+          node .release-tools/apps/github-release-management/dist/main.js tag \
+            --output "${{ inputs.artifacts-dir }}/captured.json"
+
+      - name: Tag released versions
+        run: |
+          node .release-tools/apps/github-release-management/dist/main.js tag \
+            --captured "${{ inputs.artifacts-dir }}/captured.json"
+
+      - name: GitHub Releases from the authored changelogs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node .release-tools/apps/github-release-management/dist/main.js release \
+            --captured "${{ inputs.artifacts-dir }}/captured.json"
