@@ -64,9 +64,9 @@ const write = (
       phase: 'version' as const,
       thisCycle: Count.make(version.cycle.length),
     })),
-    Match.tag('PlanPublish', (publish) => ({
-      phase: 'publish' as const,
-      thisCycle: Count.make(publish.cycle.length),
+    Match.tag('PlanRelease', (release) => ({
+      phase: 'release' as const,
+      thisCycle: Count.make(release.cycle.length),
     })),
     Match.tag('PlanSettled', (settled) => ({
       phase: 'none' as const,

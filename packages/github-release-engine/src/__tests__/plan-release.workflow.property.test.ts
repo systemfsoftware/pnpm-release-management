@@ -96,7 +96,7 @@ it.prop(
     const decision = outcome.success
     if (cycle.length > 0) {
       return Match.value(decision).pipe(
-        Match.tag('PlanPublish', (publish) => entriesEqual([...publish.cycle], [...cycle])),
+        Match.tag('PlanRelease', (release) => entriesEqual([...release.cycle], [...cycle])),
         Match.tag('PlanVersion', () => false),
         Match.tag('PlanSettled', () => false),
         Match.exhaustive,
@@ -110,7 +110,7 @@ it.prop(
           }
           return entriesEqual([...version.cycle], [...cycle])
         }),
-        Match.tag('PlanPublish', () => false),
+        Match.tag('PlanRelease', () => false),
         Match.tag('PlanSettled', () => false),
         Match.exhaustive,
       )
@@ -122,7 +122,7 @@ it.prop(
         }
         return settled.cycle === 0
       }),
-      Match.tag('PlanPublish', () => false),
+      Match.tag('PlanRelease', () => false),
       Match.tag('PlanVersion', () => false),
       Match.exhaustive,
     )

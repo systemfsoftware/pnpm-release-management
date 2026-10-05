@@ -19,7 +19,6 @@ steps of that capability.
 apps/
   changeset-management/       changeset new | check
   version-management/         version bump | sync | sync-root
-  npm-publish-management/     npm publish | status | trust
   github-release-management/  release plan | pr | tag | release
   git-hooks/                  hooks pre-commit | commit-msg
 packages/*/                   the libraries every app imports by name
@@ -44,8 +43,8 @@ workflow annotation and exit 1.
 
 ## What it does
 
-The pipeline has one job: turn authored change intents into published packages,
-tags and GitHub Releases without a human deciding _when_ anything runs. Every
+The pipeline has one job: turn authored change intents into versioned, tagged
+packages and GitHub Releases without a human deciding _when_ anything runs. Every
 phase is derived from durable repository state, never from a pull-request ref,
 so a half-finished release resumes on the next push.
 
@@ -56,15 +55,17 @@ flowchart LR
   C -->|version| D["version bump<br/>bump surfaces"]
   D --> E["release pr<br/>release PR"]
   E -->|merge| C
-  C -->|publish| F["npm publish<br/>OIDC"]
-  F --> G["release tag"]
+  C -->|release| G["release tag"]
   G --> H["release release<br/>GitHub Releases"]
   H --> I["release plan<br/>phase=none"]
 ```
 
 `version bump` also writes the per-package changelog that later becomes the
 GitHub Release body, which is why the order matters: the release notes are
-authored with the version bump, not reconstructed at publish time.
+authored with the version bump, not reconstructed at release time.
+
+Nothing is published to a registry. Consumers take a package from the
+repository's own Nix flake at a tag or revision.
 
 ## Quick start
 
@@ -83,7 +84,6 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  id-token: write
 
 jobs:
   release:
@@ -124,8 +124,7 @@ Then add a `release.jsonc`:
     ]
   },
   "gate": { "strategy": "turbo", "task": "build" },
-  "pr": { "title": "chore(release): version packages" },
-  "provenance": true
+  "pr": { "title": "chore(release): version packages" }
 }
 ```
 
@@ -133,24 +132,21 @@ Then add a `release.jsonc`:
 
 `release.jsonc` at the repository root. Every path is relative to the root.
 
-| Key                             | Default                      | Meaning                                                          |
-| ------------------------------- | ---------------------------- | ---------------------------------------------------------------- |
-| `base`                          | required                     | branch the release PR targets                                    |
-| `branch`                        | required                     | branch the release PR is opened from                             |
-| `changesetDir`                  | `.changeset`                 | where pending intents live                                       |
-| `changelogDir`                  | `<changesetDir>/changelogs`  | where generated per-package changelogs are written               |
-| `versioning.strategy`           | required                     | `surfaces` or `pnpm`                                             |
-| `versioning.manifest`           | —                            | `surfaces`: the JSON manifest that owns the version              |
-| `versioning.changelog`          | —                            | `surfaces`: the root changelog that receives the release summary |
-| `versioning.surfaces[]`         | —                            | `surfaces`: additional files rewritten on every bump             |
-| `gate.strategy`                 | required                     | `turbo` (a task graph decides what a change touches) or `paths`  |
-| `gate.task`                     | `build`                      | `turbo`: the task whose inputs decide the changed packages       |
-| `distribution.launcherManifest` | —                            | required only for repositories that ship platform packages       |
-| `distribution.targets[]`        | —                            | `{ target, suffix, os, cpu, libc?, runner, bin }`                |
-| `pr.title` / `pr.body`          | built-in copy                | release PR copy                                                  |
-| `publishArgs`                   | `[]`                         | extra arguments appended to `pnpm publish -r`                    |
-| `provenance`                    | `true`                       | publish with `--provenance`                                      |
-| `registry`                      | `https://registry.npmjs.org` | registry to publish to and query                                 |
+| Key                             | Default                     | Meaning                                                          |
+| ------------------------------- | --------------------------- | ---------------------------------------------------------------- |
+| `base`                          | required                    | branch the release PR targets                                    |
+| `branch`                        | required                    | branch the release PR is opened from                             |
+| `changesetDir`                  | `.changeset`                | where pending intents live                                       |
+| `changelogDir`                  | `<changesetDir>/changelogs` | where generated per-package changelogs are written               |
+| `versioning.strategy`           | required                    | `surfaces` or `pnpm`                                             |
+| `versioning.manifest`           | —                           | `surfaces`: the JSON manifest that owns the version              |
+| `versioning.changelog`          | —                           | `surfaces`: the root changelog that receives the release summary |
+| `versioning.surfaces[]`         | —                           | `surfaces`: additional files rewritten on every bump             |
+| `gate.strategy`                 | required                    | `turbo` (a task graph decides what a change touches) or `paths`  |
+| `gate.task`                     | `build`                     | `turbo`: the task whose inputs decide the changed packages       |
+| `distribution.launcherManifest` | —                           | required only for repositories that ship platform packages       |
+| `distribution.targets[]`        | —                           | `{ target, suffix, os, cpu, libc?, runner, bin }`                |
+| `pr.title` / `pr.body`          | built-in copy               | release PR copy                                                  |
 
 A surface is one of:
 
@@ -191,22 +187,19 @@ so the release PR diff _is_ the set of notes that shipped.
 
 ## Capabilities
 
-| App subcommand      | What it does                                                                      |
-| ------------------- | --------------------------------------------------------------------------------- |
-| `changeset check`   | Fails when a publishable package changed without an intent naming it              |
-| `changeset new`     | Writes an intent file                                                             |
-| `version bump`      | Consumes intents, bumps every surface, writes per-package changelogs              |
-| `version sync`      | `check` or `bump <version>` across every declared surface                         |
-| `version sync-root` | Stamps the launcher manifest with the released version                            |
-| `release pr`        | Commits the release branch, opens, refreshes, or closes the release PR            |
-| `release plan`      | Derives the release phase from repository state                                   |
-| `release tag`       | Captures the cycle, then pushes one tag per released package                      |
-| `release release`   | Creates GitHub Releases from the generated changelogs                             |
-| `npm publish`       | Runs `pnpm publish -r`, optionally restricted to unpublished captured versions    |
-| `npm status`        | Reports each package's registry state and provenance evidence                     |
-| `npm trust`         | First publish plus trusted-publisher registration, for packages OIDC cannot debut |
-| `hooks pre-commit`  | Formats and checks the staged set before a commit lands                           |
-| `hooks commit-msg`  | Enforces the conventional-commit header and strips AI co-author trailers          |
+| App subcommand      | What it does                                                             |
+| ------------------- | ------------------------------------------------------------------------ |
+| `changeset check`   | Fails when a publishable package changed without an intent naming it     |
+| `changeset new`     | Writes an intent file                                                    |
+| `version bump`      | Consumes intents, bumps every surface, writes per-package changelogs     |
+| `version sync`      | `check` or `bump <version>` across every declared surface                |
+| `version sync-root` | Stamps the launcher manifest with the released version                   |
+| `release pr`        | Commits the release branch, opens, refreshes, or closes the release PR   |
+| `release plan`      | Derives the release phase from repository state                          |
+| `release tag`       | Captures the cycle, then pushes one tag per released package             |
+| `release release`   | Creates GitHub Releases from the generated changelogs                    |
+| `hooks pre-commit`  | Formats and checks the staged set before a commit lands                  |
+| `hooks commit-msg`  | Enforces the conventional-commit header and strips AI co-author trailers |
 
 Every subcommand takes `--config <path>` and otherwise loads `release.jsonc` from
 the directory it is run in. The flag may name either the workspace root or a file
@@ -214,38 +207,30 @@ inside it: a directory is taken as the root, a file path means its directory is.
 
 Flags worth knowing:
 
-| App subcommand      | Flags                                                                                                        |
-| ------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `changeset check`   | `<base-sha-or-ref>`, `--base`, `--skip-liveness`                                                             |
-| `release plan`      | `--output <file>`, `--deferred <file>`, `--remote <name>`                                                    |
-| `release tag`       | `--captured <file>`, `--output <file>`, `--exclude`, `--json`, `--dry-run`, `--remote <name>`                |
-| `release release`   | `--captured <file>`, `--assert`, `--dry-run`                                                                 |
-| `npm publish`       | `--captured <file>`, `--unpublished`, `--filters <file>`, `--registry <url>`, `--no-provenance`, `--dry-run` |
-| `npm status`        | `--preflight`, `--check`, `--json`, `--emit-filters <file>`, `--emit-deferred <file>`, `--registry <url>`    |
-| `npm trust`         | `--only <name>`, `--jobs <n>`, `--file <list>`, `--registry <url>`, `--dry-run`                              |
-| `version sync`      | `check \| bump <version>`                                                                                    |
-| `version sync-root` | `--manifest <path>`, `--version <version>`, `--dry-run`                                                      |
+| App subcommand      | Flags                                                                                         |
+| ------------------- | --------------------------------------------------------------------------------------------- |
+| `changeset check`   | `<base-sha-or-ref>`, `--base`, `--skip-liveness`                                              |
+| `release plan`      | `--output <file>`, `--deferred <file>`, `--remote <name>`                                     |
+| `release tag`       | `--captured <file>`, `--output <file>`, `--exclude`, `--json`, `--dry-run`, `--remote <name>` |
+| `release release`   | `--captured <file>`, `--assert`, `--dry-run`                                                  |
+| `version sync`      | `check \| bump <version>`                                                                     |
+| `version sync-root` | `--manifest <path>`, `--version <version>`, `--dry-run`                                       |
 
 `--output` on `release tag` captures the cycle _and_ skips pushing: the workflow
-captures once, then hands the same file to publishing, tagging and the release
-step so all three agree on what this cycle owns.
+captures once, then hands the same file to tagging and the release step so both
+agree on what this cycle owns.
 
 ## CI
 
-| Workflow              | Inputs                                       | Caller must grant                                            |
-| --------------------- | -------------------------------------------- | ------------------------------------------------------------ |
-| `release.yml`         | `tools-ref`, `artifacts-dir`, `node-version` | `contents: write`, `pull-requests: write`, `id-token: write` |
-| `changeset-check.yml` | `tools-ref`, `base-sha`, `node-version`      | `contents: read`, `pull-requests: read`                      |
+| Workflow              | Inputs                                       | Caller must grant                         |
+| --------------------- | -------------------------------------------- | ----------------------------------------- |
+| `release.yml`         | `tools-ref`, `artifacts-dir`, `node-version` | `contents: write`, `pull-requests: write` |
+| `changeset-check.yml` | `tools-ref`, `base-sha`, `node-version`      | `contents: read`, `pull-requests: read`   |
 
 `tools-ref` pins the revision of this repository that a release runs from;
 `@main` tracks the tip. Both workflows check this repository out into
 `.release-tools`, build it with pnpm, and run its `dist/main.js` bundles
 against the caller's workspace.
-
-The publish job needs an npm trusted publisher configured for the repository, as
-`pnpm publish --provenance` is keyless OIDC. A package that has never been
-published cannot be debuted by OIDC: run `npm trust` once, register its trusted
-publisher, and the next push publishes it.
 
 ## Install, build, test, package
 
@@ -282,13 +267,13 @@ node apps/changeset-management/dist/main.js --help
 ## End-to-end test
 
 `pnpm --filter @systemfsoftware/e2e test` builds one container and drives the
-entire pipeline in it: a two-package pnpm workspace, a bare git origin, a
-GitHub API mock, and a local registry. Fourteen phases run in order under
-vitest and each one's failure names itself.
+entire pipeline in it: a two-package pnpm workspace, a bare git origin and a
+GitHub API mock. The phases run in order under vitest and each one's failure
+names itself.
 
 The image builds the workspace with pnpm (`pnpm install --frozen-lockfile`,
 `pnpm build`, then the `package` task that runs `deno compile` over each
-bundle) and ships the five app binaries at `/opt/prm/<app>`. The phases drive
+bundle) and ships the four app binaries at `/opt/prm/<app>`. The phases drive
 those binaries, never app source, so the test proves what actually ships.
 
 What the container proves is broader than the apps. `git`, `pnpm` and `node`
@@ -296,8 +281,8 @@ are the real binaries; the workspace is a real pnpm workspace with a real
 lockfile; the release PR, tags and Releases go through real git and a real
 HTTP API surface.
 
-The container is hermetic without weakening the apps. `api.github.com` and
-`registry.npmjs.org` are redirected to `127.0.0.1` inside the container by
+The container is hermetic without weakening the apps. `api.github.com` is
+redirected to `127.0.0.1` inside the container by
 `withExtraHosts`, and a TLS front door on port 443 (plain Node, no runtime
 grants to widen) terminates a certificate signed by a CA the image installs
 into the system trust store. The apps therefore talk to their production URLs
@@ -313,7 +298,7 @@ Green and red runs alike leave a transcript under `e2e/.artifacts/<timestamp>/`:
 | `summary.json`   | phase names, statuses and timings           |
 
 ```bash
-E2E_FILTER='publish lands' pnpm --filter @systemfsoftware/e2e test   # run only matching phases
+E2E_FILTER='tagging pushes' pnpm --filter @systemfsoftware/e2e test   # run only matching phases
 E2E_KEEP=1 pnpm --filter @systemfsoftware/e2e test                  # leave the container up and print its id
 ```
 

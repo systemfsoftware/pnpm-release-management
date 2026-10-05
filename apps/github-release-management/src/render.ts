@@ -98,10 +98,8 @@ export const versionStageText = (refusal: BumpRefusal): string =>
       IntentSlugTaken: (taken) => `IntentSlugTaken: slug=${taken.slug}`,
       ManifestUnreadable: (unreadable) => `ManifestUnreadable: path=${unreadable.path}`,
       ManifestInvalid: (invalid) => `ManifestInvalid: path=${invalid.path} reason=${invalid.reason}`,
-      PublishCapturedRequired: (required) => `PublishCapturedRequired: flag=${required.flag}`,
-      PublishFiltersUnreadable: (unreadable) => `PublishFiltersUnreadable: path=${unreadable.path}`,
-      PublishCommandRefused: (refusedCommand) =>
-        `PublishCommandRefused: command=${refusedCommand.command.program} ${
+      CommandRefused: (refusedCommand) =>
+        `CommandRefused: command=${refusedCommand.command.program} ${
           refusedCommand.command.args.join(' ')
         } reason=${refusedCommand.reason}`,
       RootManifestUnwritable: (unwritable) => `RootManifestUnwritable: path=${unwritable.path}`,
@@ -279,11 +277,7 @@ export const renderPlan = (
   Effect.gen(function*() {
     yield* Effect.forEach(
       report.unpublished,
-      (name) =>
-        note(
-          `${name} has never been published, and OIDC cannot debut a package. ` +
-            'Run the bootstrap tool, register its trusted publisher, then re-run.',
-        ),
+      (name) => note(`${name} is listed as deferred but is not a package in this workspace; ignoring it.`),
       { discard: true },
     )
     yield* note(

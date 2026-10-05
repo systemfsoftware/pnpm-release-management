@@ -7,7 +7,7 @@ import {
   TypecheckRefused,
   WorkspaceCommand,
 } from '@systemfsoftware/release-language'
-import type { CheckKind, PublishRefusal, StagedChecksRefusal, StagedPath } from '@systemfsoftware/release-language'
+import type { CheckKind, CommandRefusal, StagedChecksRefusal, StagedPath } from '@systemfsoftware/release-language'
 import { Effect } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
@@ -54,11 +54,9 @@ const CHECK_REFUSALS: Record<
   lint: (command, reason) => LintRefused.make({ command: { kind: 'lint', command }, reason }),
 }
 
-const publishReason = (refusal: PublishRefusal): string =>
+const publishReason = (refusal: CommandRefusal): string =>
   Match.value(refusal).pipe(
-    Match.tag('PublishCapturedRequired', (required) => `required flag ${required.flag} missing`),
-    Match.tag('PublishFiltersUnreadable', (unreadable) => `filters unreadable: ${unreadable.path}`),
-    Match.tag('PublishCommandRefused', (refused) => refused.reason),
+    Match.tag('CommandRefused', (refused) => refused.reason),
     Match.exhaustive,
   )
 

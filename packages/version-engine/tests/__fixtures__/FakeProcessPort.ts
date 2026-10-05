@@ -1,7 +1,7 @@
 import {
+  type CommandRefusal,
   type ProcessCompleted,
   ProcessPort,
-  type PublishRefusal,
   type WorkspaceCommand,
 } from '@systemfsoftware/release-language'
 import { Effect, Layer } from 'effect'
@@ -11,7 +11,7 @@ export type FakeProcessState = {
 }
 
 export const makeFakeProcessPort = (
-  handler?: (command: WorkspaceCommand) => Effect.Effect<ProcessCompleted, PublishRefusal>,
+  handler?: (command: WorkspaceCommand) => Effect.Effect<ProcessCompleted, CommandRefusal>,
 ): { readonly layer: Layer.Layer<ProcessPort>; readonly state: FakeProcessState } => {
   const calls: Array<WorkspaceCommand> = []
   const layer = Layer.succeed(ProcessPort, {

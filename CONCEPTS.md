@@ -6,7 +6,7 @@ Shared domain vocabulary for this project — entities, named processes, and sta
 
 ### Workspace member
 
-A package the workspace declares as part of the repository's build and release unit. A member carries a manifest that names it and versions it. Only members are enumerated, versioned, or published; the repository root is not a member even though it carries a manifest.
+A package the workspace declares as part of the repository's build and release unit. A member carries a manifest that names it and versions it. Only members are enumerated, versioned, or released; the repository root is not a member even though it carries a manifest.
 
 ### Hybrid member
 

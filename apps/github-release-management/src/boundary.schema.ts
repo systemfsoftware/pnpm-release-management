@@ -1,9 +1,9 @@
 import {
   ChangelogRefusal,
+  CommandRefusal,
   FsPath,
   IntentRefusal,
   MemberRefusal,
-  PublishRefusal,
   VersionRefusal,
 } from '@systemfsoftware/release-language'
 import * as S from 'effect/Schema'
@@ -30,7 +30,7 @@ export const BumpRefusal = S.Union([
   ChangelogRefusal,
   IntentRefusal,
   MemberRefusal,
-  PublishRefusal,
+  CommandRefusal,
   VersionRefusal,
 ])
 export type BumpRefusal = S.Schema.Type<typeof BumpRefusal>

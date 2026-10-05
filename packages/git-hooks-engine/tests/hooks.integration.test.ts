@@ -6,7 +6,7 @@ import {
   stagedChecksCell,
   type StagedChecksDecision,
 } from '@systemfsoftware/git-hooks-engine'
-import type { ProcessCompleted, PublishRefusal, WorkspaceCommand } from '@systemfsoftware/release-language'
+import type { CommandRefusal, ProcessCompleted, WorkspaceCommand } from '@systemfsoftware/release-language'
 import { Effect } from 'effect'
 import * as Layer from 'effect/Layer'
 import * as Match from 'effect/Match'
@@ -27,7 +27,7 @@ const mustReject = (rejection: S.SchemaError | CommitRejected): CommitRejected =
 
 const succeedAll = (
   command: WorkspaceCommand,
-): Effect.Effect<ProcessCompleted, PublishRefusal> => Effect.succeed({ _tag: 'ProcessCompleted', command } as const)
+): Effect.Effect<ProcessCompleted, CommandRefusal> => Effect.succeed({ _tag: 'ProcessCompleted', command } as const)
 
 Feature('Commit policy').body(({ scenario }) => {
   scenario(
@@ -579,7 +579,7 @@ Feature('Commit policy').body(({ scenario }) => {
     const git = makeFakeGitPort({ staged: ['src/app.ts'], merge: false })
     const process = makeFakeProcessPort((command) => {
       if (command.program === './bin/dprint') {
-        return Effect.fail({ _tag: 'PublishCommandRefused', command, reason: 'dprint boom' } as const)
+        return Effect.fail({ _tag: 'CommandRefused', command, reason: 'dprint boom' } as const)
       }
       return succeedAll(command)
     })
@@ -620,7 +620,7 @@ Feature('Commit policy').body(({ scenario }) => {
     const git = makeFakeGitPort({ staged: ['src/app.ts'], merge: false })
     const process = makeFakeProcessPort((command) => {
       if (command.program === 'deno' && command.args[0] === 'check') {
-        return Effect.fail({ _tag: 'PublishCommandRefused', command, reason: 'type boom' } as const)
+        return Effect.fail({ _tag: 'CommandRefused', command, reason: 'type boom' } as const)
       }
       return succeedAll(command)
     })
@@ -660,7 +660,7 @@ Feature('Commit policy').body(({ scenario }) => {
     const git = makeFakeGitPort({ staged: ['src/app.ts'], merge: false })
     const process = makeFakeProcessPort((command) => {
       if (command.program === 'deno' && command.args[0] === 'lint') {
-        return Effect.fail({ _tag: 'PublishCommandRefused', command, reason: 'lint boom' } as const)
+        return Effect.fail({ _tag: 'CommandRefused', command, reason: 'lint boom' } as const)
       }
       return succeedAll(command)
     })

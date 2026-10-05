@@ -30,8 +30,7 @@
     "exports": {
       ".": "./dist/index.js",
       "./package.json": "./package.json"
-    },
-    "provenance": true
+    }
   },
   "scripts": {
     "build": "rimraf dist && tsdown",

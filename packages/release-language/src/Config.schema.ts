@@ -1,7 +1,7 @@
 import { Effect } from 'effect'
 import * as S from 'effect/Schema'
 import * as SchemaGetter from 'effect/SchemaGetter'
-import { FsPath, GitRef, HttpUrl, RelativePath } from './Workspace.schema.js'
+import { FsPath, GitRef, RelativePath } from './Workspace.schema.js'
 
 export const TaskName = S.NonEmptyString.pipe(S.brand('TaskName'))
 export type TaskName = S.Schema.Type<typeof TaskName>
@@ -35,9 +35,6 @@ export type GlobPattern = S.Schema.Type<typeof GlobPattern>
 
 export const TomlHeader = S.Literals(['[workspace.package]', '[package]'])
 export type TomlHeader = S.Schema.Type<typeof TomlHeader>
-
-export const PublishArg = S.NonEmptyString.pipe(S.brand('PublishArg'))
-export type PublishArg = S.Schema.Type<typeof PublishArg>
 
 export const PrTitle = S.NonEmptyString.pipe(S.brand('PrTitle'))
 export type PrTitle = S.Schema.Type<typeof PrTitle>
@@ -135,15 +132,8 @@ const ReleaseConfigWire = S.Struct({
     S.withDecodingDefault(Effect.succeed({
       title: 'chore(release): version packages',
       body:
-        'Consumes pending `.changeset/` intents.\n\nMerging publishes packages with provenance attestations and creates GitHub releases.',
+        'Consumes pending `.changeset/` intents.\n\nMerging tags the released versions and creates GitHub releases.',
     })),
-  ),
-  publishArgs: S.Array(PublishArg).pipe(
-    S.withDecodingDefault(Effect.succeed([])),
-  ),
-  provenance: S.Boolean.pipe(S.withDecodingDefault(Effect.succeed(true))),
-  registry: HttpUrl.pipe(
-    S.withDecodingDefault(Effect.succeed('https://registry.npmjs.org')),
   ),
 })
 
@@ -156,9 +146,6 @@ const ReleaseConfigFull = S.Struct({
   gate: Gate,
   distribution: S.optional(Distribution),
   pr: PrBlock,
-  publishArgs: S.Array(PublishArg),
-  provenance: S.Boolean,
-  registry: HttpUrl,
 })
 
 export const ReleaseConfig = ReleaseConfigWire.pipe(

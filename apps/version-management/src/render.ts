@@ -1,10 +1,10 @@
 import { Reporter, type WorkspaceRootNotAbsolute } from '@systemfsoftware/cli-adapter'
 import type {
   ChangelogRefusal,
+  CommandRefusal,
   ConfigRefusal,
   IntentRefusal,
   MemberRefusal,
-  PublishRefusal,
   RelativePath,
   VersionRefusal,
 } from '@systemfsoftware/release-language'
@@ -30,7 +30,7 @@ export type AppRefusal =
   | MemberRefusal
   | VersionRefusal
   | ChangelogRefusal
-  | PublishRefusal
+  | CommandRefusal
   | PinRefusal
   | SchemaError
 
@@ -158,11 +158,9 @@ export const renderRefusal = (refusal: AppRefusal): Effect.Effect<void, never, R
             ['reason', unwritable.reason],
           ]),
         ),
-      PublishCapturedRequired: () => refuse('PublishCapturedRequired: flag=--captured'),
-      PublishFiltersUnreadable: (unreadable) => refuse(fields('PublishFiltersUnreadable', [['path', unreadable.path]])),
-      PublishCommandRefused: (command) =>
+      CommandRefused: (command) =>
         refuse(
-          fields('PublishCommandRefused', [
+          fields('CommandRefused', [
             ['command', `${command.command.program} ${command.command.args.join(' ')}`],
             ['reason', command.reason],
           ]),

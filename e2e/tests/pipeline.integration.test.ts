@@ -5,7 +5,7 @@ import { expect } from 'vitest'
 import { headSha, MEMBERS, setupFixture } from '../fixture.js'
 import { FIXTURE, parseJson, type World } from '../harness.js'
 import { Session } from '../session.js'
-import { CapturedEntry, Manifest, Pulls, Release, Releases, StatusRow } from './__fixtures__/pipeline.schema.js'
+import { CapturedEntry, Manifest, Pulls, Release, Releases } from './__fixtures__/pipeline.schema.js'
 
 const Feature = makeFeature({ it, layer })
 
@@ -15,11 +15,6 @@ const artifacts = `${repoRoot}e2e/.artifacts/${new Date().toISOString().replace(
 const readVersion = async (world: World, name: string): Promise<string> => {
   const raw = await world.read(`${FIXTURE}/packages/${name}/package.json`)
   return S.decodeUnknownSync(Manifest)(parseJson(raw)).version
-}
-
-const statusRows = (stdout: string): ReadonlyArray<S.Schema.Type<typeof StatusRow>> => {
-  const values = stdout.split('\n').filter((line) => line.startsWith('{')).map(parseJson)
-  return S.decodeUnknownSync(S.Array(StatusRow))(values)
 }
 
 const capturedTags = (text: string): ReadonlyArray<string> => {
@@ -106,29 +101,13 @@ const runPhases = async (session: Session): Promise<void> => {
     })
   })
 
-  await session.phase('plan asks for a publish step', async (world) => {
+  await session.phase('plan asks for a release step', async (world) => {
     const planned = await world.tool('github-release-management', 'plan')
     const output = `${planned.stdout}${planned.stderr}`
     expect(planned.code).toBe(0)
     expect(output).toContain('pending_intents=0')
     expect(output).toContain(`this_cycle=${MEMBERS.length}`)
-    expect(output).toContain('phase=publish')
-  })
-
-  await session.phase('publish lands both packages on the registry', async (world) => {
-    const published = await world.tool('npm-publish-management', 'publish')
-    expect(published.code).toBe(0)
-
-    const status = await world.tool('npm-publish-management', 'status', '--json')
-    expect(status.code).toBe(0)
-
-    const rows = statusRows(status.stdout)
-    expect(rows.length).toBe(MEMBERS.length)
-    for (const row of rows) {
-      expect(row.local_version).toBe('1.1.0')
-      expect(row.npm_latest).toBe('1.1.0')
-      expect(row.class).toBe('no-oidc')
-    }
+    expect(output).toContain('phase=release')
   })
 
   await session.phase('captured set is written for the later steps', async (world) => {
@@ -235,7 +214,7 @@ const runPhases = async (session: Session): Promise<void> => {
 
 Feature('Releasing packages from change intents').body(({ scenario }) => {
   scenario(
-    'an authored intent becomes a published release with tags and notes',
+    'an authored intent becomes a tagged release with notes',
     Gherkin.Do.pipe(
       Given('a container world holding a two-package workspace')('session', () =>
         Effect.promise(() =>

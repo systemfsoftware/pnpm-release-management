@@ -1,17 +1,12 @@
 import { NodeServices } from '@effect/platform-node'
-import {
-  ProcessCompleted,
-  ProcessPort,
-  PublishCommandRefused,
-  type PublishRefusal,
-} from '@systemfsoftware/release-language'
+import { type CommandRefusal, CommandRefused, ProcessCompleted, ProcessPort } from '@systemfsoftware/release-language'
 import { Effect, Layer } from 'effect'
 import { runProcess } from './ProcessRun.js'
 
 const runCommand: ProcessPort['runCommand'] = (command) =>
   Effect.gen(function*() {
     const described = `${command.program} ${command.args.join(' ')}`
-    const refused = (reason: string): PublishRefusal => PublishCommandRefused.make({ command, reason })
+    const refused = (reason: string): CommandRefusal => CommandRefused.make({ command, reason })
     const outcome = yield* runProcess({
       program: command.program,
       args: command.args,

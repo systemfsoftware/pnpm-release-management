@@ -3,15 +3,15 @@ import {
   type ChangelogRefusal,
   ChangelogStore,
   ChangesetStore,
+  CommandArg,
   CommandName,
+  type CommandRefusal,
   type IntentRefusal,
   type MemberRefusal,
   type PackageManifest,
   type PackageName,
   type PackageVersion,
   ProcessPort,
-  PublishArg,
-  type PublishRefusal,
   SurfaceStore,
   type VersionRefusal,
   WorkspaceStore,
@@ -132,7 +132,7 @@ const writePnpm = (
   bumped: VersionBumped,
 ): Effect.Effect<
   void,
-  ChangelogRefusal | MemberRefusal | PublishRefusal,
+  ChangelogRefusal | MemberRefusal | CommandRefusal,
   ChangelogStore | ProcessPort | WorkspaceStore
 > =>
   Effect.gen(function*() {
@@ -140,7 +140,7 @@ const writePnpm = (
     const workspace = yield* WorkspaceStore
     yield* process.runCommand({
       program: CommandName.make('pnpm'),
-      args: [PublishArg.make('version'), PublishArg.make('-r')],
+      args: [CommandArg.make('version'), CommandArg.make('-r')],
       cwd: workspace.root,
     })
     const members = yield* workspace.listMembers()
@@ -160,7 +160,7 @@ const applyBumped = (
   bumped: VersionBumped,
 ): Effect.Effect<
   void,
-  VersionRefusal | ChangelogRefusal | MemberRefusal | PublishRefusal,
+  VersionRefusal | ChangelogRefusal | MemberRefusal | CommandRefusal,
   ChangelogStore | SurfaceStore | ProcessPort | WorkspaceStore
 > => {
   if (command.strategy === 'surfaces') return writeSurfaces(command, bumped)
@@ -172,7 +172,7 @@ const write = (
   command: BumpCommand,
 ): Effect.Effect<
   VersionDecision,
-  VersionRefusal | IntentRefusal | MemberRefusal | ChangelogRefusal | PublishRefusal,
+  VersionRefusal | IntentRefusal | MemberRefusal | ChangelogRefusal | CommandRefusal,
   ChangesetStore | WorkspaceStore | SurfaceStore | ChangelogStore | ProcessPort
 > => {
   if (Result.isFailure(output)) return Effect.fail(output.failure)

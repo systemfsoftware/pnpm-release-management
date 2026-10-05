@@ -51,8 +51,8 @@ and CI fails when any one does.
    `pnpm --filter @systemfsoftware/e2e test`.
 
 Apps must only address their production hosts. Never add a `localhost`, loopback
-or test-only base URL: the e2e container resolves only `api.github.com` and
-`registry.npmjs.org` (see the [README](README.md#end-to-end-test)), so a step
+or test-only base URL: the e2e container resolves only `api.github.com` (see
+the [README](README.md#end-to-end-test)), so a step
 that needs a test-only host simply fails the suite.
 
 ## The end-to-end test
@@ -62,7 +62,7 @@ pipeline inside it. Phases are named and fail fast, so a red run points at one
 step.
 
 ```bash
-E2E_FILTER='publish lands' pnpm --filter @systemfsoftware/e2e test   # run matching phases only
+E2E_FILTER='tagging pushes' pnpm --filter @systemfsoftware/e2e test   # run matching phases only
 E2E_KEEP=1 pnpm --filter @systemfsoftware/e2e test                  # leave the container up, print its id
 ```
 

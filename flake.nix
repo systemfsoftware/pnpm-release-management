@@ -34,7 +34,6 @@
           default = dprint;
           changeset-management = cliApp "changeset-management";
           version-management = cliApp "version-management";
-          npm-publish-management = cliApp "npm-publish-management";
           github-release-management = cliApp "github-release-management";
           git-hooks = cliApp "git-hooks";
         });

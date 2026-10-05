@@ -86,7 +86,7 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
                 Match.tag('PlanVersion', (version) => {
                   expect(version.pending).toEqual(Count.make(1))
                 }),
-                Match.tag('PlanPublish', () => failUnexpected('expected PlanVersion')),
+                Match.tag('PlanRelease', () => failUnexpected('expected PlanVersion')),
                 Match.tag('PlanSettled', () => failUnexpected('expected PlanVersion')),
                 Match.exhaustive,
               )
@@ -118,15 +118,15 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
         Then('the plan enters the publish phase with a one-item cycle')((s) => {
           Match.value(s.outcome).pipe(
             Match.tag('decided', (decided) => {
-              expect(decided.value.phase).toEqual('publish')
+              expect(decided.value.phase).toEqual('release')
               expect(decided.value.pendingIntents).toEqual(Count.make(1))
               expect(decided.value.thisCycle).toEqual(Count.make(1))
               Match.value(decided.value.decision).pipe(
-                Match.tag('PlanPublish', (publish) => {
-                  expect(publish.cycle.length).toEqual(1)
+                Match.tag('PlanRelease', (release) => {
+                  expect(release.cycle.length).toEqual(1)
                 }),
-                Match.tag('PlanVersion', () => failUnexpected('expected PlanPublish')),
-                Match.tag('PlanSettled', () => failUnexpected('expected PlanPublish')),
+                Match.tag('PlanVersion', () => failUnexpected('expected PlanRelease')),
+                Match.tag('PlanSettled', () => failUnexpected('expected PlanRelease')),
                 Match.exhaustive,
               )
             }),
@@ -161,7 +161,7 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
               Match.value(decided.value.decision).pipe(
                 Match.tag('PlanSettled', () => undefined),
                 Match.tag('PlanVersion', () => failUnexpected('expected PlanSettled')),
-                Match.tag('PlanPublish', () => failUnexpected('expected PlanSettled')),
+                Match.tag('PlanRelease', () => failUnexpected('expected PlanSettled')),
                 Match.exhaustive,
               )
             }),
@@ -199,7 +199,7 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
               Match.value(decided.value.decision).pipe(
                 Match.tag('PlanSettled', () => undefined),
                 Match.tag('PlanVersion', () => failUnexpected('expected PlanSettled')),
-                Match.tag('PlanPublish', () => failUnexpected('expected PlanSettled')),
+                Match.tag('PlanRelease', () => failUnexpected('expected PlanSettled')),
                 Match.exhaustive,
               )
               expect(decided.value.pendingIntents).toEqual(Count.make(0))

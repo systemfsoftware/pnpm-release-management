@@ -23,16 +23,15 @@ RUN curl -fsSL -O \
   && tar -xzf process-compose_linux_amd64.tar.gz -C /usr/local/bin process-compose \
   && rm -f process-compose_linux_amd64.tar.gz process-compose_checksums.txt
 
-ARG VERDACCIO_VERSION=6.10.3
 ARG EMULATE_VERSION=0.11.1
-RUN npm install -g --no-fund --no-audit "verdaccio@${VERDACCIO_VERSION}" "emulate@${EMULATE_VERSION}" \
+RUN npm install -g --no-fund --no-audit "emulate@${EMULATE_VERSION}" \
   && npm cache clean --force
 
 ARG PNPM_VERSION=11.21.0
 RUN corepack enable && corepack prepare "pnpm@${PNPM_VERSION}" --activate
 
 RUN mkdir -p /e2e \
-  && printf 'subjectAltName=DNS:api.github.com,DNS:registry.npmjs.org\n' > /e2e/san.cnf \
+  && printf 'subjectAltName=DNS:api.github.com\n' > /e2e/san.cnf \
   && openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
       -keyout /e2e/ca.key -out /e2e/ca.crt -subj '/CN=prm-e2e-ca' \
   && openssl req -newkey rsa:2048 -sha256 -nodes \
@@ -46,7 +45,6 @@ RUN mkdir -p /e2e \
 ENV DENO_TLS_CA_STORE=system \
     NODE_EXTRA_CA_CERTS=/e2e/ca.crt
 
-COPY e2e/verdaccio.yaml /e2e/verdaccio.yaml
 COPY e2e/process-compose.yaml /e2e/process-compose.yaml
 COPY e2e/nginx.conf /e2e/nginx.conf
 
@@ -59,7 +57,6 @@ RUN cd /build && pnpm install --frozen-lockfile && pnpm build && pnpm exec turbo
 RUN mkdir -p /opt/prm \
   && cp /build/apps/changeset-management/dist/changeset-management /opt/prm/changeset-management \
   && cp /build/apps/version-management/dist/version-management /opt/prm/version-management \
-  && cp /build/apps/npm-publish-management/dist/npm-publish-management /opt/prm/npm-publish-management \
   && cp /build/apps/github-release-management/dist/github-release-management /opt/prm/github-release-management \
   && cp /build/apps/git-hooks/dist/git-hooks /opt/prm/git-hooks \
   && chmod 0755 /opt/prm/*

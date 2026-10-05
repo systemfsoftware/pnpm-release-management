@@ -1,11 +1,11 @@
 import { Cell } from '@systemfsoftware/effect-cell-types'
 import { Gherkin, Given, it, layer, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
 import {
+  type CommandRefusal,
   Intent,
   Member,
   PackageVersion,
   type ProcessCompleted,
-  type PublishRefusal,
   RelativePath,
   RepoRoot,
   VersionRefusal,
@@ -191,7 +191,7 @@ Feature('Versioning packages').body(({ scenario }) => {
     )
     const changelogs = makeFakeChangelogStore()
     const process = makeFakeProcessPort(
-      (command: WorkspaceCommand): Effect.Effect<ProcessCompleted, PublishRefusal> =>
+      (command: WorkspaceCommand): Effect.Effect<ProcessCompleted, CommandRefusal> =>
         Effect.sync(() => {
           workspace.state.members.forEach((member, index) => {
             const [major, minor, patch] = bumpCore(member.manifest.version)

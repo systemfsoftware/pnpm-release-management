@@ -2,13 +2,20 @@ export { ChangeEvidencePort } from './ChangeEvidencePort.js'
 export type { ChangeEvidenceRefusal } from './ChangeEvidencePort.js'
 export { ChangelogStore } from './ChangelogStore.js'
 export { ChangesetStore } from './ChangesetStore.js'
+export {
+  CommandArg,
+  CommandName,
+  CommandRefusal,
+  CommandRefused,
+  ProcessCompleted,
+  WorkspaceCommand,
+} from './Command.schema.js'
 export { ConfigFieldInvalid, ConfigFieldMissing, ConfigMalformed, ConfigUnreadable } from './Config.schema.js'
 export {
   ConfigField,
   ConfigRefusal,
   Gate,
   PrTitle,
-  PublishArg,
   ReleaseConfig,
   TargetSuffix,
   TaskName,
@@ -67,16 +74,6 @@ export {
 export { CycleEntry, PlanCapturedMalformed, PlanDeferredUnknown, PlanRefusal } from './Plan.schema.js'
 export { ProcessPort } from './ProcessPort.js'
 export {
-  CommandName,
-  ProcessCompleted,
-  PublishCapturedRequired,
-  PublishCommandRefused,
-  PublishFiltersUnreadable,
-  PublishRefusal,
-  WorkspaceCommand,
-} from './Publish.schema.js'
-export { StatusClass } from './PublishStatus.schema.js'
-export {
   BranchDeleted,
   PullRequestAbsent,
   PullRequestBodyUnreadable,
@@ -88,7 +85,6 @@ export {
   PullRequestSummary,
   ReleaseLabel,
 } from './PullRequest.schema.js'
-export { RegistryPort } from './RegistryPort.js'
 export { ReleaseConfigStore } from './ReleaseConfigStore.js'
 export {
   CheckKind,
@@ -109,13 +105,6 @@ export {
   TagExcludedMalformed,
   TagRefusal,
 } from './Tag.schema.js'
-export {
-  TrustOnlyUnmatched,
-  TrustRefusal,
-  TrustRegistryUnreadable,
-  TrustSnapshot,
-  TrustWorkspaceEmpty,
-} from './Trust.schema.js'
 export {
   ChangelogFile,
   ChangelogRefusal,

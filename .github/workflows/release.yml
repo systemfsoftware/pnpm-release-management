@@ -101,14 +101,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node .release-tools/apps/github-release-management/dist/main.js pr
 
-  publish:
-    name: publish · oidc · tag · release
+  release:
+    name: release · tag · GitHub releases
     needs: plan
-    if: needs.plan.outputs.phase == 'publish'
+    if: needs.plan.outputs.phase == 'release'
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      id-token: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -126,7 +125,6 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
-          registry-url: https://registry.npmjs.org
 
       - name: Build the release tools
         run: |
@@ -144,14 +142,6 @@ jobs:
           node .release-tools/apps/github-release-management/dist/main.js tag \
             --output "${{ inputs.artifacts-dir }}/captured.json"
 
-      - name: Build
-        run: pnpm build --if-present
-
-      - name: Publish unpublished versions via OIDC
-        run: |
-          node .release-tools/apps/npm-publish-management/dist/main.js publish \
-            --captured "${{ inputs.artifacts-dir }}/captured.json" --unpublished
-
       - name: Tag released versions
         run: |
           node .release-tools/apps/github-release-management/dist/main.js tag \
@@ -163,6 +153,3 @@ jobs:
         run: |
           node .release-tools/apps/github-release-management/dist/main.js release \
             --captured "${{ inputs.artifacts-dir }}/captured.json"
-
-      - name: Report registry state
-        run: node .release-tools/apps/npm-publish-management/dist/main.js status

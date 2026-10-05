@@ -22,7 +22,7 @@
   "files": ["dist"],
   "license": "Apache-2.0",
   "name": "@systemfsoftware/git-adapter",
-  "publishConfig": { "exports": { ".": "./dist/index.js", "./package.json": "./package.json" }, "provenance": true },
+  "publishConfig": { "exports": { ".": "./dist/index.js", "./package.json": "./package.json" } },
   "scripts": {
     "build": "rimraf dist && tsdown",
     "clean": "rimraf dist",

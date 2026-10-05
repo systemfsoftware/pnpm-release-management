@@ -15,7 +15,6 @@ const RELEASE_JSONC = `{
     ]
   },
   "gate": { "strategy": "paths" },
-  "provenance": false,
   "pr": {
     "title": "chore(release): version packages",
     "body": "Consumes the pending .changeset intents."
@@ -43,8 +42,7 @@ const MEMBER_MANIFEST = (name: string): string =>
   "name": "${name}",
   "version": "1.0.0",
   "main": "index.js",
-  "repository": { "type": "git", "url": "https://example.invalid/admin/fixture.git" },
-  "publishConfig": { "access": "public" }
+  "repository": { "type": "git", "url": "https://example.invalid/admin/fixture.git" }
 }
 `
 

@@ -76,10 +76,6 @@ export const PackageManifest = S.Struct({
   name: PackageName,
   version: PackageVersion,
   private: S.optional(S.Boolean),
-  publishConfig: S.optional(S.Struct({
-    provenance: S.optional(S.Boolean),
-    access: S.optional(S.Literals(['public', 'restricted'])),
-  })),
   scripts: S.optional(S.Record(S.NonEmptyString, ScriptCommand)),
   repository: S.optional(
     S.Union([

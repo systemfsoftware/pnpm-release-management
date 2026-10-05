@@ -9,7 +9,7 @@ export {
   ReleaseChangelogEmpty,
   ReleaseChangelogMissing,
 } from './github-release.workflow.js'
-export { PlanDeferredUnknown, PlanPublish, PlanSettled, PlanVersion } from './plan-release.workflow.js'
+export { PlanDeferredUnknown, PlanRelease, PlanSettled, PlanVersion } from './plan-release.workflow.js'
 export { planCell, PlanRequest } from './plan.js'
 export { PlanDecision, PlanReport } from './plan.schema.js'
 export { pullRequestCell, PullRequestRequest } from './pull-request.js'

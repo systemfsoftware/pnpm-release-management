@@ -11,7 +11,7 @@ export class PlanVersion extends S.TaggedClass<PlanVersion>()('PlanVersion', {
   readonly [DecisionTypeId] = DecisionTypeId
 }
 
-export class PlanPublish extends S.TaggedClass<PlanPublish>()('PlanPublish', {
+export class PlanRelease extends S.TaggedClass<PlanRelease>()('PlanRelease', {
   cycle: S.Array(CycleEntry),
 }) {
   readonly [DecisionTypeId] = DecisionTypeId
@@ -65,10 +65,10 @@ export const planRelease = Workflow.make(
   PlanCommand,
   (
     command,
-  ): Result.Result<PlanVersion | PlanPublish | PlanSettled, PlanDeferredUnknown> =>
+  ): Result.Result<PlanVersion | PlanRelease | PlanSettled, PlanDeferredUnknown> =>
     Match.value(planCaseOf(command)).pipe(
       Match.tag('UnknownDeferred', (unknown) => Result.fail(PlanDeferredUnknown.make({ packages: unknown.packages }))),
-      Match.tag('Owed', (owed) => Result.succeed(PlanPublish.make({ cycle: [...owed.cycle] }))),
+      Match.tag('Owed', (owed) => Result.succeed(PlanRelease.make({ cycle: [...owed.cycle] }))),
       Match.tag('Pending', (pending) =>
         Result.succeed(
           PlanVersion.make({ pending: pending.pending, cycle: [...pending.cycle] }),
