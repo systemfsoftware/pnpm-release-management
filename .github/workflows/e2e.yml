@@ -30,7 +30,7 @@ jobs:
       - name: Install the workspace
         run: pnpm install --frozen-lockfile
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Cache the e2e image
         run: |
@@ -46,7 +46,7 @@ jobs:
 
       - name: Upload the failing transcript
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-artifacts
           path: e2e/.artifacts
