@@ -27,6 +27,7 @@ import {
   type TarballRefusal,
   type VersionBurned,
   type VersionIntentMalformed,
+  type VersionState,
   type VersionUnknownPackage,
 } from '@systemfsoftware/release-language'
 import type { VersionDecision } from '@systemfsoftware/version-engine'
@@ -362,7 +363,7 @@ export const renderAdoptRefusal = (refusal: AdoptFailure): Effect.Effect<void, n
             ...refused.failures.map(adoptionFailureText),
             ...ledgerEntryNotes(refused.ledgered),
             ...refused.excluded.map((entry) => `${entry.tag}: ${entry.reason}`),
-            adoptionSummary(refused.ledgered, refused.excluded.length, refused.failures.length),
+            adoptionCountsLine(refused.ledgered, refused.failures.length),
           ].join('\n'),
         ConfigUnreadable: (unreadable) => `${unreadable.path}: cannot be read`,
         ConfigMalformed: (malformed) => `${malformed.path}: ${malformed.reason}`,
@@ -392,11 +393,29 @@ const adoptionFailureText = (failure: AdoptionFailure): string =>
     }),
   )
 
-const adoptionSummary = (
+const ledgerCounts = (
   entries: ReadonlyArray<ReleaseLedgerEntry>,
-  excluded: number,
-  errors: number,
-): string => `adopted ${entries.length} release tag(s), excluded ${excluded} private tag(s), errors ${errors}`
+): { readonly published: number; readonly unpublished: number; readonly mismatched: number } => {
+  let published = 0
+  let unpublished = 0
+  let mismatched = 0
+  for (const entry of entries) {
+    Match.value(entry).pipe(
+      Match.tag('published', () => (published += 1)),
+      Match.tag('unpublished', () => (unpublished += 1)),
+      Match.tag('mismatched', () => (mismatched += 1)),
+      Match.exhaustive,
+    )
+  }
+  return { published, unpublished, mismatched }
+}
+
+const stateText = (state: VersionState): string =>
+  Match.value(state).pipe(
+    Match.tag('published', () => 'published'),
+    Match.tag('unpublished', (unpublished) => `unpublished (${unpublished.url} -> ${unpublished.status})`),
+    Match.exhaustive,
+  )
 
 const ledgerEntryNotes = (entries: ReadonlyArray<ReleaseLedgerEntry>): ReadonlyArray<string> =>
   entries.flatMap((entry) =>
@@ -406,11 +425,18 @@ const ledgerEntryNotes = (entries: ReadonlyArray<ReleaseLedgerEntry>): ReadonlyA
         `${unpublished.tag}: ${unpublished.package}@${unpublished.version} unpublished (${unpublished.url} -> ${unpublished.status})`,
       ]),
       Match.tag('mismatched', (mismatched) => [
-        `mismatched ${mismatched.tag}: claims ${mismatched.claimedVersion}, manifest ${mismatched.manifestVersion}`,
+        `mismatched ${mismatched.tag}: claims ${mismatched.claimedVersion} ${
+          stateText(mismatched.claimed)
+        }, manifest ${mismatched.manifestVersion} ${stateText(mismatched.manifest)}`,
       ]),
       Match.exhaustive,
     )
   )
+
+const adoptionCountsLine = (entries: ReadonlyArray<ReleaseLedgerEntry>, errors: number): string => {
+  const counts = ledgerCounts(entries)
+  return `adopted ${counts.published} published, ${counts.unpublished} unpublished, ${counts.mismatched} mismatched, ${errors} errors`
+}
 
 export const renderAdoption = (report: AdoptionReport): Effect.Effect<void, never, Reporter> =>
   Effect.gen(function*() {
@@ -421,7 +447,7 @@ export const renderAdoption = (report: AdoptionReport): Effect.Effect<void, neve
     for (const entry of report.excluded) {
       yield* reporter.note(`${entry.tag}: ${entry.reason}`)
     }
-    yield* reporter.emit(adoptionSummary(report.entries, report.excluded.length, 0))
+    yield* reporter.emit(adoptionCountsLine(report.entries, 0))
   })
 
 export const renderRelease = (decision: GithubReleaseDecision): Effect.Effect<void, never, Reporter> =>

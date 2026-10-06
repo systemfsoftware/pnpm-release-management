@@ -373,6 +373,7 @@ entry:
 {
   "entries": [
     {
+      "_tag": "published",
       "tag": "@scope/name@v1.2.3",
       "commit": "<peeled commit the tag points to>",
       "package": "@scope/name",
@@ -397,15 +398,20 @@ the resolved published name, so the identity check — which looks tags up by
 The `files` map is the same digest shape the tag annotations use, so a later
 mismatch can name the first differing file. Fetches run four at a time and retry
 a transient registry failure (a 5xx or a timeout) three attempts with backoff; a
-404 is not transient. A version whose bytes cannot be fetched — a 404, a network
-failure, or a download whose sha512 does not equal `dist.integrity` — is listed
-as a hard error in the report and the command exits non-zero. Nothing is
-admitted silently, and an adoption with any error writes no ledger at all.
+404 is not transient, but it is not an error either: an exact-version 404 means
+the registry never published that `name@version`, so the entry is recorded as
+`unpublished` with the metadata URL, the 404 status and the fetch time. That
+version is burned — `release plan` refuses a cycle member at it and `release tag`
+refuses to create its tag, both `version-burned`. A network failure, a download
+whose sha512 does not equal `dist.integrity`, or a tag with zero or several
+matching manifests is a hard error: the command exits non-zero, and an adoption
+with any error writes no ledger at all.
 
-The report prints a summary — `adopted <n> release tag(s), excluded <m> private
-tag(s), errors <k>` — followed by one line per error, `name@version: <reason>`.
-A tag whose manifest version differs from its tag name also prints one
-`mismatched <tag>: claims <a>, manifest <b>` line, naming both versions.
+The report prints one line for each `unpublished` and `mismatched` entry, then
+`adopted <N> published, <U> unpublished, <M> mismatched, <E> errors`. A
+`mismatched` line names both versions and each version's registry state —
+`mismatched <tag>: claims <a> <state>, manifest <b> <state>` — and an error line
+is `name@version: <reason>`.
 
 The ledger is one JSON file at the repository root, written by the command and
 never hand-edited: keys in a stable order, entries sorted by tag. It lands in its

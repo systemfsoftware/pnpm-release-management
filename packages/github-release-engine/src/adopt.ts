@@ -24,6 +24,7 @@ import {
   RemoteName,
   TarballPort,
   UnpublishedLedgerEntry,
+  UnpublishedState,
   type VersionState,
 } from '@systemfsoftware/release-language'
 import { Effect, Option, Schedule } from 'effect'
@@ -81,6 +82,14 @@ const registryFailureOf = (
     Match.exhaustive,
   )
 
+const isNotFound = (failure: RegistryRefusal): boolean =>
+  Match.value(failure).pipe(
+    Match.tag('RegistryFetchFailed', (fetched) => fetched.status === 404),
+    Match.tag('RegistryMetadataMalformed', () => false),
+    Match.tag('RegistryDownloadFailed', () => false),
+    Match.exhaustive,
+  )
+
 const isTransient = (failure: AdoptionFailure): boolean =>
   Match.value(failure).pipe(
     Match.tag('RegistryFetchFailed', (fetched) => fetched.status === undefined || fetched.status >= 500),
@@ -90,6 +99,9 @@ const isTransient = (failure: AdoptionFailure): boolean =>
     Match.exhaustive,
   )
 
+const metadataUrl = (registry: HttpUrl, name: PackageName, version: PackageVersion): HttpUrl =>
+  HttpUrl.make(`${registry}/${encodeURIComponent(name)}/${version}`)
+
 const fetchState = (
   request: AdoptionRequestInput,
   registry: RegistryPort,
@@ -98,10 +110,18 @@ const fetchState = (
   version: PackageVersion,
 ): Effect.Effect<VersionState, AdoptionFailure> =>
   Effect.gen(function*() {
+    const requested = metadataUrl(request.registry, name, version)
     const attempted = yield* registry.metadata(request.registry, name, version).pipe(
       Effect.match({ onSuccess: Result.succeed, onFailure: Result.fail }),
     )
     if (Result.isFailure(attempted)) {
+      if (isNotFound(attempted.failure)) {
+        return UnpublishedState.make({
+          url: requested,
+          status: 404,
+          fetchedAt: new Date().toISOString(),
+        })
+      }
       return yield* Effect.fail(registryFailureOf(attempted.failure, name, version))
     }
     const metadata = attempted.success

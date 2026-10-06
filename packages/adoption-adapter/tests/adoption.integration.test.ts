@@ -10,6 +10,7 @@ import {
   planCell,
   type PlanDecision,
   type PlanReport,
+  tagCell,
 } from '@systemfsoftware/github-release-engine'
 import {
   type AdoptionFailure,
@@ -33,6 +34,7 @@ import {
   ReleaseLedger,
   type ReleaseLedgerEntry,
   RepoRoot,
+  UnpublishedLedgerEntry,
   WorkspaceStore,
 } from '@systemfsoftware/release-language'
 import { TarballLive } from '@systemfsoftware/tarball-adapter'
@@ -77,11 +79,19 @@ const betaMember: Member = {
 }
 
 const DAEMON_NAME = PackageName.make('@e2e/effect-daemon-spec')
+const GONE_NAME = PackageName.make('@e2e/gone')
 
 const daemonMember: Member = {
   name: DAEMON_NAME,
   dir: RelativePath.make('packages/effect-daemon-spec'),
   manifest: { name: DAEMON_NAME, version: PackageVersion.make('0.1.0') },
+  publishable: true,
+}
+
+const goneMember: Member = {
+  name: GONE_NAME,
+  dir: RelativePath.make('packages/gone'),
+  manifest: { name: GONE_NAME, version: PackageVersion.make('1.0.0') },
   publishable: true,
 }
 
@@ -200,7 +210,14 @@ interface PrepareOptions {
   readonly commits: ReadonlyArray<
     { readonly packages: ReadonlyArray<PackEntry>; readonly tags: ReadonlyArray<TagEntry> }
   >
-  readonly serve: ReadonlyArray<{ name: PackageName; version: PackageVersion; files: Record<string, string> }>
+  readonly serve: ReadonlyArray<
+    {
+      readonly name: PackageName
+      readonly version: PackageVersion
+      readonly files: Record<string, string>
+      readonly integrity?: string
+    }
+  >
 }
 
 const prepare = (options: PrepareOptions) =>
@@ -247,7 +264,7 @@ const prepare = (options: PrepareOptions) =>
         key: `${entry.name}@${entry.version}`,
         file: tarNameOf(entry.name, entry.version),
         bytes,
-        integrity: integrityOf(bytes),
+        integrity: entry.integrity ?? integrityOf(bytes),
       })
     }
     const registry = yield* startRegistry(served)
@@ -360,6 +377,18 @@ const mismatchedEntries = (
       Match.tag('mismatched', (mismatched) => [mismatched]),
       Match.tag('published', () => []),
       Match.tag('unpublished', () => []),
+      Match.exhaustive,
+    )
+  )
+
+const unpublishedEntries = (
+  entries: ReadonlyArray<ReleaseLedgerEntry>,
+): ReadonlyArray<UnpublishedLedgerEntry> =>
+  entries.flatMap((entry) =>
+    Match.value(entry).pipe(
+      Match.tag('unpublished', (unpublished) => [unpublished]),
+      Match.tag('published', () => []),
+      Match.tag('mismatched', () => []),
       Match.exhaustive,
     )
   )
@@ -716,32 +745,88 @@ Feature('Adoption ledger').body(({ scenario }) => {
   )
 
   scenario(
-    'A release the registry cannot serve is a hard adoption error',
+    'A tag the registry does not serve is ledgered as a burned version',
     { scenarioLayer: NodeServices.layer },
     Gherkin.Do.pipe(
-      Given('a tagged release whose registry answers not found')(
+      Given('a tagged release the registry has never published')(
         'context',
         () =>
           prepare({
             commits: [{
-              packages: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
-              tags: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+              packages: [{ name: GONE_NAME, version: PackageVersion.make('1.0.0') }],
+              tags: [{ name: GONE_NAME, version: PackageVersion.make('1.0.0') }],
             }],
             serve: [],
           }),
       ),
-      When('adoption runs against the empty registry')(
+      When('adoption runs against that registry')(
         'outcome',
         (s) =>
           Effect.gen(function*() {
-            const live = adaptersOf(s.context, [alphaMember])
+            const live = adaptersOf(s.context, [goneMember])
+            return yield* withWorkdir(
+              s.context,
+              Effect.gen(function*() {
+                const adopted = yield* attempt(Cell.run(Cell.provide(adoptCell, live), adoptRequest(s.context)))
+                const ledger = yield* LedgerPort.pipe(
+                  Effect.flatMap((port) => port.read(LEDGER_PATH)),
+                  Effect.provide(live),
+                )
+                return { adopted, ledger }
+              }),
+            )
+          }),
+      ),
+      Then('the ledger holds one unpublished entry carrying its evidence')(
+        (s) =>
+          Effect.gen(function*() {
+            expect(Result.isSuccess(s.outcome.adopted)).toBe(true)
+            expect(Option.isSome(s.outcome.ledger)).toBe(true)
+            const entries = Option.getOrThrow(s.outcome.ledger).entries
+            expect(entries.map(kindOf)).toEqual(['unpublished'])
+            const unpublished = unpublishedEntries(entries)[0]
+            expect(unpublished?.package).toBe(GONE_NAME)
+            expect(unpublished?.version).toBe('1.0.0')
+            expect(unpublished?.status).toBe(404)
+            expect(unpublished?.url).toContain('%40e2e%2Fgone/1.0.0')
+            yield* cleanup(s.context)
+          }),
+      ),
+    ),
+  )
+
+  scenario(
+    'A download whose bytes disagree with dist.integrity is a hard adoption error',
+    { scenarioLayer: NodeServices.layer },
+    Gherkin.Do.pipe(
+      Given('a tagged release whose registry declares a different integrity')(
+        'context',
+        () =>
+          prepare({
+            commits: [{
+              packages: [{ name: DAEMON_NAME, version: PackageVersion.make('0.1.0') }],
+              tags: [{ name: DAEMON_NAME, version: PackageVersion.make('0.1.0') }],
+            }],
+            serve: [{
+              name: DAEMON_NAME,
+              version: PackageVersion.make('0.1.0'),
+              files: { 'package/index.js': 'export const daemon = 1\n' },
+              integrity: 'sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
+            }],
+          }),
+      ),
+      When('adoption runs and downloads the tarball')(
+        'outcome',
+        (s) =>
+          Effect.gen(function*() {
+            const live = adaptersOf(s.context, [daemonMember])
             return yield* withWorkdir(
               s.context,
               attempt(Cell.run(Cell.provide(adoptCell, live), adoptRequest(s.context))),
             )
           }),
       ),
-      Then('adoption refuses with a registry fetch failure and writes no ledger')(
+      Then('adoption refuses with an integrity mismatch and writes no ledger')(
         (s) =>
           Effect.gen(function*() {
             const fs = yield* FileSystem
@@ -757,7 +842,7 @@ Feature('Adoption ledger').body(({ scenario }) => {
                 ),
               onSuccess: (report) => [adoptionDecisionTag(report.decision)],
             })
-            expect(kinds).toContain('RegistryFetchFailed')
+            expect(kinds).toContain('RegistryIntegrityMismatch')
             const written = yield* fs.exists(path.join(s.context.work, 'release-ledger.json'))
             expect(written).toBe(false)
             yield* cleanup(s.context)
@@ -925,6 +1010,107 @@ Feature('Adoption ledger').body(({ scenario }) => {
               }
             }
             expect(sides).toEqual(['published', 'published'])
+            yield* cleanup(s.context)
+          }),
+      ),
+    ),
+  )
+
+  const goneFixture: PrepareOptions = {
+    commits: [{
+      packages: [{ name: GONE_NAME, version: PackageVersion.make('1.0.0') }],
+      tags: [{ name: GONE_NAME, version: PackageVersion.make('1.0.0') }],
+    }],
+    serve: [],
+  }
+
+  scenario(
+    'A burned version refuses the plan red',
+    { scenarioLayer: NodeServices.layer },
+    Gherkin.Do.pipe(
+      Given('an adopted repository whose tag is burned')(
+        'context',
+        () => prepare(goneFixture),
+      ),
+      When('planning the burned version')(
+        'outcome',
+        (s) =>
+          Effect.gen(function*() {
+            const live = adaptersOf(s.context, [goneMember])
+            return yield* withWorkdir(
+              s.context,
+              Effect.gen(function*() {
+                yield* Cell.run(Cell.provide(adoptCell, live), adoptRequest(s.context))
+                return yield* attempt(Cell.run(Cell.provide(planCell, live), planRequest(s.context)))
+              }),
+            )
+          }),
+      ),
+      Then('the plan refuses naming the burned version and its evidence')(
+        (s) =>
+          Effect.gen(function*() {
+            const burned = Result.match(s.outcome, {
+              onFailure: (error) =>
+                Match.value(error).pipe(
+                  Match.tag('VersionBurned', (value) => `${value.package}@${value.version}:${value.status}`),
+                  Match.orElse(() => 'other'),
+                ),
+              onSuccess: () => 'planned',
+            })
+            expect(burned).toBe(`${GONE_NAME}@1.0.0:404`)
+            yield* cleanup(s.context)
+          }),
+      ),
+    ),
+  )
+
+  scenario(
+    'A burned version refuses tagging once its tag is gone',
+    { scenarioLayer: NodeServices.layer },
+    Gherkin.Do.pipe(
+      Given('an adopted repository whose burned tag was deleted')(
+        'context',
+        () => prepare(goneFixture),
+      ),
+      When('tagging the cycle')(
+        'outcome',
+        (s) =>
+          Effect.gen(function*() {
+            const live = adaptersOf(s.context, [goneMember])
+            return yield* withWorkdir(
+              s.context,
+              Effect.gen(function*() {
+                yield* Cell.run(Cell.provide(adoptCell, live), adoptRequest(s.context))
+                yield* git(s.context.work, [
+                  'push',
+                  '-q',
+                  'origin',
+                  `:refs/tags/${tagOf(GONE_NAME, PackageVersion.make('1.0.0'))}`,
+                ])
+                return yield* attempt(
+                  Cell.run(Cell.provide(tagCell, live), {
+                    tarballs: FsPath.make(s.context.tarballs),
+                    changelogDir: RelativePath.make('.changeset/changelogs'),
+                    dryRun: false,
+                    json: false,
+                  }),
+                )
+              }),
+            )
+          }),
+      ),
+      Then('the tag command refuses naming the burned version')(
+        (s) =>
+          Effect.gen(function*() {
+            const burned = Result.match(s.outcome, {
+              onFailure: (error) =>
+                Match.value(error).pipe(
+                  Match.tag('VersionBurned', (value) => `${value.package}@${value.version}:${value.status}`),
+                  Match.orElse(() => 'other'),
+                ),
+              onSuccess: () => 'tagged',
+            })
+            expect(burned).toBe(`${GONE_NAME}@1.0.0:404`)
             yield* cleanup(s.context)
           }),
       ),
