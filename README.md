@@ -414,6 +414,14 @@ into the system trust store. The apps therefore talk to their production URLs
 with no `localhost` behaviour anywhere: no app carries a test-only host, and
 no test-only base URL exists to forget to remove.
 
+`registry.npmjs.org` is redirected the same way, but nothing publishes there:
+verdaccio stands behind it as a tripwire. It keeps `publish: $all`, so a
+regression that publishes succeeds at the registry instead of hiding behind an
+auth error, and it writes every request to `/tmp/verdaccio/verdaccio.log`. The
+last phase, `the release never publishes to npm`, sends one `GET /-/ping` and
+waits for it in that log, so a tripwire that logs nothing cannot pass. It then
+asserts zero `PUT` requests in the log and no package under verdaccio's storage.
+
 Green and red runs alike leave a transcript under `e2e/.artifacts/<timestamp>/`:
 
 | Artifact         | Contents                                    |

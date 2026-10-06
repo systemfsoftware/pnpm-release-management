@@ -190,7 +190,7 @@ export class Session {
     )
     if (keep) {
       lines.push(
-        '  state.json       git log, versions, changesets, and emulated GitHub at the end',
+        '  state.json       git log, versions, changesets, registry and emulated GitHub at the end',
         '  fixture.tar.gz.b64  the fixture that produced this result',
       )
     }
