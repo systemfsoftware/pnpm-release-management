@@ -59,6 +59,13 @@ const alphaMember: Member = {
   publishable: true,
 }
 
+const gritlintMember: Member = {
+  name: PackageName.make('@e2e/gritlint'),
+  dir: RelativePath.make('packages/gritlint'),
+  manifest: { name: PackageName.make('@e2e/gritlint'), version: PackageVersion.make('0.1.0') },
+  publishable: false,
+}
+
 const betaMember: Member = {
   name: BETA_NAME,
   dir: RelativePath.make('packages/beta'),
@@ -280,8 +287,8 @@ const planRequest = (context: Context) => ({
 const attempt = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<Result.Result<A, E>, never, R> =>
   Effect.result(effect)
 
-const adoptionDecisionTag = (report: AdoptionReport): string =>
-  Match.value(report).pipe(
+const adoptionDecisionTag = (decision: AdoptionReport['decision']): string =>
+  Match.value(decision).pipe(
     Match.tagsExhaustive({
       AdoptionRecorded: () => 'AdoptionRecorded',
       AdoptionVacant: () => 'AdoptionVacant',
@@ -302,9 +309,7 @@ const failureTag = (failure: AdoptionFailure): string =>
     Match.tagsExhaustive({
       RegistryFetchFailed: () => 'RegistryFetchFailed',
       RegistryMetadataMalformed: () => 'RegistryMetadataMalformed',
-      RegistryDownloadFailed: () => 'RegistryDownloadFailed',
       RegistryIntegrityMismatch: () => 'RegistryIntegrityMismatch',
-      TarballUnreadable: () => 'TarballUnreadable',
     }),
   )
 
@@ -333,24 +338,36 @@ Feature('Adoption ledger').body(({ scenario }) => {
     'A lightweight release is adopted against its registry bytes and then plans green',
     { scenarioLayer: NodeServices.layer },
     Gherkin.Do.pipe(
-      Given('a fixture repository with one lightweight release tag served by a registry')(
+      Given('a fixture repository whose tags cover an older version, a retired name and a private member')(
         'context',
         () =>
           prepare({
-            pack: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
-            serve: [{
-              name: ALPHA_NAME,
-              version: ALPHA_VERSION,
-              files: { 'package/index.js': 'export const alpha = 1\n' },
-            }],
-            tag: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+            pack: [
+              { name: ALPHA_NAME, version: ALPHA_VERSION },
+              { name: gritlintMember.name, version: gritlintMember.manifest.version },
+            ],
+            serve: [
+              { name: ALPHA_NAME, version: ALPHA_VERSION, files: { 'package/index.js': 'export const alpha = 1\n' } },
+              {
+                name: ALPHA_NAME,
+                version: PackageVersion.make('0.9.0'),
+                files: { 'package/index.js': 'export const alpha = 0\n' },
+              },
+              { name: BETA_NAME, version: BETA_VERSION, files: { 'package/index.js': 'export const retired = 1\n' } },
+            ],
+            tag: [
+              { name: ALPHA_NAME, version: ALPHA_VERSION },
+              { name: ALPHA_NAME, version: PackageVersion.make('0.9.0') },
+              { name: BETA_NAME, version: BETA_VERSION },
+              { name: gritlintMember.name, version: gritlintMember.manifest.version },
+            ],
           }),
       ),
       When('the release is adopted and then planned')(
         'outcome',
         (s) =>
           Effect.gen(function*() {
-            const live = adaptersOf(s.context, [alphaMember])
+            const live = adaptersOf(s.context, [alphaMember, gritlintMember])
             return yield* withWorkdir(
               s.context,
               Effect.gen(function*() {
@@ -373,16 +390,24 @@ Feature('Adoption ledger').body(({ scenario }) => {
             expect(
               Result.match(outcome.adopted, {
                 onFailure: () => 'refused',
-                onSuccess: (report) => adoptionDecisionTag(report),
+                onSuccess: (report) => adoptionDecisionTag(report.decision),
               }),
             ).toBe('AdoptionRecorded')
             expect(Option.isSome(outcome.ledger)).toBe(true)
             const entries = Option.getOrThrow(outcome.ledger).entries
-            expect(entries.length).toBe(1)
-            expect(entries[0]?.tag).toBe(tagOf(ALPHA_NAME, ALPHA_VERSION))
-            expect(entries[0]?.commit).toBe(outcome.commit)
-            expect(entries[0]?.version).toBe(ALPHA_VERSION)
-            expect(entries[0]?.sha256.startsWith('sha256-')).toBe(true)
+            expect(entries.length).toBe(3)
+            expect(entries.map((entry) => entry.tag)).toEqual([
+              `${ALPHA_NAME}@v0.9.0`,
+              `${ALPHA_NAME}@v1.0.0`,
+              `${BETA_NAME}@v${BETA_VERSION}`,
+            ])
+            expect(entries[1]?.commit).toBe(outcome.commit)
+            expect(entries[1]?.version).toBe(ALPHA_VERSION)
+            expect(entries.every((entry) => entry.sha256.startsWith('sha256-'))).toBe(true)
+            expect(Result.match(outcome.adopted, {
+              onFailure: () => -1,
+              onSuccess: (report) => report.excluded.length,
+            })).toBe(1)
             expect(phaseOfPlan(outcome.planned)).toBe('PlanSettled')
             yield* cleanup(s.context)
           }),
@@ -638,7 +663,7 @@ Feature('Adoption ledger').body(({ scenario }) => {
                   Match.tag('LedgerUnwritable', () => ['ledger-unwritable']),
                   Match.orElse(() => ['other']),
                 ),
-              onSuccess: (report) => [adoptionDecisionTag(report)],
+              onSuccess: (report) => [adoptionDecisionTag(report.decision)],
             })
             expect(kinds).toContain('RegistryFetchFailed')
             const written = yield* fs.exists(path.join(s.context.work, 'release-ledger.json'))

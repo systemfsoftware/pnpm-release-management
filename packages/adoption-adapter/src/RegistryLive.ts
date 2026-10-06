@@ -26,11 +26,23 @@ const makeRegistry = (client: HttpClient.HttpClient): RegistryPort => ({
       )
       if (response.status === 404) {
         return yield* Effect.fail(
-          RegistryFetchFailed.make({ package: name, version, reason: `registry has no ${name}@${version}` }),
+          RegistryFetchFailed.make({
+            package: name,
+            version,
+            reason: `registry has no ${name}@${version}`,
+            status: 404,
+          }),
         )
       }
       const ok = yield* HttpClientResponse.filterStatusOk(response).pipe(
-        Effect.mapError((error) => RegistryFetchFailed.make({ package: name, version, reason: reasonOf(error) })),
+        Effect.mapError((error) =>
+          RegistryFetchFailed.make({
+            package: name,
+            version,
+            reason: reasonOf(error),
+            status: response.status,
+          })
+        ),
       )
       return yield* HttpClientResponse.schemaBodyJson(S.Struct({ dist: RegistryMetadata }))(ok).pipe(
         Effect.map((envelope) => envelope.dist),
@@ -44,11 +56,13 @@ const makeRegistry = (client: HttpClient.HttpClient): RegistryPort => ({
       )
       if (response.status === 404) {
         return yield* Effect.fail(
-          RegistryDownloadFailed.make({ url, reason: `registry has no tarball at ${url}` }),
+          RegistryDownloadFailed.make({ url, reason: `registry has no tarball at ${url}`, status: 404 }),
         )
       }
       const ok = yield* HttpClientResponse.filterStatusOk(response).pipe(
-        Effect.mapError((error) => RegistryDownloadFailed.make({ url, reason: reasonOf(error) })),
+        Effect.mapError((error) =>
+          RegistryDownloadFailed.make({ url, reason: reasonOf(error), status: response.status })
+        ),
       )
       const buffer = yield* ok.arrayBuffer.pipe(
         Effect.mapError((error) => RegistryDownloadFailed.make({ url, reason: reasonOf(error) })),

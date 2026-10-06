@@ -354,10 +354,10 @@ github-release-management adopt \
   --output release-ledger.json
 ```
 
-`--registry <url>` is required and has no default. For every member of
-`pnpm-workspace.yaml` that is not `private` whose `<name>@v<version>` tag exists
-on `--remote` (`origin` by default), adoption fetches `<name>@<version>` from the
-registry, downloads `dist.tarball`, and records one entry per tag:
+`--registry <url>` is required and has no default. Adoption reads every release
+tag `<name>@v<version>` on `--remote` (`origin` by default) — not only the
+current version of a current member. For each tag it fetches `<name>@<version>`
+from the registry, downloads `dist.tarball`, and records one entry:
 
 ```json
 {
@@ -375,11 +375,22 @@ registry, downloads `dist.tarball`, and records one entry per tag:
 }
 ```
 
+That covers an older version of a current member (the immutability law applies if
+anyone re-releases that `name@version`) and a name that is no longer a workspace
+member (the tag name gives `name@version`, split on the last `@v`). A tag of a
+current private member is never published, so it is excluded and listed in the
+report as `private, never published`.
+
 The `files` map is the same digest shape the tag annotations use, so a later
-mismatch can name the first differing file. A version whose bytes cannot be
-fetched — a 404, a network failure, or a download whose sha512 does not equal
-`dist.integrity` — is listed as a hard error in the report and the command exits
-non-zero; nothing is admitted silently.
+mismatch can name the first differing file. Fetches run four at a time and retry
+a transient registry failure (a 5xx or a timeout) three attempts with backoff; a
+404 is not transient. A version whose bytes cannot be fetched — a 404, a network
+failure, or a download whose sha512 does not equal `dist.integrity` — is listed
+as a hard error in the report and the command exits non-zero. Nothing is
+admitted silently, and an adoption with any error writes no ledger at all.
+
+The report prints a summary — `adopted <n> release tag(s), excluded <m> private
+tag(s), errors <k>` — followed by one line per error, `name@version: <reason>`.
 
 The ledger is one JSON file at the repository root, written by the command and
 never hand-edited: keys in a stable order, entries sorted by tag. It lands in its

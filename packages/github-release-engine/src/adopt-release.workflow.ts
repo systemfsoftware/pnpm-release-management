@@ -1,5 +1,6 @@
 import { Workflow } from '@systemfsoftware/effect-cell-types'
 import {
+  AdoptionExcluded,
   AdoptionFailure as AdoptionFailureSchema,
   DecisionTypeId,
   LedgerEntry,
@@ -23,15 +24,22 @@ export type AdoptionDecision = AdoptionRecorded | AdoptionVacant
 
 export class AdoptionRefused extends S.TaggedError<AdoptionRefused>()('AdoptionRefused', {
   failures: S.Array(AdoptionFailureSchema),
+  excluded: S.Array(AdoptionExcluded),
+  ledgered: S.Finite,
 }) {}
 
 export class AdoptionCommand extends S.TaggedClass<AdoptionCommand>()('AdoptionCommand', {
   entries: S.Array(LedgerEntry),
   failures: S.Array(AdoptionFailureSchema),
+  excluded: S.Array(AdoptionExcluded),
   output: RelativePath,
 }) {}
 
-const RefusedCase = S.TaggedStruct('Refused', { failures: S.Array(AdoptionFailureSchema) })
+const RefusedCase = S.TaggedStruct('Refused', {
+  failures: S.Array(AdoptionFailureSchema),
+  excluded: S.Array(AdoptionExcluded),
+  ledgered: S.Finite,
+})
 const RecordedCase = S.TaggedStruct('Recorded', { entries: S.Finite })
 const VacantCase = S.TaggedStruct('Vacant', {})
 const AdoptionCase = S.Union([RefusedCase, RecordedCase, VacantCase])
@@ -39,7 +47,11 @@ type AdoptionCase = S.Schema.Type<typeof AdoptionCase>
 
 const adoptionCaseOf = (command: AdoptionCommand): AdoptionCase => {
   if (command.failures.length > 0) {
-    return RefusedCase.make({ failures: [...command.failures] })
+    return RefusedCase.make({
+      failures: [...command.failures],
+      excluded: [...command.excluded],
+      ledgered: command.entries.length,
+    })
   }
   if (command.entries.length === 0) {
     return VacantCase.make({})
@@ -51,7 +63,14 @@ export const adoptRelease: Workflow.Workflow<AdoptionCommand, AdoptionDecision, 
   AdoptionCommand,
   (command): Result.Result<AdoptionDecision, AdoptionRefused> =>
     Match.value(adoptionCaseOf(command)).pipe(
-      Match.tag('Refused', (refused) => Result.fail(AdoptionRefused.make({ failures: [...refused.failures] }))),
+      Match.tag('Refused', (refused) =>
+        Result.fail(
+          AdoptionRefused.make({
+            failures: [...refused.failures],
+            excluded: [...refused.excluded],
+            ledgered: refused.ledgered,
+          }),
+        )),
       Match.tag('Recorded', (recorded) => Result.succeed(AdoptionRecorded.make({ entries: recorded.entries }))),
       Match.tag('Vacant', () => Result.succeed(AdoptionVacant.make({}))),
       Match.exhaustive,

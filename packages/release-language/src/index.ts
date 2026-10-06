@@ -120,6 +120,7 @@ export {
   ReleaseLabel,
 } from './PullRequest.schema.js'
 export {
+  AdoptionExcluded,
   AdoptionFailure,
   RegistryDownloadFailed,
   RegistryFetchFailed,

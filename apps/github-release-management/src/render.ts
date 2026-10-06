@@ -21,7 +21,6 @@ import {
   type PlanDeferredUnknown,
   type PlanRefusal,
   type PullRequestRefusal,
-  type RelativePath,
   type ReleaseTag,
   type TagRefusal,
   type TarballRefusal,
@@ -349,7 +348,7 @@ export const renderAdoptRefusal = (refusal: AdoptFailure): Effect.Effect<void, n
         AdoptionRefused: (refused) =>
           [
             ...refused.failures.map(adoptionFailureText),
-            `adoption refused: ${refused.failures.length} version(s) could not be recorded against the registry`,
+            `adopted ${refused.ledgered} release tag(s), excluded ${refused.excluded.length} private tag(s), errors ${refused.failures.length}`,
           ].join('\n'),
         ConfigUnreadable: (unreadable) => `${unreadable.path}: cannot be read`,
         ConfigMalformed: (malformed) => `${malformed.path}: ${malformed.reason}`,
@@ -371,28 +370,32 @@ export const renderAdoptRefusal = (refusal: AdoptFailure): Effect.Effect<void, n
 const adoptionFailureText = (failure: AdoptionFailure): string =>
   Match.value(failure).pipe(
     Match.tagsExhaustive({
-      RegistryFetchFailed: (fetched) =>
-        `refused: registry-fetch-failed, package: ${fetched.package}@${fetched.version}, reason: ${fetched.reason}`,
-      RegistryMetadataMalformed: (malformed) =>
-        `refused: registry-metadata-malformed, package: ${malformed.package}@${malformed.version}, reason: ${malformed.reason}`,
-      RegistryDownloadFailed: (download) =>
-        `refused: registry-download-failed, url: ${download.url}, reason: ${download.reason}`,
+      RegistryFetchFailed: (fetched) => `${fetched.package}@${fetched.version}: ${fetched.reason}`,
+      RegistryMetadataMalformed: (malformed) => `${malformed.package}@${malformed.version}: ${malformed.reason}`,
       RegistryIntegrityMismatch: (mismatch) =>
-        `refused: registry-integrity-mismatch, package: ${mismatch.package}@${mismatch.version}, expected: ${mismatch.expected}, actual: ${mismatch.actual}`,
-      TarballUnreadable: (unreadable) =>
-        `refused: tarball-unreadable, path: ${unreadable.path}, reason: ${unreadable.reason}`,
+        `${mismatch.package}@${mismatch.version}: dist.integrity ${mismatch.expected} but the download hashes to ${mismatch.actual}`,
     }),
   )
 
-export const renderAdoption = (
-  report: AdoptionReport,
-  output: RelativePath,
-): Effect.Effect<void, never, Reporter> =>
-  Match.value(report).pipe(
-    Match.tag('AdoptionRecorded', (recorded) => emit(`adopted ${recorded.entries} release tag(s); wrote ${output}`)),
-    Match.tag('AdoptionVacant', () => emit(`adopted 0 release tag(s); wrote ${output}`)),
+const adoptionLedgered = (decision: AdoptionReport['decision']): number =>
+  Match.value(decision).pipe(
+    Match.tag('AdoptionRecorded', (recorded) => recorded.entries),
+    Match.tag('AdoptionVacant', () => 0),
     Match.exhaustive,
   )
+
+export const renderAdoption = (report: AdoptionReport): Effect.Effect<void, never, Reporter> =>
+  Effect.gen(function*() {
+    const reporter = yield* Reporter
+    yield* reporter.emit(
+      `adopted ${
+        adoptionLedgered(report.decision)
+      } release tag(s), excluded ${report.excluded.length} private tag(s), wrote ${report.output}`,
+    )
+    for (const entry of report.excluded) {
+      yield* reporter.note(`${entry.tag}: ${entry.reason}`)
+    }
+  })
 
 export const renderRelease = (decision: GithubReleaseDecision): Effect.Effect<void, never, Reporter> =>
   Match.value(decision).pipe(

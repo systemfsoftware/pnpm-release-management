@@ -145,7 +145,7 @@ const adopt = Command.make('adopt', {
       Effect.provide(TarballLive),
       Effect.provide(RegistryLive.pipe(Layer.provide(FetchHttpClient.layer))),
     )
-    yield* renderAdoption(report, request.output)
+    yield* renderAdoption(report)
   }).pipe(Effect.catch(renderAdoptRefusal)))
 
 const plan = Command.make('plan', {

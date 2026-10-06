@@ -1,6 +1,5 @@
 import * as S from 'effect/Schema'
-import { TarballUnreadable } from './Integrity.schema.js'
-import { HttpUrl, PackageName, PackageVersion } from './Workspace.schema.js'
+import { HttpUrl, PackageName, PackageVersion, ReleaseTag } from './Workspace.schema.js'
 
 export const RegistryMetadata = S.Struct({
   tarball: HttpUrl,
@@ -12,6 +11,7 @@ export const RegistryFetchFailed = S.TaggedStruct('RegistryFetchFailed', {
   package: PackageName,
   version: PackageVersion,
   reason: S.String,
+  status: S.optional(S.Number),
 })
 export type RegistryFetchFailed = S.Schema.Type<typeof RegistryFetchFailed>
 
@@ -25,6 +25,7 @@ export type RegistryMetadataMalformed = S.Schema.Type<typeof RegistryMetadataMal
 export const RegistryDownloadFailed = S.TaggedStruct('RegistryDownloadFailed', {
   url: HttpUrl,
   reason: S.String,
+  status: S.optional(S.Number),
 })
 export type RegistryDownloadFailed = S.Schema.Type<typeof RegistryDownloadFailed>
 
@@ -43,11 +44,17 @@ export const RegistryRefusal = S.Union([
 ])
 export type RegistryRefusal = S.Schema.Type<typeof RegistryRefusal>
 
+export const AdoptionExcluded = S.Struct({
+  tag: ReleaseTag,
+  package: PackageName,
+  version: PackageVersion,
+  reason: S.String,
+})
+export type AdoptionExcluded = S.Schema.Type<typeof AdoptionExcluded>
+
 export const AdoptionFailure = S.Union([
   RegistryFetchFailed,
   RegistryMetadataMalformed,
-  RegistryDownloadFailed,
   RegistryIntegrityMismatch,
-  TarballUnreadable,
 ])
 export type AdoptionFailure = S.Schema.Type<typeof AdoptionFailure>
