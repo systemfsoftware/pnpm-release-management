@@ -2,7 +2,7 @@ import { Gherkin, Given, it, layer, makeFeature, Then, When } from '@systemfsoft
 import { Effect } from 'effect'
 import * as S from 'effect/Schema'
 import { expect } from 'vitest'
-import { headSha, MEMBERS, setupFixture } from '../fixture.js'
+import { headSha, MEMBERS, packTarballs, setupFixture } from '../fixture.js'
 import { FIXTURE, parseJson, REGISTRY, REGISTRY_LOG, REGISTRY_STORAGE, type World } from '../harness.js'
 import { Session } from '../session.js'
 import { CapturedEntry, Manifest, Pulls, Release, Releases } from './__fixtures__/pipeline.schema.js'
@@ -64,6 +64,16 @@ const readVersion = async (world: World, name: string): Promise<string> => {
   return S.decodeUnknownSync(Manifest)(parseJson(raw)).version
 }
 
+const nextMinor = (version: string): string => {
+  const [major, minor] = version.split('.').map(Number)
+  return `${major}.${(minor ?? 0) + 1}.0`
+}
+
+const nextPatch = (version: string): string => {
+  const [major, minor, patch] = version.split('.').map(Number)
+  return `${major}.${minor}.${(patch ?? 0) + 1}`
+}
+
 const capturedTags = (text: string): ReadonlyArray<string> => {
   const entries = S.decodeUnknownSync(S.Array(CapturedEntry))(parseJson(text))
   return entries.map((entry) => entry.tag)
@@ -90,6 +100,10 @@ const registryPublishes = (log: string): ReadonlyArray<string> =>
 
 const runPhases = async (session: Session): Promise<void> => {
   let base = ''
+  let release111 = ''
+  let release120 = ''
+  let releasedAlpha = ''
+  let releasedBeta = ''
 
   await session.phase('fixture is a two package pnpm workspace with tags for 1.0.0', async (world) => {
     await setupFixture(world)
@@ -120,7 +134,8 @@ const runPhases = async (session: Session): Promise<void> => {
   })
 
   await session.phase('plan asks for a version step', async (world) => {
-    const planned = await world.tool('github-release-management', 'plan')
+    const tarballs = await packTarballs(world)
+    const planned = await world.tool('github-release-management', 'plan', `--tarballs ${tarballs}`)
     const output = `${planned.stdout}${planned.stderr}`
     expect(planned.code).toBe(0)
     expect(output).toContain('pending_intents=1')
@@ -155,7 +170,8 @@ const runPhases = async (session: Session): Promise<void> => {
   })
 
   await session.phase('plan asks for a release step', async (world) => {
-    const planned = await world.tool('github-release-management', 'plan')
+    const tarballs = await packTarballs(world)
+    const planned = await world.tool('github-release-management', 'plan', `--tarballs ${tarballs}`)
     const output = `${planned.stdout}${planned.stderr}`
     expect(planned.code).toBe(0)
     expect(output).toContain('pending_intents=0')
@@ -164,10 +180,11 @@ const runPhases = async (session: Session): Promise<void> => {
   })
 
   await session.phase('captured set is written for the later steps', async (world) => {
+    const tarballs = await packTarballs(world)
     const captured = await world.tool(
       'github-release-management',
       'tag',
-      '--output /tmp/captured.json',
+      `--tarballs ${tarballs} --output /tmp/captured.json`,
     )
     const output = `${captured.stdout}${captured.stderr}`
     expect(captured.code).toBe(0)
@@ -218,10 +235,11 @@ const runPhases = async (session: Session): Promise<void> => {
   })
 
   await session.phase('tagging pushes one tag per captured package', async (world) => {
+    const tarballs = await packTarballs(world)
     const tagged = await world.tool(
       'github-release-management',
       'tag',
-      '--captured /tmp/captured.json',
+      `--captured /tmp/captured.json --tarballs ${tarballs}`,
     )
     expect(tagged.code).toBe(0)
 
@@ -230,7 +248,8 @@ const runPhases = async (session: Session): Promise<void> => {
   })
 
   await session.phase('plan is empty once tags exist', async (world) => {
-    const planned = await world.tool('github-release-management', 'plan')
+    const tarballs = await packTarballs(world)
+    const planned = await world.tool('github-release-management', 'plan', `--tarballs ${tarballs}`)
     const output = `${planned.stdout}${planned.stderr}`
     expect(planned.code).toBe(0)
     expect(output).toContain('this_cycle=0')
@@ -301,20 +320,42 @@ const runPhases = async (session: Session): Promise<void> => {
   })
 
   await session.phase('changesets versioning releases each package and settles', async (world) => {
-    await world.must('git checkout -q -- . && git clean -fdq', { cwd: FIXTURE })
-    const alpha = await readVersion(world, 'alpha')
+    await world.must('git add -A && git commit -q -m "chore(release): version packages"', { cwd: FIXTURE })
+    await world.must('git push -q origin HEAD:main', { cwd: FIXTURE })
+    release111 = (await world.must('git rev-parse HEAD', { cwd: FIXTURE })).stdout.trim()
+    releasedAlpha = await readVersion(world, 'alpha')
+    releasedBeta = await readVersion(world, 'beta')
+
+    const seeded111 = await packTarballs(world, '/tmp/prm-tarballs-111')
+    const planning111 = await world.tool('github-release-management', 'plan', `--tarballs ${seeded111}`)
+    expect(`${planning111.stdout}${planning111.stderr}`).toContain('phase=release')
+    const captured111 = await world.tool(
+      'github-release-management',
+      'tag',
+      `--tarballs ${seeded111} --output /tmp/captured-111.json`,
+    )
+    expect(captured111.code).toBe(0)
+    expect(
+      await world.tool(
+        'github-release-management',
+        'tag',
+        `--captured /tmp/captured-111.json --tarballs ${seeded111}`,
+      ),
+    ).toMatchObject({ code: 0 })
+    const seeded = await world.must('git ls-remote --tags origin', { cwd: FIXTURE })
+    expect(seeded.stdout).toContain(`refs/tags/@e2e/alpha@v${releasedAlpha}`)
+    expect(seeded.stdout).toContain(`refs/tags/@e2e/beta@v${releasedBeta}`)
+
     const betaManifest = parseJson(await world.read(`${FIXTURE}/packages/beta/package.json`))
     await world.write(
       `${FIXTURE}/packages/beta/package.json`,
-      `${
-        JSON.stringify({ ...Object(betaManifest), dependencies: { '@e2e/alpha': `workspace:^${alpha}` } }, null, 2)
-      }\n`,
+      `${JSON.stringify({ ...Object(betaManifest), dependencies: { '@e2e/alpha': 'workspace:^' } }, null, 2)}\n`,
     )
     await world.write(`${FIXTURE}/release.jsonc`, CHANGESETS_RELEASE_JSONC)
     await world.must('pnpm install --silent && git add -A && git commit -q -m "chore: changesets versioning"', {
       cwd: FIXTURE,
     })
-    const beta = await readVersion(world, 'beta')
+    await world.must('git push -q origin HEAD:main', { cwd: FIXTURE })
 
     for (const [bump, slug] of [['minor', 'alpha-minor'], ['patch', 'alpha-patch']] as const) {
       const created = await world.tool(
@@ -329,13 +370,10 @@ const runPhases = async (session: Session): Promise<void> => {
     const versioned = await world.tool('version-management', 'bump')
     expect(versioned.code).toBe(0)
 
-    const [major, minor] = alpha.split('.').map(Number)
-    const alphaNext = `${major}.${(minor ?? 0) + 1}.0`
+    const alphaNext = nextMinor(releasedAlpha)
+    const betaNext = nextPatch(releasedBeta)
     expect(await readVersion(world, 'alpha')).toBe(alphaNext)
-    const [betaMajor, betaMinor, betaPatch] = beta.split('.').map(Number)
-    const betaNext = `${betaMajor}.${betaMinor}.${(betaPatch ?? 0) + 1}`
     expect(await readVersion(world, 'beta')).toBe(betaNext)
-    expect(await world.read(`${FIXTURE}/packages/beta/package.json`)).toContain(`"workspace:^${alphaNext}"`)
 
     const intents = await world.must('ls .changeset', { cwd: FIXTURE })
     expect(intents.stdout).not.toContain('alpha-minor')
@@ -345,21 +383,36 @@ const runPhases = async (session: Session): Promise<void> => {
     expect(alphaLog).toContain('alpha patch')
     await world.read(`${FIXTURE}/.changeset/changelogs/@e2e!beta@${betaNext}.md`)
 
+    const releasing120 = await packTarballs(world, '/tmp/prm-tarballs-120')
+    const packedBeta = await world.must(`tar -xzOf ${releasing120}/e2e-beta-${betaNext}.tgz package/package.json`)
+    expect(packedBeta.stdout).toContain(`"@e2e/alpha": "^${alphaNext}"`)
+
     await world.must(
       'git add -A && git commit -q -m "chore(release): version packages" && git push -q origin HEAD:main',
       {
         cwd: FIXTURE,
       },
     )
+    release120 = (await world.must('git rev-parse HEAD', { cwd: FIXTURE })).stdout.trim()
 
-    const releasing = await world.tool('github-release-management', 'plan')
+    const releasing = await world.tool('github-release-management', 'plan', `--tarballs ${releasing120}`)
     expect(`${releasing.stdout}${releasing.stderr}`).toContain('phase=release')
-    const captured = await world.tool('github-release-management', 'tag', '--output /tmp/changesets-captured.json')
+    const captured = await world.tool(
+      'github-release-management',
+      'tag',
+      `--tarballs ${releasing120} --output /tmp/changesets-captured.json`,
+    )
     expect(captured.code).toBe(0)
-    expect(await world.tool('github-release-management', 'tag', '--captured /tmp/changesets-captured.json'))
-      .toMatchObject({ code: 0 })
-    expect(await world.tool('github-release-management', 'release', '--captured /tmp/changesets-captured.json'))
-      .toMatchObject({ code: 0 })
+    expect(
+      await world.tool(
+        'github-release-management',
+        'tag',
+        `--captured /tmp/changesets-captured.json --tarballs ${releasing120}`,
+      ),
+    ).toMatchObject({ code: 0 })
+    expect(
+      await world.tool('github-release-management', 'release', '--captured /tmp/changesets-captured.json'),
+    ).toMatchObject({ code: 0 })
 
     const tags = await world.must('git ls-remote --tags origin', { cwd: FIXTURE })
     expect(tags.stdout).toContain(`refs/tags/@e2e/alpha@v${alphaNext}`)
@@ -367,8 +420,48 @@ const runPhases = async (session: Session): Promise<void> => {
     const notes = await fetchRelease(world, `@e2e/alpha@v${alphaNext}`)
     expect(notes.status).toBe(200)
 
-    const settled = await world.tool('github-release-management', 'plan')
+    const settled = await world.tool('github-release-management', 'plan', `--tarballs ${releasing120}`)
     expect(`${settled.stdout}${settled.stderr}`).toContain('phase=none')
+  })
+
+  await session.phase('a released identity is immutable and a reverted manifest is refused', async (world) => {
+    await world.must(`git checkout -q ${release111}`, { cwd: FIXTURE })
+    const historical = await packTarballs(world, '/tmp/prm-tarballs-historical')
+    const verified = await world.tool('github-release-management', 'plan', `--tarballs ${historical}`)
+    expect(verified.code).toBe(0)
+    expect(`${verified.stdout}${verified.stderr}`).toContain('phase=none')
+
+    await world.must(`git checkout -q ${release120}`, { cwd: FIXTURE })
+    const sabotaged = parseJson(await world.read(`${FIXTURE}/packages/beta/package.json`))
+    await world.write(
+      `${FIXTURE}/packages/beta/package.json`,
+      `${
+        JSON.stringify(
+          {
+            ...Object(sabotaged),
+            version: releasedBeta,
+            dependencies: { '@e2e/alpha': `workspace:~${releasedAlpha}` },
+          },
+          null,
+          2,
+        )
+      }\n`,
+    )
+    await world.must('git add -A && git commit -q -m "chore: sabotage the released manifest"', { cwd: FIXTURE })
+    const sabotagedTarballs = await packTarballs(world, '/tmp/prm-tarballs-sabotage')
+    const refused = await world.tool('github-release-management', 'plan', `--tarballs ${sabotagedTarballs}`)
+    expect(refused.code).not.toBe(0)
+    const refusal = `${refused.stdout}${refused.stderr}`
+    expect(refusal).toContain(`@e2e/beta@${releasedBeta}`)
+    expect(refusal).toContain('package/package.json')
+    expect(refusal).toMatch(/recorded: sha512-/)
+    expect(refusal).toMatch(/current: sha512-/)
+
+    await world.must(`git reset --hard ${release120}`, { cwd: FIXTURE })
+    const restored = await packTarballs(world, '/tmp/prm-tarballs-restored')
+    const green = await world.tool('github-release-management', 'plan', `--tarballs ${restored}`)
+    expect(green.code).toBe(0)
+    expect(`${green.stdout}${green.stderr}`).toContain('phase=none')
   })
 
   await session.phase('the release never publishes to npm', async (world) => {

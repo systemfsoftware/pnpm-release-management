@@ -30,4 +30,12 @@ export {
   TagPushed,
   TagUpToDate,
 } from './tag-packages.workflow.js'
+export { TagAnnotation } from './tag-packages.workflow.js'
 export { tagCell, TagRequest } from './tag.js'
+export {
+  IntegrityCommand,
+  type IntegrityDecision,
+  IntegrityVacant,
+  IntegrityVerified,
+  verifyIntegrity,
+} from './verify-integrity.workflow.js'

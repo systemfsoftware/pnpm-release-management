@@ -2,6 +2,7 @@ export { ChangeEvidencePort } from './ChangeEvidencePort.js'
 export type { ChangeEvidenceRefusal } from './ChangeEvidencePort.js'
 export { ChangelogStore } from './ChangelogStore.js'
 export { ChangesetsPort } from './ChangesetsPort.js'
+export type { ChangesetsRefusal } from './ChangesetsPort.js'
 export { PlannedBump, PlannedRelease } from './ChangesetsPort.schema.js'
 export { ChangesetStore } from './ChangesetStore.js'
 export {
@@ -57,6 +58,17 @@ export {
 } from './GithubRelease.schema.js'
 export { GitPort } from './GitPort.js'
 export {
+  IntegrityRefusal,
+  TagAnnotationLightweight,
+  TagAnnotationMalformed,
+  TagIntegrityMismatch,
+  TarballDigest,
+  TarballIntegrity,
+  TarballMissing,
+  TarballRefusal,
+  TarballUnreadable,
+} from './Integrity.schema.js'
+export {
   Bump,
   Intent,
   IntentFrontmatter,
@@ -111,6 +123,7 @@ export {
   TagExcludedMalformed,
   TagRefusal,
 } from './Tag.schema.js'
+export { TarballPort } from './TarballPort.js'
 export {
   ChangelogFile,
   ChangelogRefusal,

@@ -22,10 +22,12 @@ import {
 import { Effect, Layer, Result, Schema as S } from 'effect'
 import * as Match from 'effect/Match'
 import { expect } from 'vitest'
+import { makeFakeChangesetsPort } from './__fixtures__/FakeChangesetsPort.js'
 import { makeFakeChangesetStore } from './__fixtures__/FakeChangesetStore.js'
 import { makeFakeCycleStore } from './__fixtures__/FakeCycleStore.js'
 import { makeFakeForge } from './__fixtures__/FakeForge.js'
 import { makeFakeGit } from './__fixtures__/FakeGit.js'
+import { makeFakeTarball } from './__fixtures__/FakeTarball.js'
 import { makeFakeWorkspaceStore } from './__fixtures__/FakeWorkspaceStore.js'
 
 const Feature = makeFeature({ it, layer })
@@ -64,12 +66,15 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
     const git = makeFakeGit({ tags: [tagOf('alpha', '1.0.0')] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer)
+    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer, makeFakeTarball(), makeFakeChangesetsPort())
     scenario(
       'Pending work with nothing owed starts versioning',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
-        Given('one pending intent and no owed tags')('input', () => Effect.succeed({ changelogDir })),
+        Given('one pending intent and no owed tags')(
+          'input',
+          () => Effect.succeed({ tarballs: FsPath.make('tarballs'), changelogDir }),
+        ),
         When('planning the release')('outcome', (s) =>
           Effect.match(Cell.run(Cell.provide(planCell, live), s.input), {
             onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
@@ -104,12 +109,15 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
     const git = makeFakeGit({ tags: [] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer)
+    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer, makeFakeTarball(), makeFakeChangesetsPort())
     scenario(
       'Owed tags drain before pending work',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
-        Given('one pending intent and one owed tag')('input', () => Effect.succeed({ changelogDir })),
+        Given('one pending intent and one owed tag')(
+          'input',
+          () => Effect.succeed({ tarballs: FsPath.make('tarballs'), changelogDir }),
+        ),
         When('planning the release')('outcome', (s) =>
           Effect.match(Cell.run(Cell.provide(planCell, live), s.input), {
             onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
@@ -143,12 +151,15 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
     const git = makeFakeGit({ tags: [tagOf('alpha', '1.0.0')] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer)
+    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer, makeFakeTarball(), makeFakeChangesetsPort())
     scenario(
       'A quiet repository settles with no work',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
-        Given('no pending intents and nothing owed')('input', () => Effect.succeed({ changelogDir })),
+        Given('no pending intents and nothing owed')(
+          'input',
+          () => Effect.succeed({ tarballs: FsPath.make('tarballs'), changelogDir }),
+        ),
         When('planning the release')('outcome', (s) =>
           Effect.match(Cell.run(Cell.provide(planCell, live), s.input), {
             onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
@@ -178,14 +189,15 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
     const git = makeFakeGit({ tags: [tagOf('alpha', '1.0.0')] })
     const cycles = makeFakeCycleStore({ deferredFiles: { 'deferred.txt': 'ghost\n' } })
-    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer)
+    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer, makeFakeTarball(), makeFakeChangesetsPort())
     scenario(
       'Unknown deferred names warn without failing the plan',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
         Given('a deferred file naming a package outside the workspace')(
           'input',
-          () => Effect.succeed({ changelogDir, deferred: FsPath.make('deferred.txt') }),
+          () =>
+            Effect.succeed({ tarballs: FsPath.make('tarballs'), changelogDir, deferred: FsPath.make('deferred.txt') }),
         ),
         When('planning the release')('outcome', (s) =>
           Effect.match(Cell.run(Cell.provide(planCell, live), s.input), {
@@ -227,14 +239,14 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
     const git = makeFakeGit({ tags: [tagOf('alpha', '1.0.0')] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer)
+    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer, makeFakeTarball(), makeFakeChangesetsPort())
     scenario(
       'A missing deferred file refuses the plan at the read',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
         Given('a deferred path with no file behind it')(
           'input',
-          () => Effect.succeed({ changelogDir, deferred: FsPath.make('nope.txt') }),
+          () => Effect.succeed({ tarballs: FsPath.make('tarballs'), changelogDir, deferred: FsPath.make('nope.txt') }),
         ),
         When('planning the release')('outcome', (s) =>
           Effect.match(Cell.run(Cell.provide(planCell, live), s.input), {
@@ -266,14 +278,14 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members, files: {} })
     const git = makeFakeGit({ tags: [] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(workspace, git, cycles.layer)
+    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball())
     scenario(
       'Owed packages are tagged and pushed',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
         Given('two owed packages with no tags on the remote')(
           'input',
-          () => Effect.succeed({ dryRun: false, json: false, changelogDir }),
+          () => Effect.succeed({ tarballs: FsPath.make('tarballs'), dryRun: false, json: false, changelogDir }),
         ),
         When('tagging the cycle')('outcome', (s) =>
           Effect.match(Cell.run(Cell.provide(tagCell, live), s.input), {
@@ -307,14 +319,14 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members, files: {} })
     const git = makeFakeGit({ tags: [] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(workspace, git, cycles.layer)
+    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball())
     scenario(
       'A dry run previews tags without touching the remote',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
         Given('two owed packages with a dry run requested')(
           'input',
-          () => Effect.succeed({ dryRun: true, json: false, changelogDir }),
+          () => Effect.succeed({ tarballs: FsPath.make('tarballs'), dryRun: true, json: false, changelogDir }),
         ),
         When('tagging the cycle')('outcome', (s) =>
           Effect.match(Cell.run(Cell.provide(tagCell, live), s.input), {
@@ -347,14 +359,14 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members, files: {} })
     const git = makeFakeGit({ tags: [tagOf('alpha', '1.0.0'), tagOf('beta', '2.0.0')] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(workspace, git, cycles.layer)
+    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball())
     scenario(
       'A fully tagged workspace reports up to date',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
         Given('every package already tagged on the remote')(
           'input',
-          () => Effect.succeed({ dryRun: false, json: false, changelogDir }),
+          () => Effect.succeed({ tarballs: FsPath.make('tarballs'), dryRun: false, json: false, changelogDir }),
         ),
         When('tagging the cycle')('outcome', (s) =>
           Effect.match(Cell.run(Cell.provide(tagCell, live), s.input), {
@@ -385,14 +397,21 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members, files: {} })
     const git = makeFakeGit({ tags: [] })
     const cycles = makeFakeCycleStore({ capturedFiles: { 'cap.json': ['alpha@v9.9.9'] } })
-    const live = Layer.mergeAll(workspace, git, cycles.layer)
+    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball())
     scenario(
       'A captured file reuses the prior cycle',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
         Given('a captured file holding a prior cycle')(
           'input',
-          () => Effect.succeed({ dryRun: false, json: false, changelogDir, captured: FsPath.make('cap.json') }),
+          () =>
+            Effect.succeed({
+              tarballs: FsPath.make('tarballs'),
+              dryRun: false,
+              json: false,
+              changelogDir,
+              captured: FsPath.make('cap.json'),
+            }),
         ),
         When('tagging the captured cycle')(
           'outcome',
@@ -428,14 +447,21 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const cycles = makeFakeCycleStore({
       capturedFiles: { 'cap.json': ['alpha@v1.0.0', 'beta@v2.0.0'] },
     })
-    const live = Layer.mergeAll(workspace, git, cycles.layer)
+    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball())
     scenario(
       'Re-tagging a captured cycle over pushed tags stays idempotent',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
         Given('a captured cycle whose tags already sit on the remote')(
           'input',
-          () => Effect.succeed({ dryRun: false, json: false, changelogDir, captured: FsPath.make('cap.json') }),
+          () =>
+            Effect.succeed({
+              tarballs: FsPath.make('tarballs'),
+              dryRun: false,
+              json: false,
+              changelogDir,
+              captured: FsPath.make('cap.json'),
+            }),
         ),
         When('tagging the captured cycle')(
           'outcome',
@@ -470,14 +496,21 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members, files: {} })
     const git = makeFakeGit({ tags: [] })
     const cycles = makeFakeCycleStore({ capturedFiles: { 'cap.json': 'nope' } })
-    const live = Layer.mergeAll(workspace, git, cycles.layer)
+    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball())
     scenario(
       'A malformed captured file refuses tagging',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
         Given('a captured file holding malformed text')(
           'input',
-          () => Effect.succeed({ dryRun: false, json: false, changelogDir, captured: FsPath.make('cap.json') }),
+          () =>
+            Effect.succeed({
+              tarballs: FsPath.make('tarballs'),
+              dryRun: false,
+              json: false,
+              changelogDir,
+              captured: FsPath.make('cap.json'),
+            }),
         ),
         When('tagging the captured cycle')(
           'outcome',
@@ -513,14 +546,21 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members, files: {} })
     const git = makeFakeGit({ tags: [] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(workspace, git, cycles.layer)
+    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball())
     scenario(
       'A preview with an output file captures the full entries',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
         Given('two owed packages with an output file requested')(
           'input',
-          () => Effect.succeed({ dryRun: false, json: false, changelogDir, output: FsPath.make('out.json') }),
+          () =>
+            Effect.succeed({
+              tarballs: FsPath.make('tarballs'),
+              dryRun: false,
+              json: false,
+              changelogDir,
+              output: FsPath.make('out.json'),
+            }),
         ),
         When('tagging the cycle')('outcome', (s) =>
           Effect.match(Cell.run(Cell.provide(tagCell, live), s.input), {
