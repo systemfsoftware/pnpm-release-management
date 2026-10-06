@@ -268,7 +268,6 @@ packages = forEachSystem (pkgs:
   pnpm-release-management.lib.mkPnpmWorkspacePackages {
     inherit pkgs;
     src = self;
-    hash = "sha256-…"; # third-party dependencies, keyed by pnpm-lock.yaml
   });
 ```
 
@@ -277,10 +276,15 @@ For every member of `pnpm-workspace.yaml` that is not `private`, this gives
 dropped from the name. It also gives `packages.<system>.workspace-tarballs`:
 every tarball plus an `index.json` of `{ name, file }`.
 
-- Third-party dependencies enter only through nixpkgs' `fetchPnpmDeps`
-  (`fetcherVersion = 4`): a fixed-output derivation pinned by `hash`. A changed
-  lockfile changes the hash, and the build fails until it is updated. The build
-  itself never reaches a registry.
+- Third-party tarballs enter as one fixed-output fetch per tarball, keyed by the
+  `integrity` the lockfile already records, so a lockfile bump needs no hash
+  edit. `nix/lib/pnpm-lock.nix` reads the lockfile's `packages:` map in pure Nix
+  (a parsing derivation would import from a derivation for the target system,
+  which breaks `nix eval .#devShells.<other-system>`); a plain derivation then
+  runs pnpm offline through the `importPnpmLock` input's config hook and
+  assembles `packages.<system>.pnpm-store`, the store directory pnpm installs
+  from with no registry. `file:` tarballs and `directory` entries are
+  workspace-local and are skipped before any fetch.
 - Install runs with `--ignore-scripts` in the Nix sandbox. The members build
   with their `build` script (`buildScript` overrides it), then `pnpm pack`
   writes each tarball and turns every `workspace:` range into the exact version.
@@ -291,8 +295,8 @@ every tarball plus an `index.json` of `{ name, file }`.
   export with a named type.
 - `pnpm` defaults to `pkgs.pnpm_12`. The root `packageManager` must pin exactly
   that version, or evaluation fails: one pnpm resolves everywhere.
-- `packages.<system>.pnpm-store` is the same fixed-output dependency set,
-  unpacked into a store directory pnpm can install from offline.
+- `packages.<system>.pnpm-store` is that store directory, in the layout
+  `sandbox --pnpm-store` consumes.
 
 A consumer takes the flake as an input pinned by `flake.lock`. A pull
 request's head revision is a snapshot, and a release tag is a stable version.
@@ -445,8 +449,8 @@ sandbox --allow-host api.cloudflare.com --pass-env CLOUDFLARE_API_TOKEN -- pnpm 
 pnpm never reaches a registry from the sandbox. `--pnpm-store` (the dev shell
 sets `SANDBOX_PNPM_STORE` to `packages.<system>.pnpm-store`) points pnpm at the
 Nix-built store. The sandbox then runs pnpm with `offline`, `frozen-lockfile`,
-`ignore-scripts` and `trust-lockfile`; the fixed-output fetch already checked
-the lockfile. Each invocation gets a private copy of the store's index database
+`ignore-scripts` and `trust-lockfile`; the per-tarball fixed-output fetches
+already checked each integrity. Each invocation gets a private copy of the store's index database
 that is discarded at exit, so the Nix store stays read-only. `$HOME` is a fresh
 tmpfs every time, so nothing a dependency plants survives. Tool caches that
 should persist (turbo, vite, `tsbuildinfo`) belong in the project's gitignored

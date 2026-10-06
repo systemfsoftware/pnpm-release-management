@@ -1,7 +1,7 @@
 {
   pkgs,
   src,
-  hash,
+  iplConfigHook,
   pname ? "workspace",
   pnpm ? pkgs.pnpm_12,
   nodejs ? pkgs.nodejs_24,
@@ -66,25 +66,15 @@ let
     in
     if pinned == null then null else builtins.head pinned;
 
-  pnpmDeps =
+  deps =
     assert pinnedPnpm == null || pinnedPnpm == pnpm.version
       || throw "mkPnpmWorkspacePackages: package.json pins pnpm@${pinnedPnpm} but the build uses pnpm ${pnpm.version}; pin the version Nix provides so every pnpm run resolves the same way";
-    pkgs.fetchPnpmDeps {
-    inherit pname src pnpm hash;
-    version = "0";
-    fetcherVersion = 4;
-  };
+    import ./pnpm-store.nix {
+      inherit pkgs pname pnpm src iplConfigHook;
+    };
 
-  pnpm-store = pkgs.runCommand "${pname}-pnpm-store" { nativeBuildInputs = [ pkgs.zstd pkgs.sqlite ]; } ''
-    mkdir -p "$out"
-    tar --zstd -xf ${pnpmDeps}/pnpm-store.tar.zst -C "$out"
-    chmod -R u+w "$out"
-    for dump in "$out"/v*/index.db.sql; do
-      [ -e "$dump" ] || continue
-      sqlite3 "''${dump%.sql}" < "$dump"
-      rm "$dump"
-    done
-  '';
+  inherit (deps) mitmCache;
+  pnpm-store = deps.store;
 
   workspace-tarballs =
     assert duplicateAttrs == [ ]
@@ -92,9 +82,9 @@ let
     pkgs.stdenvNoCC.mkDerivation {
       pname = "${pname}-tarballs";
       version = "0";
-      inherit src pnpmDeps;
+      inherit src mitmCache;
 
-      nativeBuildInputs = [ nodejs pnpm pkgs.pnpmConfigHook pkgs.jq ] ++ nativeBuildInputs;
+      nativeBuildInputs = [ nodejs pnpm iplConfigHook pkgs.jq ] ++ nativeBuildInputs;
 
       buildPhase = ''
         runHook preBuild
@@ -123,4 +113,4 @@ let
     '';
   }) entries);
 in
-perPackage // { inherit workspace-tarballs pnpm-store; }
+perPackage // { inherit workspace-tarballs pnpm-store mitmCache; }

@@ -1,12 +1,10 @@
-{ lib, stdenv, pnpm_11, pnpmConfigHook, nodejs_24, deno, denort, pnpmDeps, src, appName }:
+{ lib, stdenv, pnpm_11, iplConfigHook, nodejs_24, deno, denort, mitmCache, src, appName }:
 stdenv.mkDerivation (finalAttrs: {
   pname = appName;
   version = "0.0.0";
-  inherit src;
+  inherit src mitmCache;
 
-  inherit pnpmDeps;
-
-  nativeBuildInputs = [ nodejs_24 pnpm_11 pnpmConfigHook deno ];
+  nativeBuildInputs = [ nodejs_24 pnpm_11 iplConfigHook deno ];
 
   # `deno compile` appends its runtime payload in a section binutils' strip removes
   # ("Could not find standalone binary section"); the shipped binary must stay unstripped.

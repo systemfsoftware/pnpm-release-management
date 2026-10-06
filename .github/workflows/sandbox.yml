@@ -32,6 +32,20 @@ jobs:
       - name: Boundary proofs
         run: nix build .#sandbox-proofs && ./result/bin/sandbox-proofs
 
+      - name: A tampered lockfile integrity fails red
+        run: |
+          status=0
+          out="$(nix build .#sandbox-proofs-tampered-store 2>&1)" || status=$?
+          printf '%s\n' "$out"
+          if [ "$status" -eq 0 ]; then
+            echo "::error::a store built from a wrong lockfile integrity"
+            exit 1
+          fi
+          if ! printf '%s\n' "$out" | grep -q 'hash mismatch'; then
+            echo "::error::the tampered store failed without a hash mismatch"
+            exit 1
+          fi
+
       - name: Install through the sandbox, offline from the Nix pnpm store
         run: nix develop --command sandbox -- pnpm install
 
