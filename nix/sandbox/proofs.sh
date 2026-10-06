@@ -133,6 +133,21 @@ else
   fail "the offline install links the store's package into node_modules"
 fi
 
+if [ "$(uname -s)" = Darwin ]; then
+  bare="$project/tiny-workspace-bare"
+  mkdir -p "$bare"
+  cp -R "@tinyWorkspace@/." "$bare/"
+  chmod -R u+w "$bare"
+  lock_status=0
+  lock_out="$(cd "$bare" && sandbox --pnpm-store '@tinyStore@' -- env -u XDG_RUNTIME_DIR pnpm install 2>&1)" || lock_status=$?
+  if [ "$lock_status" -ne 0 ] && printf '%s\n' "$lock_out" | grep -q ERR_PNPM_STORE_DIR_OPEN_OPERATION_LOCK; then
+    pass "without the private XDG_RUNTIME_DIR the install fails on the /tmp store lock"
+  else
+    printf '%s\n' "$lock_out" | tail -5
+    fail "without the private XDG_RUNTIME_DIR the install fails on the /tmp store lock"
+  fi
+fi
+
 rejects "a malformed --publish is refused" \
   sandbox --publish 70000:1 -- sh -c "echo $alive"
 rejects "a malformed --listen is refused" \
