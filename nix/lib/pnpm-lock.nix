@@ -10,8 +10,7 @@
   lib,
 }:
 let
-  trimRight = value: builtins.head (builtins.match "(.*[^[:space:]]|)[[:space:]]*" value);
-  trim = value: builtins.head (builtins.match "[[:space:]]*(.*)" (trimRight value));
+  trim = lib.trim;
 
   unquote =
     value:
