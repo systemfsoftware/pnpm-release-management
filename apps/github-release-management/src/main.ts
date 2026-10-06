@@ -1,4 +1,5 @@
 import { NodeRuntime, NodeServices } from '@effect/platform-node'
+import { ChangesetsPortLive } from '@systemfsoftware/changesets-adapter'
 import { program, ReporterLive } from '@systemfsoftware/cli-adapter'
 import { Cell } from '@systemfsoftware/effect-cell-types'
 import { GitLive } from '@systemfsoftware/git-adapter'
@@ -201,6 +202,7 @@ const pr = Command.make('pr', {
     const decision = yield* Cell.run(pullRequestCell, request)
     const config: ReleaseConfig = workspace.config
     yield* Cell.run(bumpCell, bumpInput(config.changelogDir, config.versioning)).pipe(
+      Effect.provide(ChangesetsPortLive({ root: workspace.root, base: config.base })),
       Effect.mapError((refusal): VersionStageRefused => VersionStageRefused.make({ refusal })),
       Effect.flatMap((versioned) => renderVersion(versioned)),
     )

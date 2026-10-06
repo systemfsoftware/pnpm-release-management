@@ -49,6 +49,16 @@ const CARGO_RELEASE_JSONC = `{
 }
 `
 
+const CHANGESETS_RELEASE_JSONC = `{
+  "base": "main",
+  "branch": "changeset-release/main",
+  "changesetDir": ".changeset",
+  "changelogDir": ".changeset/changelogs",
+  "versioning": { "strategy": "changesets" },
+  "gate": { "strategy": "paths" }
+}
+`
+
 const readVersion = async (world: World, name: string): Promise<string> => {
   const raw = await world.read(`${FIXTURE}/packages/${name}/package.json`)
   return S.decodeUnknownSync(Manifest)(parseJson(raw)).version
@@ -282,6 +292,77 @@ const runPhases = async (session: Session): Promise<void> => {
 
     const metadata = await world.must('cargo metadata --locked --offline --format-version 1', { cwd: FIXTURE })
     expect(metadata.code).toBe(0)
+  })
+
+  await session.phase('changesets versioning releases each package and settles', async (world) => {
+    await world.must('git checkout -q -- . && git clean -fdq', { cwd: FIXTURE })
+    const alpha = await readVersion(world, 'alpha')
+    const betaManifest = parseJson(await world.read(`${FIXTURE}/packages/beta/package.json`))
+    await world.write(
+      `${FIXTURE}/packages/beta/package.json`,
+      `${
+        JSON.stringify({ ...Object(betaManifest), dependencies: { '@e2e/alpha': `workspace:^${alpha}` } }, null, 2)
+      }\n`,
+    )
+    await world.write(`${FIXTURE}/release.jsonc`, CHANGESETS_RELEASE_JSONC)
+    await world.must('pnpm install --silent && git add -A && git commit -q -m "chore: changesets versioning"', {
+      cwd: FIXTURE,
+    })
+    const beta = await readVersion(world, 'beta')
+
+    for (const [bump, slug] of [['minor', 'alpha-minor'], ['patch', 'alpha-patch']] as const) {
+      const created = await world.tool(
+        'changeset-management',
+        'new',
+        `@e2e/alpha --bump ${bump} --summary "alpha ${bump}" --slug ${slug}`,
+      )
+      expect(created.code).toBe(0)
+    }
+    await world.must('git add -A && git commit -q -m "chore: intents"', { cwd: FIXTURE })
+
+    const versioned = await world.tool('version-management', 'bump')
+    expect(versioned.code).toBe(0)
+
+    const [major, minor] = alpha.split('.').map(Number)
+    const alphaNext = `${major}.${(minor ?? 0) + 1}.0`
+    expect(await readVersion(world, 'alpha')).toBe(alphaNext)
+    const [betaMajor, betaMinor, betaPatch] = beta.split('.').map(Number)
+    const betaNext = `${betaMajor}.${betaMinor}.${(betaPatch ?? 0) + 1}`
+    expect(await readVersion(world, 'beta')).toBe(betaNext)
+    expect(await world.read(`${FIXTURE}/packages/beta/package.json`)).toContain(`"workspace:^${alphaNext}"`)
+
+    const intents = await world.must('ls .changeset', { cwd: FIXTURE })
+    expect(intents.stdout).not.toContain('alpha-minor')
+    expect(intents.stdout).not.toContain('alpha-patch')
+    const alphaLog = await world.read(`${FIXTURE}/.changeset/changelogs/@e2e!alpha@${alphaNext}.md`)
+    expect(alphaLog).toContain('alpha minor')
+    expect(alphaLog).toContain('alpha patch')
+    await world.read(`${FIXTURE}/.changeset/changelogs/@e2e!beta@${betaNext}.md`)
+
+    await world.must(
+      'git add -A && git commit -q -m "chore(release): version packages" && git push -q origin HEAD:main',
+      {
+        cwd: FIXTURE,
+      },
+    )
+
+    const releasing = await world.tool('github-release-management', 'plan')
+    expect(`${releasing.stdout}${releasing.stderr}`).toContain('phase=release')
+    const captured = await world.tool('github-release-management', 'tag', '--output /tmp/changesets-captured.json')
+    expect(captured.code).toBe(0)
+    expect(await world.tool('github-release-management', 'tag', '--captured /tmp/changesets-captured.json'))
+      .toMatchObject({ code: 0 })
+    expect(await world.tool('github-release-management', 'release', '--captured /tmp/changesets-captured.json'))
+      .toMatchObject({ code: 0 })
+
+    const tags = await world.must('git ls-remote --tags origin', { cwd: FIXTURE })
+    expect(tags.stdout).toContain(`refs/tags/@e2e/alpha@v${alphaNext}`)
+    expect(tags.stdout).toContain(`refs/tags/@e2e/beta@v${betaNext}`)
+    const notes = await fetchRelease(world, `@e2e/alpha@v${alphaNext}`)
+    expect(notes.status).toBe(200)
+
+    const settled = await world.tool('github-release-management', 'plan')
+    expect(`${settled.stdout}${settled.stderr}`).toContain('phase=none')
   })
 }
 

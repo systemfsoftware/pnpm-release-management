@@ -1,3 +1,4 @@
+import { ChangesetsPortLive } from '@systemfsoftware/changesets-adapter'
 import { resolveWorkspaceRoot } from '@systemfsoftware/cli-adapter'
 import {
   RelativePath,
@@ -79,6 +80,7 @@ export const storesOf = (workspace: Workspace) =>
     WorkspaceStoreLive(workspace.root),
     SurfaceStoreLive(workspace.root),
     ChangelogStoreLive(workspace.root),
+    ChangesetsPortLive({ root: workspace.root, base: workspace.release.base }),
     ChangesetStoreLive({ root: workspace.root, changesetDir: workspace.release.changesetDir }),
   )
 
@@ -94,7 +96,7 @@ const surfaceTargetsOf = (
 
 const targetsOf = (release: ReleaseConfig): VersionTargets => {
   const { versioning } = release
-  if (versioning.strategy === 'pnpm') {
+  if (versioning.strategy === 'changesets') {
     return { manifest: ROOT_TARGET, surfaces: surfaceTargetsOf(versioning.surfaces) }
   }
   return {
@@ -106,9 +108,9 @@ const targetsOf = (release: ReleaseConfig): VersionTargets => {
 export const bumpRequestOf = (release: ReleaseConfig): BumpInput => {
   const { versioning } = release
   const targets = targetsOf(release)
-  if (versioning.strategy === 'pnpm') {
+  if (versioning.strategy === 'changesets') {
     return {
-      strategy: 'pnpm',
+      strategy: 'changesets',
       changelogDir: release.changelogDir,
       manifest: targets.manifest,
       surfaces: targets.surfaces,

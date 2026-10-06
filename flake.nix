@@ -37,7 +37,7 @@
             src = self;
             pname = "pnpm-release-management";
             pnpm = pkgs.pnpm_11;
-            hash = "sha256-ERG1u8aeAfedUjRC8akD1UerrdEwFRZXCgVi4j6MHt4=";
+            hash = "sha256-bRX0BNl10ha0qF8IrpGXwrjHc8Z6JxaBkiWYsnOF+CU=";
           };
         in workspace // {
           inherit dprint comment-checker-bwrap;

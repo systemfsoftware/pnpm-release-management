@@ -5,6 +5,7 @@ export default defineConfig({
   format: 'esm',
   dts: false,
   platform: 'node',
+  nodeProtocol: true,
   outExtensions: () => ({ js: '.js' }),
   deps: { alwaysBundle: (id) => !id.startsWith('node:') },
 })

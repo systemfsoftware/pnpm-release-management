@@ -5,6 +5,7 @@ import {
   Member,
   PackageName,
   PackageVersion,
+  PlannedRelease,
   RelativePath,
   VersionSurface,
 } from '@systemfsoftware/release-language'
@@ -16,7 +17,7 @@ const VersionTarget = S.Struct({
 })
 
 export const BumpInput = S.Struct({
-  strategy: S.Literals(['pnpm', 'surfaces']),
+  strategy: S.Literals(['changesets', 'surfaces']),
   changelogDir: RelativePath,
   rootChangelog: S.optional(RelativePath),
   manifest: VersionTarget,
@@ -27,7 +28,7 @@ export type BumpInput = S.Schema.Type<typeof BumpInput>
 export class BumpCommand extends S.TaggedClass<BumpCommand>()(
   'BumpCommand',
   {
-    strategy: S.Literals(['pnpm', 'surfaces']),
+    strategy: S.Literals(['changesets', 'surfaces']),
     intents: S.Array(Intent),
     members: S.Array(Member),
     manifestVersion: PackageVersion,
@@ -37,22 +38,14 @@ export class BumpCommand extends S.TaggedClass<BumpCommand>()(
     surfaces: S.Array(VersionTarget),
     consolidated: Bump,
     consolidatedNext: PackageVersion,
-    nexts: S.Array(S.Struct({
-      name: PackageName,
-      next: PackageVersion,
-    })),
     moved: S.Array(PackageName),
     changelogPaths: S.Array(S.Struct({
       name: PackageName,
       path: RelativePath,
     })),
-    packageRanks: S.Array(S.Struct({
-      name: PackageName,
-      rank: Bump,
-      summaries: S.Array(S.String),
-    })),
     unknownPackage: S.optional(PackageName),
     malformedPath: S.optional(RelativePath),
     intentCount: Count,
+    planned: S.Array(PlannedRelease),
   },
 ) {}
