@@ -212,13 +212,12 @@ case "$(uname -s)" in
     sandbox_pid=""
     ;;
   Darwin)
-    bind_err="$logdir/bind-err.txt"
-    bind_status=0
-    out="$(sandbox -- sh -c "echo $alive; node -e \"require('node:http').createServer().listen(4322, '127.0.0.1')\"" 2>"$bind_err")" || bind_status=$?
-    if [ "$bind_status" -ne 0 ] && printf '%s\n' "$out" | grep -qx "$alive" && grep -q -- '--listen' "$bind_err"; then
-      pass "an undeclared macOS bind is refused and names --listen"
+    status=0
+    out="$(sandbox -- sh -c "echo $alive; node -e \"require('node:http').createServer().on('error', (e) => { console.log(e.code); process.exit(3) }).listen(4322, '127.0.0.1')\"")" || status=$?
+    if [ "$status" -eq 3 ] && printf '%s\n' "$out" | grep -qx "$alive" && printf '%s\n' "$out" | grep -qx EPERM; then
+      pass "an undeclared macOS bind is refused with EPERM"
     else
-      fail "an undeclared macOS bind is refused and names --listen"
+      fail "an undeclared macOS bind is refused with EPERM"
     fi
     allowed "a --listen port binds on macOS" \
       sandbox --listen 4321 -- sh -c "node -e \"require('node:http').createServer((q, s) => s.end('$alive')).listen(4321, '127.0.0.1')\" & sleep 1; curl -sS --max-time 5 http://127.0.0.1:4321; echo; kill \$!"

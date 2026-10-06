@@ -141,22 +141,6 @@ start_proxy() {
   exit 1
 }
 
-report_bind_denial() {
-  local start="$1" pid i=0
-  /usr/bin/log show --style compact --start "$start" \
-    --predicate 'eventMessage CONTAINS "deny(1) network-bind"' >"$work/bind-denials.txt" 2>/dev/null &
-  pid=$!
-  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 100 ]; do
-    i=$((i + 1))
-    "@sleep@" 0.05
-  done
-  kill "$pid" 2>/dev/null || true
-  wait "$pid" 2>/dev/null || true
-  if /usr/bin/grep -q 'deny(1) network-bind' "$work/bind-denials.txt" 2>/dev/null; then
-    echo "sandbox: the command was refused a network bind; declare the listening port with --listen PORT (or --publish)" >&2
-  fi
-}
-
 roots=()
 add_root() {
   case "$1" in
@@ -364,14 +348,10 @@ done
     done
 
     cd "$cwd"
-    launch_time="$(date '+%Y-%m-%d %H:%M:%S')"
     status=0
     /usr/bin/sandbox-exec -f "$profile" \
       -D PROJECT="$project" -D HOME="$home" -D TMP="$tmp" \
       /usr/bin/env -i "${darwin_envs[@]}" "$@" || status=$?
-    if [ "$status" -ne 0 ]; then
-      report_bind_denial "$launch_time" || true
-    fi
     exit "$status"
     ;;
   *)

@@ -337,9 +337,8 @@ anything malformed exits 2 with usage.
 macOS has no network namespace, so a `--listen` port on macOS is reachable from
 host loopback; that is a stated platform limit, not a claim. Its profile allows
 `network-bind` only on localhost for the `--publish` sandbox ports and the
-`--listen` ports — every other bind, including port 0, is refused. When the
-command exits non-zero after a refused bind, the launcher reads the sandbox
-violation from the unified log and prints an error naming `--listen`.
+`--listen` ports — every other bind, including port 0, is refused: the program
+gets `EPERM` from `bind`. Declare the port with `--listen` (or `--publish`).
 
 `packages.<system>.sandbox-proofs` is the gate. Each refusal proof first prints
 from inside the same sandbox, so a sandbox that fails to start fails the proof
@@ -353,7 +352,7 @@ allowed and refused decisions and refuses a log inside the project, an
 undeclared connection fails, a declared host is reachable while every other host
 is refused, a loopback dev server still answers, a published port answers from
 the host while an unpublished one does not, and — on macOS — an undeclared bind
-is refused naming `--listen`. CI runs them on Linux and macOS. It then
+fails with `EPERM`. CI runs them on Linux and macOS. It then
 installs, builds and tests this repository as three separate sandbox
 invocations with no network at all.
 
