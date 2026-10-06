@@ -39,15 +39,20 @@
             pnpm = pkgs.pnpm_11;
             hash = "sha256-bRX0BNl10ha0qF8IrpGXwrjHc8Z6JxaBkiWYsnOF+CU=";
           };
+          changeset-management = cliApp "changeset-management";
+          version-management = cliApp "version-management";
+          github-release-management = cliApp "github-release-management";
         in workspace // {
           inherit dprint comment-checker-bwrap;
           comment-checker = cc;
           default = dprint;
           inherit sandbox;
           sandbox-proofs = pkgs.callPackage ./nix/sandbox/proofs.nix { inherit sandbox; };
-          changeset-management = cliApp "changeset-management";
-          version-management = cliApp "version-management";
-          github-release-management = cliApp "github-release-management";
+          inherit changeset-management version-management github-release-management;
+          release-tools = pkgs.symlinkJoin {
+            name = "release-tools";
+            paths = [ changeset-management version-management github-release-management ];
+          };
           git-hooks = cliApp "git-hooks";
         });
 

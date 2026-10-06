@@ -26,13 +26,15 @@ apps/*/dist/main.js           the tsdown bundles the workflows and the e2e image
 e2e/                          the containerised pipeline test (vitest)
 ```
 
-Apps are Node programs built with tsdown into self-contained ESM bundles, so a
-workflow builds the tools once and runs one directly:
+Apps are Node programs built with tsdown into self-contained ESM bundles, then
+compiled with `deno compile` into one binary each. The flake exports them, and
+`packages.<system>.release-tools` joins the three release apps. A repository
+takes this flake as an input, pinned by its `flake.lock`, and puts
+`release-tools` in its dev shell, so a workflow runs the locked revision without
+installing anything:
 
 ```bash
-pnpm --dir .release-tools install --frozen-lockfile
-pnpm --dir .release-tools build
-node .release-tools/apps/github-release-management/dist/main.js plan --output "$GITHUB_OUTPUT"
+nix develop --command github-release-management plan --output "$GITHUB_OUTPUT"
 ```
 
 Each app is a composition root: `main.ts` declares the `Flag`/`Argument`
@@ -232,15 +234,25 @@ agree on what this cycle owns.
 
 ## CI
 
-| Workflow              | Inputs                                       | Caller must grant                         |
-| --------------------- | -------------------------------------------- | ----------------------------------------- |
-| `release.yml`         | `tools-ref`, `artifacts-dir`, `node-version` | `contents: write`, `pull-requests: write` |
-| `changeset-check.yml` | `tools-ref`, `base-sha`, `node-version`      | `contents: read`, `pull-requests: read`   |
+| Workflow              | Inputs                                    | Caller must grant                                           |
+| --------------------- | ----------------------------------------- | ----------------------------------------------------------- |
+| `release.yml`         | `ci-workflow` (required), `artifacts-dir` | `contents: write`, `pull-requests: write`, `actions: write` |
+| `changeset-check.yml` | `base-sha`                                | `contents: read`                                            |
 
-`tools-ref` pins the revision of this repository that a release runs from;
-`@main` tracks the tip. Both workflows check this repository out into
-`.release-tools`, build it with pnpm, and run its `dist/main.js` bundles
-against the caller's workspace.
+A pull request opened with the workflow token starts no workflows, so after
+opening or updating the release PR, `release.yml` dispatches the caller's CI
+workflow (`ci-workflow`, which must accept `workflow_dispatch`) on the release
+branch. That gives the release PR the checks the branch protection requires.
+
+Both workflows run the apps from the caller's dev shell (`nix develop`). The
+revision is the one the caller's `flake.lock` pins for its
+`pnpm-release-management` input; `nix flake update pnpm-release-management`
+moves it. The caller's `devShells.<system>.default` must provide
+`release-tools`, pnpm, the `sandbox` and `SANDBOX_PNPM_STORE` (see
+[Distribution through Nix](#distribution-through-nix)). `changeset-check.yml`
+runs turbo, which is the caller's dependency code, so its install and the gate
+both run inside `sandbox`, offline from the Nix-built pnpm store. Neither
+workflow installs packages from a registry.
 
 ## Distribution through Nix
 
@@ -304,12 +316,12 @@ tmpfs every time, so nothing a dependency plants survives. Tool caches that
 should persist (turbo, vite, `tsbuildinfo`) belong in the project's gitignored
 `.cache/`; the sandbox sets `XDG_CACHE_HOME` to it.
 
-| Boundary    | Inside the sandbox                                                                                                      |
-| ----------- | ----------------------------------------------------------------------------------------------------------------------- |
-| filesystem  | the project directory read-write, `/nix/store` read-only, an empty `$HOME`, a private `/tmp`; no other home directories |
-| environment | cleared, then `PATH`, `TERM`, locale, `TZ`, `CI` and colour settings, plus each `--pass-env`                            |
-| network     | loopback only; each `--allow-host` opens HTTPS to that host through an allow-list proxy                                 |
-| processes   | own PID, IPC and UTS namespaces, no capabilities, killed with its parent, no controlling terminal                       |
+| Boundary    | Inside the sandbox                                                                                                                                                               |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| filesystem  | the project directory read-write, only the invoking closure's store paths readable (`/nix/store` is not listable), an empty `$HOME`, a private `/tmp`; no other home directories |
+| environment | cleared, then `PATH`, `TERM`, locale, `TZ`, `CI` and colour settings, plus each `--pass-env`                                                                                     |
+| network     | loopback only; each `--allow-host` opens HTTPS to that host through an allow-list proxy; only `--publish` ports reach the host                                                   |
+| processes   | own PID, IPC and UTS namespaces, no capabilities, killed with its parent, no controlling terminal                                                                                |
 
 On Linux it is bubblewrap (`--unshare-all`, `--cap-drop ALL`, `--die-with-parent`,
 `--new-session`). On macOS it is `sandbox-exec` with a deny-by-default
@@ -318,14 +330,50 @@ only to declared `host[:port]` (default 443; `*.example.com` matches
 subdomains). Inside, `HTTPS_PROXY` points at it and `NODE_USE_ENV_PROXY=1` makes
 Node's `fetch` use it. There is no unsandboxed mode.
 
+Reads of `/nix/store` are restricted to the invocation's closure: the launcher
+resolves `nix-store --query --requisites` over the sandboxed `PATH`, the command
+and its own helpers, then exposes exactly those paths. On Linux it mounts each
+one read-only over an empty `/nix/store` that cannot be listed; on macOS it
+generates a per-invocation profile in its work directory that grants
+`file-read*` and `file-map-executable` only on those paths. A store path outside
+the closure is unreadable, so a dependency cannot enumerate or reach the rest of
+the store.
+
+`--egress-log PATH` appends one JSONL line per proxy decision, allowed or
+refused, at least `{"host","port","decision","rule"}`. The file must sit outside
+the sandbox's writable tree — the project, its `$HOME` and its `/tmp` — and the
+launcher refuses `PATH` inside them with exit code 2. With `--egress-log` set the
+proxy runs and the proxy environment is set even without `--allow-host`, so
+refusals are logged too.
+
+`--publish HOST_PORT:SANDBOX_PORT` makes a sandbox port reachable as
+`127.0.0.1:HOST_PORT` on the host; only published ports are reachable. On Linux
+the sandbox has its own network namespace, so an outside forwarder bridges the
+host port to an inside forwarder over a Unix socket. `--listen PORT` declares a
+port the stack may bind without publishing it; it also accepts arbitrary `PORT`
+values only in the range 1–65535 (as does `--publish`), and anything malformed
+exits 2 with usage.
+
+macOS has no network namespace, so a `--listen` port on macOS is reachable from
+host loopback; that is a stated platform limit, not a claim. Its profile allows
+`network-bind` only on localhost for the `--publish` sandbox ports and the
+`--listen` ports — every other bind, including port 0, is refused. When the
+command exits non-zero after a refused bind, the launcher reads the sandbox
+violation from the unified log and prints an error naming `--listen`.
+
 `packages.<system>.sandbox-proofs` is the gate. Each refusal proof first prints
 from inside the same sandbox, so a sandbox that fails to start fails the proof
 instead of passing it. The proofs: reading `~/.ssh` and `~/.config` fails,
 writing outside the project fails, agent sockets and secrets do not cross the
-cleared environment, an undeclared connection fails, a declared host is
-reachable while every other host is refused, and a loopback dev server still
-answers. CI runs them on Linux and macOS. It then installs, builds and tests
-this repository as three separate sandbox invocations with no network at all.
+cleared environment, a store path outside the closure and the listing of
+`/nix/store` both fail while a closure tool still runs, `--egress-log` records
+exactly the allowed and refused decisions and refuses a log inside the project,
+an undeclared connection fails, a declared host is reachable while every other
+host is refused, a loopback dev server still answers, a published port answers
+from the host while an unpublished one does not, and — on macOS — an undeclared
+bind is refused naming `--listen`. CI runs them on Linux and macOS. It then
+installs, builds and tests this repository as three separate sandbox
+invocations with no network at all.
 
 bubblewrap needs unprivileged user namespaces and a mountable `/proc`. Ubuntu
 24.04 needs `sysctl kernel.apparmor_restrict_unprivileged_userns=0`. A

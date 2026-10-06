@@ -1,26 +1,77 @@
 usage() {
   cat >&2 <<'EOF'
-usage: sandbox [--allow-host HOST[:PORT]]... [--pass-env NAME]... [--pnpm-store DIR] [--] COMMAND [ARG]...
+usage: sandbox [--allow-host HOST[:PORT]]... [--egress-log PATH] [--publish HOST_PORT:SANDBOX_PORT]... [--listen PORT]... [--pass-env NAME]... [--pnpm-store DIR] [--] COMMAND [ARG]...
 
-Runs COMMAND with the project directory read-write, /nix/store read-only, an
-empty $HOME, a cleared environment and loopback-only networking. Each
+Runs COMMAND with the project directory read-write, an empty $HOME, a cleared
+environment and only the invoking closure's /nix/store paths readable. Each
 --allow-host opens HTTPS egress to that host (default port 443; "*.example.com"
 matches subdomains) through an allow-list proxy; nothing else leaves.
---pnpm-store (default $SANDBOX_PNPM_STORE) resolves pnpm offline from that
-read-only store, so pnpm needs no registry.
+--egress-log appends one JSONL line per proxy decision to PATH, which must live
+outside the project, the sandbox $HOME and its /tmp. --publish HOST_PORT:SANDBOX_PORT
+makes the sandbox port reachable as 127.0.0.1:HOST_PORT on the host; --listen
+declares a sandbox port the stack may bind without publishing it. --pnpm-store
+(default $SANDBOX_PNPM_STORE) resolves pnpm offline from that read-only store,
+so pnpm needs no registry.
 EOF
   exit 2
 }
 
+valid_port() {
+  case "$1" in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+  local n=$((10#$1))
+  [ "$n" -ge 1 ] && [ "$n" -le 65535 ]
+}
+
 hosts=()
+publishes=()
+listens=()
+egress_log=""
 pnpm_store="${SANDBOX_PNPM_STORE:-}"
 pass=(PATH TERM LANG LC_ALL TZ CI NO_COLOR FORCE_COLOR COLORTERM)
 while [ $# -gt 0 ]; do
   case "$1" in
-    --allow-host) [ $# -ge 2 ] || usage; hosts+=("$2"); shift 2 ;;
-    --pass-env) [ $# -ge 2 ] || usage; pass+=("$2"); shift 2 ;;
-    --pnpm-store) [ $# -ge 2 ] || usage; pnpm_store="$2"; shift 2 ;;
-    --) shift; break ;;
+    --allow-host)
+      [ $# -ge 2 ] || usage
+      hosts+=("$2")
+      shift 2
+      ;;
+    --egress-log)
+      [ $# -ge 2 ] || usage
+      egress_log="$2"
+      shift 2
+      ;;
+    --publish)
+      [ $# -ge 2 ] || usage
+      case "$2" in
+        *:*) h="${2%%:*}" p="${2##*:}" ;;
+        *) usage ;;
+      esac
+      { valid_port "$h" && valid_port "$p"; } || usage
+      publishes+=("$h:$p")
+      shift 2
+      ;;
+    --listen)
+      [ $# -ge 2 ] || usage
+      valid_port "$2" || usage
+      listens+=("$2")
+      shift 2
+      ;;
+    --pass-env)
+      [ $# -ge 2 ] || usage
+      pass+=("$2")
+      shift 2
+      ;;
+    --pnpm-store)
+      [ $# -ge 2 ] || usage
+      pnpm_store="$2"
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
     -h | --help) usage ;;
     -*) usage ;;
     *) break ;;
@@ -36,14 +87,49 @@ case "$cwd/" in "$project"/*) ;; *) cwd="$project" ;; esac
 work="$(mktemp -d "${TMPDIR:-/tmp}/sandbox.XXXXXX")"
 work="$(cd "$work" && pwd -P)"
 proxy_pid=""
+forwards=()
 cleanup() {
   [ -z "$proxy_pid" ] || kill "$proxy_pid" 2>/dev/null || true
+  if [ "${#forwards[@]}" -gt 0 ]; then
+    for pid in "${forwards[@]}"; do kill "$pid" 2>/dev/null || true; done
+  fi
   rm -rf "$work"
 }
 trap cleanup EXIT INT TERM
 
+system="$(uname -s)"
+if [ "$system" = Darwin ]; then
+  sandbox_home="$work/home"
+  sandbox_tmp="$work/tmp"
+else
+  sandbox_home="/home/sandbox"
+  sandbox_tmp="/tmp"
+fi
+
+if [ -n "$egress_log" ]; then
+  egress_log="$(realpath -m "$egress_log")"
+  for root in "$project" "$sandbox_home" "$sandbox_tmp" "$work"; do
+    realroot="$(realpath -m "$root")"
+    case "$egress_log/" in
+      "$realroot"/*)
+        echo "sandbox: --egress-log $egress_log resolves inside the sandbox's writable tree ($realroot)" >&2
+        exit 2
+        ;;
+    esac
+  done
+  mkdir -p "$(dirname "$egress_log")" 2>/dev/null || true
+  touch "$egress_log" 2>/dev/null || {
+    echo "sandbox: --egress-log $egress_log is not writable" >&2
+    exit 2
+  }
+fi
+
 start_proxy() {
-  "@node@" "@egressProxy@" "$1" "$work/proxy.addr" "${hosts[@]}" &
+  if [ -n "$egress_log" ]; then
+    SANDBOX_EGRESS_LOG="$egress_log" "@node@" "@egressProxy@" "$1" "$work/proxy.addr" "${hosts[@]}" &
+  else
+    "@node@" "@egressProxy@" "$1" "$work/proxy.addr" "${hosts[@]}" &
+  fi
   proxy_pid=$!
   for _ in $(seq 1 100); do
     [ -s "$work/proxy.addr" ] && return 0
@@ -53,6 +139,53 @@ start_proxy() {
   echo "sandbox: egress proxy failed to start" >&2
   exit 1
 }
+
+report_bind_denial() {
+  local start="$1" pid i=0
+  /usr/bin/log show --style compact --start "$start" \
+    --predicate 'eventMessage CONTAINS "deny(1) network-bind"' >"$work/bind-denials.txt" 2>/dev/null &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 100 ]; do
+    i=$((i + 1))
+    "@sleep@" 0.05
+  done
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  if /usr/bin/grep -q 'deny(1) network-bind' "$work/bind-denials.txt" 2>/dev/null; then
+    echo "sandbox: the command was refused a network bind; declare the listening port with --listen PORT (or --publish)" >&2
+  fi
+}
+
+roots=()
+add_root() {
+  case "$1" in
+    /nix/store/*)
+      local rest="${1#/nix/store/}"
+      roots+=("/nix/store/${rest%%/*}")
+      ;;
+  esac
+}
+
+IFS=: read -r -a path_dirs <<<"$PATH"
+for dir in "${path_dirs[@]}"; do add_root "$dir"; done
+command_path="$(command -v -- "$1" 2>/dev/null || true)"
+[ -z "$command_path" ] || add_root "$(realpath -m "$command_path")"
+add_root "$(realpath -m "$1")"
+add_root "$pnpm_store"
+add_root "@caBundle@"
+add_root "@sh@"
+add_root "@socat@"
+add_root "@sleep@"
+
+if [ "${#roots[@]}" -eq 0 ]; then
+  echo "sandbox: could not resolve any /nix/store roots for the invocation" >&2
+  exit 1
+fi
+mapfile -t closure < <("@nixStore@" --query --requisites "${roots[@]}" 2>/dev/null | sort -u)
+if [ "${#closure[@]}" -eq 0 ]; then
+  echo "sandbox: nix-store --query --requisites resolved an empty closure" >&2
+  exit 1
+fi
 
 envs=(
   HOME=/home/sandbox
@@ -90,7 +223,7 @@ if [ -n "$pnpm_store" ]; then
   )
 fi
 proxy_url="http://127.0.0.1:3128"
-if [ "${#hosts[@]}" -gt 0 ]; then
+if [ "${#hosts[@]}" -gt 0 ] || [ -n "$egress_log" ]; then
   envs+=(
     HTTPS_PROXY="$proxy_url" https_proxy="$proxy_url"
     HTTP_PROXY="$proxy_url" http_proxy="$proxy_url"
@@ -99,35 +232,71 @@ if [ "${#hosts[@]}" -gt 0 ]; then
   )
 fi
 
-case "$(uname -s)" in
+case "$system" in
   Linux)
     args=(
       --unshare-all --die-with-parent --new-session --cap-drop ALL --clearenv
-      --ro-bind /nix/store /nix/store
       --proc /proc --dev /dev --tmpfs /tmp
       --tmpfs /home --dir /home/sandbox
+      --perms 0111 --tmpfs /nix/store
     )
+    for entry in "${closure[@]}"; do args+=(--ro-bind "$entry" "$entry"); done
     for path in /usr /bin /lib /lib64 /sbin /run/current-system/sw \
       /etc/passwd /etc/group /etc/hosts /etc/nsswitch.conf /etc/localtime; do
       args+=(--ro-bind-try "$path" "$path")
     done
     args+=(--bind "$project" "$project" --chdir "$cwd")
     if [ -n "${store_view:-}" ]; then args+=(--bind "$store_view" "$store_view"); fi
+
+    pubdir=""
+    if [ "${#publishes[@]}" -gt 0 ]; then
+      pubdir="$work/pub"
+      mkdir -p "$pubdir"
+      args+=(--bind "$pubdir" "$pubdir")
+    fi
+
+    wrapper=""
+    if [ "${#hosts[@]}" -gt 0 ] || [ -n "$egress_log" ]; then
+      start_proxy "$work/egress.sock"
+      args+=(--ro-bind "$work/egress.sock" /run/egress.sock)
+      wrapper+="@socat@ TCP-LISTEN:3128,bind=127.0.0.1,fork,reuseaddr UNIX-CONNECT:/run/egress.sock 2>/dev/null &"$'\n'
+      # shellcheck disable=SC2016
+      wrapper+='i=0
+until "@socat@" -u /dev/null TCP:127.0.0.1:3128 2>/dev/null || [ "$i" -ge 100 ]; do
+  i=$((i + 1))
+  "@sleep@" 0.05
+done
+'
+    fi
+    if [ -n "$pubdir" ]; then
+      for spec in "${publishes[@]}"; do
+        wrapper+="@socat@ UNIX-LISTEN:$pubdir/pub-${spec##*:}.sock,fork,reuseaddr TCP:127.0.0.1:${spec##*:} 2>/dev/null &"$'\n'
+      done
+    fi
+
     for entry in "${envs[@]}"; do args+=(--setenv "${entry%%=*}" "${entry#*=}"); done
 
     status=0
-    if [ "${#hosts[@]}" -gt 0 ]; then
-      start_proxy "$work/egress.sock"
-      args+=(--ro-bind "$work/egress.sock" /run/egress.sock)
-      # shellcheck disable=SC2016
-      "@bwrap@" "${args[@]}" -- "@sh@" -c '
-        "@socat@" TCP-LISTEN:3128,bind=127.0.0.1,fork,reuseaddr UNIX-CONNECT:/run/egress.sock 2>/dev/null &
-        i=0
-        until "@socat@" -u /dev/null TCP:127.0.0.1:3128 2>/dev/null || [ "$i" -ge 100 ]; do
-          i=$((i + 1))
-          "@sleep@" 0.05
+    if [ -n "$wrapper" ]; then
+      wrapper+='exec "$@"'
+      if [ -n "$pubdir" ]; then
+        "@bwrap@" "${args[@]}" -- "@sh@" -c "$wrapper" sandbox "$@" &
+        bwrap_pid=$!
+        for spec in "${publishes[@]}"; do
+          i=0
+          while [ ! -S "$pubdir/pub-${spec##*:}.sock" ] && [ "$i" -lt 200 ]; do
+            i=$((i + 1))
+            "@sleep@" 0.05
+          done
         done
-        exec "$@"' sandbox "$@" || status=$?
+        for spec in "${publishes[@]}"; do
+          "@socat@" TCP-LISTEN:"${spec%%:*}",bind=127.0.0.1,fork,reuseaddr UNIX-CONNECT:"$pubdir/pub-${spec##*:}.sock" 2>/dev/null &
+          forwards+=("$!")
+        done
+        wait "$bwrap_pid" || status=$?
+      else
+        "@bwrap@" "${args[@]}" -- "@sh@" -c "$wrapper" sandbox "$@" || status=$?
+      fi
     else
       "@bwrap@" "${args[@]}" -- "$@" || status=$?
     fi
@@ -137,6 +306,29 @@ case "$(uname -s)" in
     home="$work/home"
     tmp="$work/tmp"
     mkdir -p "$home" "$tmp"
+
+    closure_read=""
+    closure_exec=""
+    for entry in "${closure[@]}"; do
+      closure_read+="(subpath \"$entry\") "
+      closure_exec+="(subpath \"$entry\") "
+    done
+    bind_ports=""
+    for spec in "${publishes[@]}"; do bind_ports+="(local ip \"localhost:${spec##*:}\") "; done
+    for port in "${listens[@]}"; do bind_ports+="(local ip \"localhost:$port\") "; done
+
+    profile="$work/profile.sb"
+    while IFS= read -r line; do
+      case "$line" in
+        ';;CLOSURE_READ;;') printf '(allow file-read* %s)\n' "$closure_read" ;;
+        ';;CLOSURE_EXEC;;') printf '(allow file-map-executable %s)\n' "$closure_exec" ;;
+        ';;BIND;;')
+          if [ -n "$bind_ports" ]; then printf '(allow network-bind %s)\n' "$bind_ports"; fi
+          ;;
+        *) printf '%s\n' "$line" ;;
+      esac
+    done <"@darwinProfile@" >"$profile"
+
     darwin_envs=()
     for entry in "${envs[@]}"; do
       case "$entry" in
@@ -145,20 +337,36 @@ case "$(uname -s)" in
         *) darwin_envs+=("$entry") ;;
       esac
     done
-    if [ "${#hosts[@]}" -gt 0 ]; then
+    if [ "${#hosts[@]}" -gt 0 ] || [ -n "$egress_log" ]; then
       start_proxy tcp
       url="http://$(cat "$work/proxy.addr")"
       for index in "${!darwin_envs[@]}"; do
         darwin_envs[index]="${darwin_envs[index]//$proxy_url/$url}"
       done
     fi
+
+    for spec in "${publishes[@]}"; do
+      h="${spec%%:*}"
+      p="${spec##*:}"
+      if [ "$h" != "$p" ]; then
+        "@socat@" TCP-LISTEN:"$h",bind=127.0.0.1,fork,reuseaddr TCP:127.0.0.1:"$p" 2>/dev/null &
+        forwards+=("$!")
+      fi
+    done
+
     cd "$cwd"
-    /usr/bin/sandbox-exec -f "@darwinProfile@" \
+    launch_time="$(date '+%Y-%m-%d %H:%M:%S')"
+    status=0
+    /usr/bin/sandbox-exec -f "$profile" \
       -D PROJECT="$project" -D HOME="$home" -D TMP="$tmp" \
-      /usr/bin/env -i "${darwin_envs[@]}" "$@"
+      /usr/bin/env -i "${darwin_envs[@]}" "$@" || status=$?
+    if [ "$status" -ne 0 ]; then
+      report_bind_denial "$launch_time" || true
+    fi
+    exit "$status"
     ;;
   *)
-    echo "sandbox: unsupported system $(uname -s)" >&2
+    echo "sandbox: unsupported system $system" >&2
     exit 1
     ;;
 esac
