@@ -27,6 +27,7 @@ import { makeFakeChangesetStore } from './__fixtures__/FakeChangesetStore.js'
 import { makeFakeCycleStore } from './__fixtures__/FakeCycleStore.js'
 import { makeFakeForge } from './__fixtures__/FakeForge.js'
 import { makeFakeGit } from './__fixtures__/FakeGit.js'
+import { makeFakeLedger } from './__fixtures__/FakeLedger.js'
 import { makeFakeTarball } from './__fixtures__/FakeTarball.js'
 import { makeFakeWorkspaceStore } from './__fixtures__/FakeWorkspaceStore.js'
 
@@ -71,7 +72,15 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
     const git = makeFakeGit({ tags: [tagOf('alpha', '1.0.0')] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer, makeFakeTarball(), makeFakeChangesetsPort())
+    const live = Layer.mergeAll(
+      changesets,
+      workspace,
+      git,
+      cycles.layer,
+      makeFakeTarball(),
+      makeFakeChangesetsPort(),
+      makeFakeLedger(),
+    )
     scenario(
       'Pending work with nothing owed starts versioning',
       { scenarioLayer: live },
@@ -114,7 +123,15 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
     const git = makeFakeGit({ tags: [] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer, makeFakeTarball(), makeFakeChangesetsPort())
+    const live = Layer.mergeAll(
+      changesets,
+      workspace,
+      git,
+      cycles.layer,
+      makeFakeTarball(),
+      makeFakeChangesetsPort(),
+      makeFakeLedger(),
+    )
     scenario(
       'Owed tags drain before pending work',
       { scenarioLayer: live },
@@ -156,7 +173,15 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
     const git = makeFakeGit({ tags: [tagOf('alpha', '1.0.0')] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer, makeFakeTarball(), makeFakeChangesetsPort())
+    const live = Layer.mergeAll(
+      changesets,
+      workspace,
+      git,
+      cycles.layer,
+      makeFakeTarball(),
+      makeFakeChangesetsPort(),
+      makeFakeLedger(),
+    )
     scenario(
       'A quiet repository settles with no work',
       { scenarioLayer: live },
@@ -195,7 +220,15 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members, files: {} })
     const git = makeFakeGit({ tags: [tagOf('gritlint', '0.1.0')] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer, makeFakeTarball(), makeFakeChangesetsPort())
+    const live = Layer.mergeAll(
+      changesets,
+      workspace,
+      git,
+      cycles.layer,
+      makeFakeTarball(),
+      makeFakeChangesetsPort(),
+      makeFakeLedger(),
+    )
     scenario(
       'A tagged private member with no tarball does not refuse the plan',
       { scenarioLayer: live },
@@ -231,7 +264,15 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
     const git = makeFakeGit({ tags: [tagOf('alpha', '1.0.0')] })
     const cycles = makeFakeCycleStore({ deferredFiles: { 'deferred.txt': 'ghost\n' } })
-    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer, makeFakeTarball(), makeFakeChangesetsPort())
+    const live = Layer.mergeAll(
+      changesets,
+      workspace,
+      git,
+      cycles.layer,
+      makeFakeTarball(),
+      makeFakeChangesetsPort(),
+      makeFakeLedger(),
+    )
     scenario(
       'Unknown deferred names warn without failing the plan',
       { scenarioLayer: live },
@@ -281,7 +322,15 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
     const git = makeFakeGit({ tags: [tagOf('alpha', '1.0.0')] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer, makeFakeTarball(), makeFakeChangesetsPort())
+    const live = Layer.mergeAll(
+      changesets,
+      workspace,
+      git,
+      cycles.layer,
+      makeFakeTarball(),
+      makeFakeChangesetsPort(),
+      makeFakeLedger(),
+    )
     scenario(
       'A missing deferred file refuses the plan at the read',
       { scenarioLayer: live },

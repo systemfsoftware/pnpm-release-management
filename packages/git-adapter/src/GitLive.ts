@@ -42,6 +42,7 @@ const pushTagsPath = FsPath.make('git:push-tags')
 const writeTagPath = FsPath.make('git:write-tag')
 const repoSlugPath = FsPath.make('git:repo-slug')
 const tagAnnotationPath = FsPath.make('git:tag-annotation')
+const tagCommitPath = FsPath.make('git:tag-commit')
 const diffPath = RelativePath.make('git:diff')
 
 const headRef = GitRef.make('HEAD')
@@ -269,6 +270,21 @@ const makeGitPort = (
           return yield* Effect.fail(TagCapturedMalformed.make({ path: tagAnnotationPath }))
         }
         return Option.some(annotationOf(body.success))
+      }),
+    tagCommit: (
+      remote: RemoteName,
+      tag: ReleaseTag,
+    ): Effect.Effect<Option.Option<CommitSha>, TagRefusal> =>
+      Effect.gen(function*() {
+        yield* run(
+          ['fetch', '--force', '--no-tags', remote, `+refs/tags/${tag}:refs/tags/${tag}`],
+          () => TagCapturedMalformed.make({ path: tagCommitPath }),
+        )
+        const peeled = yield* git(['rev-parse', '--verify', `refs/tags/${tag}^{commit}`])
+        if (Result.isFailure(peeled)) {
+          return Option.none()
+        }
+        return S.decodeUnknownOption(CommitSha)(peeled.success.trim())
       }),
     repoSlug: (): Effect.Effect<RepoSlug, TagRefusal> =>
       Effect.gen(function*() {

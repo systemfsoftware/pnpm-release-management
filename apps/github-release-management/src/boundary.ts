@@ -1,5 +1,6 @@
 import { resolveWorkspaceRoot, type WorkspaceRootNotAbsolute } from '@systemfsoftware/cli-adapter'
 import {
+  AdoptionRequest,
   GithubReleaseRequest,
   PlanRequest,
   PullRequestRequest,
@@ -57,6 +58,21 @@ export const planRequestOf = (workspace: Workspace, flags: PlanFlags) =>
       remote: flags.remote,
       tarballs: flags.tarballs,
       changelogDir: workspace.config.changelogDir,
+    }),
+  )
+
+export interface AdoptFlags {
+  readonly registry: string
+  readonly output: string
+  readonly remote: string | undefined
+}
+
+export const adoptRequestOf = (flags: AdoptFlags) =>
+  decodeFlags(
+    S.decodeUnknownEffect(AdoptionRequest)({
+      registry: flags.registry,
+      output: flags.output,
+      remote: flags.remote,
     }),
   )
 

@@ -1,0 +1,18 @@
+import { type LedgerEntry, LedgerPort, type ReleaseLedger } from '@systemfsoftware/release-language'
+import { Effect, Layer, Option } from 'effect'
+
+export const fakeLedgerPort = (
+  head: ReadonlyArray<LedgerEntry> = [],
+  base: ReadonlyArray<LedgerEntry> = [],
+) =>
+  Layer.succeed(LedgerPort, {
+    read: () => {
+      if (head.length === 0) return Effect.succeed(Option.none<ReleaseLedger>())
+      return Effect.succeed(Option.some({ entries: [...head] }))
+    },
+    readAt: () => {
+      if (base.length === 0) return Effect.succeed(Option.none<ReleaseLedger>())
+      return Effect.succeed(Option.some({ entries: [...base] }))
+    },
+    write: () => Effect.void,
+  })

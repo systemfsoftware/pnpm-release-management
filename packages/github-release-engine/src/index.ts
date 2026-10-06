@@ -1,3 +1,13 @@
+export {
+  AdoptionCommand,
+  type AdoptionDecision,
+  AdoptionRecorded,
+  AdoptionRefused,
+  AdoptionVacant,
+  adoptRelease,
+} from './adopt-release.workflow.js'
+export { adoptCell, AdoptionRequest } from './adopt.js'
+export { AdoptionReport } from './adopt.schema.js'
 export { githubReleaseCell, GithubReleaseRequest } from './github-release.js'
 export {
   GithubReleaseAsserted,

@@ -209,6 +209,7 @@ so the release PR diff _is_ the set of notes that shipped.
 | `version sync`      | `check` or `bump <version>` across every declared surface                |
 | `version sync-root` | Stamps the launcher manifest with the released version                   |
 | `release pr`        | Commits the release branch, opens, refreshes, or closes the release PR   |
+| `release adopt`     | Records every pre-adoption release tag's bytes in the adoption ledger    |
 | `release plan`      | Derives the release phase from repository state                          |
 | `release tag`       | Captures the cycle, then pushes one tag per released package             |
 | `release release`   | Creates GitHub Releases from the generated changelogs                    |
@@ -225,6 +226,7 @@ Flags worth knowing:
 | ------------------- | --------------------------------------------------------------------------------------------- |
 | `changeset check`   | `<base-sha-or-ref>`, `--base`, `--skip-liveness`                                              |
 | `release plan`      | `--output <file>`, `--deferred <file>`, `--remote <name>`                                     |
+| `release adopt`     | `--registry <url>`, `--output <file>`, `--remote <name>`                                      |
 | `release tag`       | `--captured <file>`, `--output <file>`, `--exclude`, `--json`, `--dry-run`, `--remote <name>` |
 | `release release`   | `--captured <file>`, `--assert`, `--dry-run`                                                  |
 | `version sync`      | `check \| bump <version>`                                                                     |
@@ -338,6 +340,64 @@ dependent's packed bytes even when its own source did not move. With
 a minor intent on one member moves every workspace dependent by a patch release,
 which keeps each dependent's own `name@version` identity intact instead of
 rewriting an already-released tarball.
+
+## Adoption
+
+A repository that adopts this tooling already has release tags — systemfsoftware's
+are all lightweight — whose bytes this tooling never recorded. Adoption makes the
+record once, before the first managed release, so those tags are never trusted
+from nothing.
+
+```sh
+github-release-management adopt \
+  --registry https://registry.npmjs.org \
+  --output release-ledger.json
+```
+
+`--registry <url>` is required and has no default. For every member of
+`pnpm-workspace.yaml` that is not `private` whose `<name>@v<version>` tag exists
+on `--remote` (`origin` by default), adoption fetches `<name>@<version>` from the
+registry, downloads `dist.tarball`, and records one entry per tag:
+
+```json
+{
+  "entries": [
+    {
+      "tag": "@scope/name@v1.2.3",
+      "commit": "<peeled commit the tag points to>",
+      "package": "@scope/name",
+      "version": "1.2.3",
+      "integrity": "sha512-<dist.integrity>",
+      "sha256": "sha256-<base64 of the downloaded .tgz>",
+      "files": { "package/package.json": "sha512-<base64>", "package/index.js": "sha512-<base64>" }
+    }
+  ]
+}
+```
+
+The `files` map is the same digest shape the tag annotations use, so a later
+mismatch can name the first differing file. A version whose bytes cannot be
+fetched — a 404, a network failure, or a download whose sha512 does not equal
+`dist.integrity` — is listed as a hard error in the report and the command exits
+non-zero; nothing is admitted silently.
+
+The ledger is one JSON file at the repository root, written by the command and
+never hand-edited: keys in a stable order, entries sorted by tag. It lands in its
+own commit in the adopting repository, separate from any release commit, so the
+adoption itself is a reviewable one-file change.
+
+After adoption, `release plan` accepts a lightweight tag only when the ledger has
+that tag with the same peeled commit and the same `name@version`. A moved tag or
+a mismatched entry is a red refusal naming the tag and both commits (or both
+values); a ledgered version whose current packed tarball differs from the ledger's
+`integrity` is refused with the first differing file, exactly like an annotated
+tag. A new lightweight tag that is not in the ledger stays the existing red
+refusal, so every tag released after adoption is annotated.
+
+The ledger is append-only. `changeset check <base>` — which already receives the
+pull request base revision — fails red when an entry present at the base is
+removed or changed at the head; additions are fine. That is what proves the
+record was extended rather than rewritten.
 
 ## Sandbox
 

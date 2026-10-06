@@ -82,6 +82,22 @@ export {
   ReleaseBump,
 } from './Intent.schema.js'
 export {
+  LedgerAppendChanged,
+  LedgerAppendRefusal,
+  LedgerAppendRemoved,
+  LedgerEntry,
+  LedgerEntryMismatch,
+  LedgerIdentityRefusal,
+  LedgerMalformed,
+  LedgerRefusal,
+  LedgerTagMissing,
+  LedgerTagMoved,
+  LedgerUnreadable,
+  LedgerUnwritable,
+  ReleaseLedger,
+} from './Ledger.schema.js'
+export { LEDGER_PATH, LedgerPort } from './LedgerPort.js'
+export {
   NewIntentInvalidBump,
   NewIntentPackageNameMalformed,
   NewIntentPackagesEmpty,
@@ -103,6 +119,16 @@ export {
   PullRequestSummary,
   ReleaseLabel,
 } from './PullRequest.schema.js'
+export {
+  AdoptionFailure,
+  RegistryDownloadFailed,
+  RegistryFetchFailed,
+  RegistryIntegrityMismatch,
+  RegistryMetadata,
+  RegistryMetadataMalformed,
+  RegistryRefusal,
+} from './Registry.schema.js'
+export { RegistryPort } from './RegistryPort.js'
 export { ReleaseConfigStore } from './ReleaseConfigStore.js'
 export {
   CheckKind,

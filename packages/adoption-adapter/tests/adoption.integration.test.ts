@@ -1,0 +1,733 @@
+import { NodeServices } from '@effect/platform-node'
+import { LedgerLive, RegistryLive } from '@systemfsoftware/adoption-adapter'
+import { LedgerAppendCommand, verifyLedgerAppend } from '@systemfsoftware/changeset-engine'
+import { Cell } from '@systemfsoftware/effect-cell-types'
+import { Gherkin, Given, it, layer, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
+import { GitLive } from '@systemfsoftware/git-adapter'
+import {
+  adoptCell,
+  type AdoptionReport,
+  planCell,
+  type PlanDecision,
+  type PlanReport,
+} from '@systemfsoftware/github-release-engine'
+import {
+  type AdoptionFailure,
+  ChangesetsPort,
+  ChangesetStore,
+  Count,
+  CycleStore,
+  FsPath,
+  GitRef,
+  HttpUrl,
+  LEDGER_PATH,
+  LedgerPort,
+  ManifestUnreadable,
+  type Member,
+  PackageManifest,
+  PackageName,
+  PackageVersion,
+  RelativePath,
+  ReleaseLedger,
+  RepoRoot,
+  WorkspaceStore,
+} from '@systemfsoftware/release-language'
+import { TarballLive } from '@systemfsoftware/tarball-adapter'
+import { Effect, Layer, Option, Result } from 'effect'
+import { FileSystem } from 'effect/FileSystem'
+import * as Match from 'effect/Match'
+import { Path } from 'effect/Path'
+import * as Stream from 'effect/Stream'
+import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
+import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
+import { createHash } from 'node:crypto'
+import { createServer, type Server } from 'node:http'
+import { expect } from 'vitest'
+import { buildTarball } from './__fixtures__/build-tarball.js'
+
+const Feature = makeFeature({ it, layer })
+
+const ALPHA_NAME = PackageName.make('@e2e/alpha')
+const ALPHA_VERSION = PackageVersion.make('1.0.0')
+const BETA_NAME = PackageName.make('@e2e/beta')
+const BETA_VERSION = PackageVersion.make('2.0.0')
+
+const alphaMember: Member = {
+  name: ALPHA_NAME,
+  dir: RelativePath.make('packages/alpha'),
+  manifest: { name: ALPHA_NAME, version: ALPHA_VERSION },
+  publishable: true,
+}
+
+const betaMember: Member = {
+  name: BETA_NAME,
+  dir: RelativePath.make('packages/beta'),
+  manifest: { name: BETA_NAME, version: BETA_VERSION },
+  publishable: true,
+}
+
+const tagOf = (name: PackageName, version: PackageVersion): string => `${name}@v${version}`
+const tarNameOf = (name: PackageName, version: PackageVersion): string => `${name.replace(/[/@]/g, '-')}-${version}.tgz`
+const integrityOf = (bytes: Uint8Array): string => `sha512-${createHash('sha512').update(bytes).digest('base64')}`
+const tarballBytes = (name: PackageName, version: PackageVersion, files: Record<string, string>): Buffer =>
+  buildTarball({ 'package/package.json': JSON.stringify({ name, version }), ...files })
+
+const git = (cwd: string, args: ReadonlyArray<string>) =>
+  Effect.gen(function*() {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
+    const handle = yield* spawner.spawn(ChildProcess.make('git', args, { cwd }))
+    const [stdout, stderr] = yield* Effect.all(
+      [
+        Stream.mkString(Stream.decodeText(handle.stdout)),
+        Stream.mkString(Stream.decodeText(handle.stderr)),
+      ],
+      { concurrency: 'unbounded' },
+    )
+    const code = yield* handle.exitCode
+    if (code !== 0) {
+      return yield* Effect.fail(new Error(`git ${args.join(' ')}`, { cause: new Error(stderr) }))
+    }
+    return stdout.trim()
+  })
+
+interface Served {
+  readonly key: string
+  readonly file: string
+  readonly bytes: Uint8Array
+  readonly integrity: string
+}
+
+const closeServer = (server: Server): Promise<void> => {
+  const { promise, resolve } = Promise.withResolvers<void>()
+  server.close(() => resolve())
+  return promise
+}
+
+const portOf = (server: Server): number => {
+  const address = server.address()
+  if (address === null || typeof address === 'string') {
+    return 0
+  }
+  return address.port
+}
+
+const startRegistry = (served: ReadonlyArray<Served>) =>
+  Effect.tryPromise({
+    try: () => {
+      const { promise, resolve, reject } = Promise.withResolvers<{ base: string; close: () => Promise<void> }>()
+      const server = createServer((request, response) => {
+        const decoded = decodeURIComponent(request.url ?? '')
+        if (decoded.startsWith('/tarballs/')) {
+          const file = decoded.slice('/tarballs/'.length)
+          const tarball = served.find((entry) => entry.file === file)
+          if (tarball === undefined) {
+            response.statusCode = 404
+            response.end()
+            return
+          }
+          response.setHeader('content-type', 'application/octet-stream')
+          response.end(Buffer.from(tarball.bytes))
+          return
+        }
+        const segments = decoded.replace(/^\//, '').split('/')
+        const version = segments.pop()
+        const name = segments.join('/')
+        const entry = served.find((candidate) => candidate.key === `${name}@${version}`)
+        if (entry === undefined) {
+          response.statusCode = 404
+          response.end()
+          return
+        }
+        response.setHeader('content-type', 'application/json')
+        response.end(
+          JSON.stringify({
+            dist: {
+              tarball: `http://127.0.0.1:${portOf(server)}/tarballs/${entry.file}`,
+              integrity: entry.integrity,
+            },
+          }),
+        )
+      })
+      server.on('error', reject)
+      server.listen(0, '127.0.0.1', () => {
+        resolve({ base: `http://127.0.0.1:${portOf(server)}`, close: () => closeServer(server) })
+      })
+      return promise
+    },
+    catch: (cause) => new Error('registry server failed', { cause: cause }),
+  })
+
+interface Context {
+  readonly root: string
+  readonly work: string
+  readonly tarballs: string
+  readonly registry: string
+  readonly close: () => Promise<void>
+}
+
+interface PrepareOptions {
+  readonly pack: ReadonlyArray<{ name: PackageName; version: PackageVersion }>
+  readonly serve: ReadonlyArray<{ name: PackageName; version: PackageVersion; files: Record<string, string> }>
+  readonly tag: ReadonlyArray<{ name: PackageName; version: PackageVersion }>
+}
+
+const prepare = (options: PrepareOptions) =>
+  Effect.gen(function*() {
+    const fs = yield* FileSystem
+    const path = yield* Path
+    const root = yield* fs.makeTempDirectory({ prefix: 'adoption-ledger-' })
+    const work = path.join(root, 'work')
+    const tarballs = path.join(root, 'tarballs')
+    yield* fs.makeDirectory(work, { recursive: true })
+    yield* fs.makeDirectory(tarballs, { recursive: true })
+    yield* fs.writeFileString(path.join(work, 'README.md'), '# fixture\n')
+    const members = [...options.pack, ...options.serve].map((entry) => [entry.name, entry.version] as const)
+    const created: Array<PackageName> = []
+    for (const [name, version] of members) {
+      if (created.includes(name)) continue
+      created.push(name)
+      const dir = path.join(work, 'packages', name.replace(/[/@]/g, '-'))
+      yield* fs.makeDirectory(dir, { recursive: true })
+      yield* fs.writeFileString(path.join(dir, 'package.json'), JSON.stringify({ name, version }))
+    }
+    yield* git(work, ['init', '-q', '-b', 'main'])
+    yield* git(work, ['config', 'user.email', 'test@example.invalid'])
+    yield* git(work, ['config', 'user.name', 'test'])
+    yield* git(work, ['add', '-A'])
+    yield* git(work, ['commit', '-q', '-m', 'chore: fixture'])
+    yield* git(root, ['init', '-q', '--bare', 'origin.git'])
+    yield* git(work, ['remote', 'add', 'origin', path.join(root, 'origin.git')])
+    yield* git(work, ['push', '-q', '-u', 'origin', 'main'])
+    const served: Array<Served> = []
+    for (const entry of options.serve) {
+      const bytes = tarballBytes(entry.name, entry.version, entry.files)
+      yield* fs.writeFile(path.join(tarballs, tarNameOf(entry.name, entry.version)), bytes)
+      served.push({
+        key: `${entry.name}@${entry.version}`,
+        file: tarNameOf(entry.name, entry.version),
+        bytes,
+        integrity: integrityOf(bytes),
+      })
+    }
+    for (const entry of options.tag) {
+      yield* git(work, ['tag', tagOf(entry.name, entry.version)])
+    }
+    if (options.tag.length > 0) {
+      yield* git(work, ['push', '-q', 'origin', '--tags'])
+    }
+    const registry = yield* startRegistry(served)
+    return { root, work, tarballs, registry: registry.base, close: registry.close }
+  })
+
+const workspaceLayer = (members: ReadonlyArray<Member>) =>
+  Layer.succeed(WorkspaceStore, {
+    root: RepoRoot.make('/'),
+    listMembers: () => Effect.succeed([...members]),
+    readManifest: (dir: RelativePath) => {
+      const member = members.find((candidate) => candidate.dir === dir)
+      if (member === undefined) {
+        return Effect.fail(ManifestUnreadable.make({ path: FsPath.make(dir) }))
+      }
+      return Effect.succeed(PackageManifest.make({ name: member.name, version: member.manifest.version }))
+    },
+    readFileFromRoot: () => Effect.fail(ManifestUnreadable.make({ path: FsPath.make('/') })),
+  })
+
+const changesetsLayer = Layer.succeed(ChangesetsPort, {
+  plan: () => Effect.succeed({ changesets: Count.make(0), releases: [] }),
+  apply: () => Effect.void,
+})
+
+const unused = () => Effect.die(new Error('unused store operation'))
+
+const changesetStoreLayer = Layer.succeed(ChangesetStore, {
+  listIntents: () => Effect.succeed([]),
+  readIntent: unused,
+  writeIntent: unused,
+  deleteIntents: unused,
+  readReadme: unused,
+})
+
+const cycleLayer = Layer.succeed(CycleStore, {
+  readCaptured: () => Effect.succeed([]),
+  writeCaptured: () => Effect.succeed(Count.make(0)),
+  readDeferred: () => Effect.succeed([]),
+  writeDeferred: () => Effect.succeed(Count.make(0)),
+})
+
+const adaptersOf = (context: Context, members: ReadonlyArray<Member>) =>
+  Layer.mergeAll(
+    GitLive,
+    TarballLive,
+    LedgerLive(RepoRoot.make(context.work)),
+    RegistryLive.pipe(Layer.provide(FetchHttpClient.layer)),
+    workspaceLayer(members),
+    changesetsLayer,
+    changesetStoreLayer,
+    cycleLayer,
+  ).pipe(Layer.provide(NodeServices.layer))
+
+const adoptRequest = (context: Context) => ({
+  registry: HttpUrl.make(context.registry),
+  output: RelativePath.make('release-ledger.json'),
+})
+
+const planRequest = (context: Context) => ({
+  tarballs: FsPath.make(context.tarballs),
+  changelogDir: RelativePath.make('.changeset/changelogs'),
+})
+
+const attempt = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<Result.Result<A, E>, never, R> =>
+  Effect.result(effect)
+
+const adoptionDecisionTag = (report: AdoptionReport): string =>
+  Match.value(report).pipe(
+    Match.tagsExhaustive({
+      AdoptionRecorded: () => 'AdoptionRecorded',
+      AdoptionVacant: () => 'AdoptionVacant',
+    }),
+  )
+
+const planDecisionTag = (decision: PlanDecision): string =>
+  Match.value(decision).pipe(
+    Match.tagsExhaustive({
+      PlanVersion: () => 'PlanVersion',
+      PlanRelease: () => 'PlanRelease',
+      PlanSettled: () => 'PlanSettled',
+    }),
+  )
+
+const failureTag = (failure: AdoptionFailure): string =>
+  Match.value(failure).pipe(
+    Match.tagsExhaustive({
+      RegistryFetchFailed: () => 'RegistryFetchFailed',
+      RegistryMetadataMalformed: () => 'RegistryMetadataMalformed',
+      RegistryDownloadFailed: () => 'RegistryDownloadFailed',
+      RegistryIntegrityMismatch: () => 'RegistryIntegrityMismatch',
+      TarballUnreadable: () => 'TarballUnreadable',
+    }),
+  )
+
+const withWorkdir = <A, E, R>(context: Context, effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+  Effect.gen(function*() {
+    const original = process.cwd()
+    yield* Effect.sync(() => process.chdir(context.work))
+    return yield* effect.pipe(Effect.ensuring(Effect.sync(() => process.chdir(original))))
+  })
+
+const cleanup = (context: Context) =>
+  Effect.gen(function*() {
+    const fs = yield* FileSystem
+    yield* Effect.promise(() => context.close())
+    yield* fs.remove(context.root, { recursive: true, force: true })
+  })
+
+const phaseOfPlan = (outcome: Result.Result<PlanReport, unknown>): string =>
+  Result.match(outcome, {
+    onFailure: () => 'refused',
+    onSuccess: (report) => planDecisionTag(report.decision),
+  })
+
+Feature('Adoption ledger').body(({ scenario }) => {
+  scenario(
+    'A lightweight release is adopted against its registry bytes and then plans green',
+    { scenarioLayer: NodeServices.layer },
+    Gherkin.Do.pipe(
+      Given('a fixture repository with one lightweight release tag served by a registry')(
+        'context',
+        () =>
+          prepare({
+            pack: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+            serve: [{
+              name: ALPHA_NAME,
+              version: ALPHA_VERSION,
+              files: { 'package/index.js': 'export const alpha = 1\n' },
+            }],
+            tag: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+          }),
+      ),
+      When('the release is adopted and then planned')(
+        'outcome',
+        (s) =>
+          Effect.gen(function*() {
+            const live = adaptersOf(s.context, [alphaMember])
+            return yield* withWorkdir(
+              s.context,
+              Effect.gen(function*() {
+                const adopted = yield* attempt(Cell.run(Cell.provide(adoptCell, live), adoptRequest(s.context)))
+                const ledger = yield* LedgerPort.pipe(
+                  Effect.flatMap((port) => port.read(LEDGER_PATH)),
+                  Effect.provide(live),
+                )
+                const planned = yield* attempt(Cell.run(Cell.provide(planCell, live), planRequest(s.context)))
+                const commit = yield* git(s.context.work, ['rev-parse', `${tagOf(ALPHA_NAME, ALPHA_VERSION)}^{commit}`])
+                return { adopted, ledger, planned, commit }
+              }),
+            )
+          }),
+      ),
+      Then('the ledger records the peeled tag commit and the plan settles')(
+        (s) =>
+          Effect.gen(function*() {
+            const outcome = s.outcome
+            expect(
+              Result.match(outcome.adopted, {
+                onFailure: () => 'refused',
+                onSuccess: (report) => adoptionDecisionTag(report),
+              }),
+            ).toBe('AdoptionRecorded')
+            expect(Option.isSome(outcome.ledger)).toBe(true)
+            const entries = Option.getOrThrow(outcome.ledger).entries
+            expect(entries.length).toBe(1)
+            expect(entries[0]?.tag).toBe(tagOf(ALPHA_NAME, ALPHA_VERSION))
+            expect(entries[0]?.commit).toBe(outcome.commit)
+            expect(entries[0]?.version).toBe(ALPHA_VERSION)
+            expect(entries[0]?.sha256.startsWith('sha256-')).toBe(true)
+            expect(phaseOfPlan(outcome.planned)).toBe('PlanSettled')
+            yield* cleanup(s.context)
+          }),
+      ),
+    ),
+  )
+
+  scenario(
+    'Moving a released tag away from its ledger commit refuses the plan red',
+    { scenarioLayer: NodeServices.layer },
+    Gherkin.Do.pipe(
+      Given('an adopted fixture repository')(
+        'context',
+        () =>
+          prepare({
+            pack: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+            serve: [{
+              name: ALPHA_NAME,
+              version: ALPHA_VERSION,
+              files: { 'package/index.js': 'export const alpha = 1\n' },
+            }],
+            tag: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+          }),
+      ),
+      When('the tag is moved to a new commit and the plan runs')(
+        'outcome',
+        (s) =>
+          Effect.gen(function*() {
+            const live = adaptersOf(s.context, [alphaMember])
+            return yield* withWorkdir(
+              s.context,
+              Effect.gen(function*() {
+                yield* Cell.run(Cell.provide(adoptCell, live), adoptRequest(s.context))
+                yield* git(s.context.work, ['commit', '-q', '--allow-empty', '-m', 'move'])
+                yield* git(s.context.work, ['tag', '-f', tagOf(ALPHA_NAME, ALPHA_VERSION)])
+                yield* git(s.context.work, [
+                  'push',
+                  '-q',
+                  '--force',
+                  'origin',
+                  `refs/tags/${tagOf(ALPHA_NAME, ALPHA_VERSION)}`,
+                ])
+                return yield* attempt(Cell.run(Cell.provide(planCell, live), planRequest(s.context)))
+              }),
+            )
+          }),
+      ),
+      Then('the refusal names the tag and both commits')(
+        (s) =>
+          Effect.gen(function*() {
+            const tag = Result.match(s.outcome, {
+              onFailure: (error) =>
+                Match.value(error).pipe(
+                  Match.tag('LedgerTagMoved', (moved) => moved.tag),
+                  Match.tag('LedgerTagMissing', () => 'missing'),
+                  Match.tag('LedgerEntryMismatch', () => 'mismatch'),
+                  Match.tag('TagIntegrityMismatch', () => 'integrity'),
+                  Match.tag('TagAnnotationLightweight', () => 'lightweight'),
+                  Match.tag('TagAnnotationMalformed', () => 'malformed'),
+                  Match.tag('TarballMissing', () => 'tarball-missing'),
+                  Match.tag('TarballUnreadable', () => 'tarball-unreadable'),
+                  Match.tag('LedgerUnreadable', () => 'ledger-unreadable'),
+                  Match.tag('LedgerMalformed', () => 'ledger-malformed'),
+                  Match.tag('LedgerUnwritable', () => 'ledger-unwritable'),
+                  Match.orElse(() => 'other'),
+                ),
+              onSuccess: () => 'planned',
+            })
+            expect(tag).toBe(tagOf(ALPHA_NAME, ALPHA_VERSION))
+            yield* cleanup(s.context)
+          }),
+      ),
+    ),
+  )
+
+  scenario(
+    'A new lightweight tag outside the ledger refuses the plan red',
+    { scenarioLayer: NodeServices.layer },
+    Gherkin.Do.pipe(
+      Given('an adopted fixture repository that then gains a tagged member')(
+        'context',
+        () =>
+          prepare({
+            pack: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+            serve: [{
+              name: ALPHA_NAME,
+              version: ALPHA_VERSION,
+              files: { 'package/index.js': 'export const alpha = 1\n' },
+            }],
+            tag: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+          }),
+      ),
+      When('the new member is tagged lightweight and the plan runs')(
+        'outcome',
+        (s) =>
+          Effect.gen(function*() {
+            const live = adaptersOf(s.context, [alphaMember, betaMember])
+            return yield* withWorkdir(
+              s.context,
+              Effect.gen(function*() {
+                const fs = yield* FileSystem
+                const path = yield* Path
+                yield* Cell.run(Cell.provide(adoptCell, live), adoptRequest(s.context))
+                const dir = path.join(s.context.work, 'packages', 'beta')
+                yield* fs.makeDirectory(dir, { recursive: true })
+                yield* fs.writeFileString(
+                  path.join(dir, 'package.json'),
+                  JSON.stringify({ name: BETA_NAME, version: BETA_VERSION }),
+                )
+                yield* fs.writeFile(
+                  path.join(s.context.tarballs, tarNameOf(BETA_NAME, BETA_VERSION)),
+                  tarballBytes(BETA_NAME, BETA_VERSION, { 'package/index.js': 'export const beta = 1\n' }),
+                )
+                yield* git(s.context.work, ['add', '-A'])
+                yield* git(s.context.work, ['commit', '-q', '-m', 'chore: beta'])
+                yield* git(s.context.work, ['tag', tagOf(BETA_NAME, BETA_VERSION)])
+                yield* git(s.context.work, ['push', '-q', 'origin', '--tags'])
+                return yield* attempt(Cell.run(Cell.provide(planCell, live), planRequest(s.context)))
+              }),
+            )
+          }),
+      ),
+      Then('the refusal names the lightweight tag')(
+        (s) =>
+          Effect.gen(function*() {
+            const tag = Result.match(s.outcome, {
+              onFailure: (error) =>
+                Match.value(error).pipe(
+                  Match.tag('TagAnnotationLightweight', (lightweight) => lightweight.tag),
+                  Match.tag('LedgerTagMoved', () => 'moved'),
+                  Match.tag('LedgerTagMissing', () => 'missing'),
+                  Match.tag('LedgerEntryMismatch', () => 'mismatch'),
+                  Match.tag('TagIntegrityMismatch', () => 'integrity'),
+                  Match.tag('TagAnnotationMalformed', () => 'malformed'),
+                  Match.tag('TarballMissing', () => 'tarball-missing'),
+                  Match.tag('TarballUnreadable', () => 'tarball-unreadable'),
+                  Match.tag('LedgerUnreadable', () => 'ledger-unreadable'),
+                  Match.tag('LedgerMalformed', () => 'ledger-malformed'),
+                  Match.tag('LedgerUnwritable', () => 'ledger-unwritable'),
+                  Match.orElse(() => 'other'),
+                ),
+              onSuccess: () => 'planned',
+            })
+            expect(tag).toBe(tagOf(BETA_NAME, BETA_VERSION))
+            yield* cleanup(s.context)
+          }),
+      ),
+    ),
+  )
+
+  scenario(
+    'A ledgered release whose packed bytes changed refuses naming the first differing file',
+    { scenarioLayer: NodeServices.layer },
+    Gherkin.Do.pipe(
+      Given('an adopted fixture repository whose tarball is then rebuilt')(
+        'context',
+        () =>
+          prepare({
+            pack: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+            serve: [{
+              name: ALPHA_NAME,
+              version: ALPHA_VERSION,
+              files: { 'package/index.js': 'export const alpha = 1\n' },
+            }],
+            tag: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+          }),
+      ),
+      When('the packed tarball changes and the plan runs')(
+        'outcome',
+        (s) =>
+          Effect.gen(function*() {
+            const live = adaptersOf(s.context, [alphaMember])
+            return yield* withWorkdir(
+              s.context,
+              Effect.gen(function*() {
+                const fs = yield* FileSystem
+                const path = yield* Path
+                yield* Cell.run(Cell.provide(adoptCell, live), adoptRequest(s.context))
+                yield* fs.writeFile(
+                  path.join(s.context.tarballs, tarNameOf(ALPHA_NAME, ALPHA_VERSION)),
+                  tarballBytes(ALPHA_NAME, ALPHA_VERSION, { 'package/index.js': 'export const alpha = 2\n' }),
+                )
+                return yield* attempt(Cell.run(Cell.provide(planCell, live), planRequest(s.context)))
+              }),
+            )
+          }),
+      ),
+      Then('the refusal names the tag, both hashes and package/index.js')(
+        (s) =>
+          Effect.gen(function*() {
+            const file = Result.match(s.outcome, {
+              onFailure: (error) =>
+                Match.value(error).pipe(
+                  Match.tag('TagIntegrityMismatch', (mismatch) => mismatch.file),
+                  Match.tag('LedgerTagMoved', () => 'moved'),
+                  Match.tag('LedgerTagMissing', () => 'missing'),
+                  Match.tag('LedgerEntryMismatch', () => 'mismatch'),
+                  Match.tag('TagAnnotationLightweight', () => 'lightweight'),
+                  Match.tag('TagAnnotationMalformed', () => 'malformed'),
+                  Match.tag('TarballMissing', () => 'tarball-missing'),
+                  Match.tag('TarballUnreadable', () => 'tarball-unreadable'),
+                  Match.tag('LedgerUnreadable', () => 'ledger-unreadable'),
+                  Match.tag('LedgerMalformed', () => 'ledger-malformed'),
+                  Match.tag('LedgerUnwritable', () => 'ledger-unwritable'),
+                  Match.orElse(() => 'other'),
+                ),
+              onSuccess: () => 'planned',
+            })
+            expect(file).toBe('package/index.js')
+            yield* cleanup(s.context)
+          }),
+      ),
+    ),
+  )
+
+  scenario(
+    'A release the registry cannot serve is a hard adoption error',
+    { scenarioLayer: NodeServices.layer },
+    Gherkin.Do.pipe(
+      Given('a tagged release whose registry answers not found')(
+        'context',
+        () =>
+          prepare({
+            pack: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+            serve: [],
+            tag: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+          }),
+      ),
+      When('adoption runs against the empty registry')(
+        'outcome',
+        (s) =>
+          Effect.gen(function*() {
+            const live = adaptersOf(s.context, [alphaMember])
+            return yield* withWorkdir(
+              s.context,
+              attempt(Cell.run(Cell.provide(adoptCell, live), adoptRequest(s.context))),
+            )
+          }),
+      ),
+      Then('adoption refuses with a registry fetch failure and writes no ledger')(
+        (s) =>
+          Effect.gen(function*() {
+            const fs = yield* FileSystem
+            const path = yield* Path
+            const kinds = Result.match(s.outcome, {
+              onFailure: (error) =>
+                Match.value(error).pipe(
+                  Match.tag('AdoptionRefused', (refused) => refused.failures.map(failureTag)),
+                  Match.tag('ManifestUnreadable', () => ['manifest-unreadable']),
+                  Match.tag('ManifestInvalid', () => ['manifest-invalid']),
+                  Match.tag('TagCapturedMalformed', () => ['tag-captured-malformed']),
+                  Match.tag('TagExcludedMalformed', () => ['tag-excluded-malformed']),
+                  Match.tag('LedgerUnwritable', () => ['ledger-unwritable']),
+                  Match.orElse(() => ['other']),
+                ),
+              onSuccess: (report) => [adoptionDecisionTag(report)],
+            })
+            expect(kinds).toContain('RegistryFetchFailed')
+            const written = yield* fs.exists(path.join(s.context.work, 'release-ledger.json'))
+            expect(written).toBe(false)
+            yield* cleanup(s.context)
+          }),
+      ),
+    ),
+  )
+
+  scenario(
+    'Changing a ledger entry already present at the base fails the append-only check red',
+    { scenarioLayer: NodeServices.layer },
+    Gherkin.Do.pipe(
+      Given('a repository whose base holds one ledger entry')(
+        'context',
+        () =>
+          Effect.gen(function*() {
+            const fs = yield* FileSystem
+            const path = yield* Path
+            const context = yield* prepare({
+              pack: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+              serve: [],
+              tag: [],
+            })
+            const commit = yield* git(context.work, ['rev-parse', 'HEAD'])
+            const entry = {
+              tag: tagOf(ALPHA_NAME, ALPHA_VERSION),
+              commit,
+              package: ALPHA_NAME,
+              version: ALPHA_VERSION,
+              integrity: 'sha512-recorded',
+              sha256: 'sha256-recorded',
+              files: { 'package/package.json': 'sha512-recorded' },
+            }
+            yield* fs.writeFileString(
+              path.join(context.work, 'release-ledger.json'),
+              `${JSON.stringify({ entries: [entry] }, null, 2)}\n`,
+            )
+            yield* git(context.work, ['add', '-A'])
+            yield* git(context.work, ['commit', '-q', '-m', 'chore: adopt'])
+            const base = yield* git(context.work, ['rev-parse', 'HEAD'])
+            yield* fs.writeFileString(
+              path.join(context.work, 'release-ledger.json'),
+              `${JSON.stringify({ entries: [{ ...entry, integrity: 'sha512-tampered' }] }, null, 2)}\n`,
+            )
+            yield* git(context.work, ['add', '-A'])
+            yield* git(context.work, ['commit', '-q', '-m', 'chore: tamper'])
+            return { ...context, base }
+          }),
+      ),
+      When('the check compares the ledger at the base with the ledger at HEAD')(
+        'outcome',
+        (s) =>
+          Effect.gen(function*() {
+            const live = LedgerLive(RepoRoot.make(s.context.work)).pipe(Layer.provide(NodeServices.layer))
+            return yield* LedgerPort.pipe(
+              Effect.flatMap((port) =>
+                Effect.gen(function*() {
+                  const base = yield* port.readAt(GitRef.make(s.context.base), LEDGER_PATH)
+                  const head = yield* port.read(LEDGER_PATH)
+                  return verifyLedgerAppend(
+                    LedgerAppendCommand.make({
+                      base: Option.getOrElse(base, () => ReleaseLedger.make({ entries: [] })).entries,
+                      head: Option.getOrElse(head, () => ReleaseLedger.make({ entries: [] })).entries,
+                    }),
+                  )
+                })
+              ),
+              Effect.provide(live),
+            )
+          }),
+      ),
+      Then('the check fails red naming the changed tag')(
+        (s) =>
+          Effect.gen(function*() {
+            const tag = Result.match(s.outcome, {
+              onFailure: (error) =>
+                Match.value(error).pipe(
+                  Match.tag('LedgerAppendChanged', (changed) => changed.tag),
+                  Match.tag('LedgerAppendRemoved', () => 'removed'),
+                  Match.exhaustive,
+                ),
+              onSuccess: () => 'held',
+            })
+            expect(tag).toBe(tagOf(ALPHA_NAME, ALPHA_VERSION))
+            yield* cleanup(s.context)
+          }),
+      ),
+    ),
+  )
+})

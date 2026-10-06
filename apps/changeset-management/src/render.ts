@@ -5,6 +5,8 @@ import type {
   ConfigRefusal,
   Intent,
   IntentRefusal,
+  LedgerAppendRefusal,
+  LedgerRefusal,
   MemberRefusal,
   NewIntentRefusal,
   RepoRoot,
@@ -19,6 +21,8 @@ export type AppRefusal =
   | IntentRefusal
   | NewIntentRefusal
   | ChangeEvidenceRefusal
+  | LedgerRefusal
+  | LedgerAppendRefusal
   | WorkspaceRootNotAbsolute
   | BaseRefMissing
   | BaseRefInvalid
@@ -54,6 +58,13 @@ export const renderRefusal = (refusal: AppRefusal): Effect.Effect<void, never, R
         TurboDryRunUnreadable: (unreadable) => `turbo dry-run unreadable (${unreadable.context}): ${unreadable.reason}`,
         TurboDryRunDrifted: (drifted) => `turbo dry-run drifted (${drifted.context}): ${drifted.reason}`,
         WorkspaceRootNotAbsolute: (notAbsolute) => `repository root "${notAbsolute.given}" is not an absolute path`,
+        LedgerUnreadable: (unreadable) => `cannot read release ledger ${unreadable.path}: ${unreadable.reason}`,
+        LedgerMalformed: (malformed) => `cannot parse release ledger ${malformed.path}: ${malformed.reason}`,
+        LedgerUnwritable: (unwritable) => `cannot write release ledger ${unwritable.path}: ${unwritable.reason}`,
+        LedgerAppendRemoved: (removed) =>
+          `release ledger entry removed at HEAD: ${removed.tag} — the ledger is append-only`,
+        LedgerAppendChanged: (changed) =>
+          `release ledger entry changed at HEAD: ${changed.tag}, recorded: ${changed.recorded}, current: ${changed.current} — the ledger is append-only`,
         BaseRefMissing: () => 'usage: changeset-management check <base-sha-or-ref>',
         BaseRefInvalid: (invalid) => `invalid base ref "${invalid.given}"`,
       }),

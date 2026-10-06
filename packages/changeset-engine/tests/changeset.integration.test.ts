@@ -17,6 +17,7 @@ import * as Match from 'effect/Match'
 import { expect } from 'vitest'
 import { fakeChangeEvidencePort } from './__fixtures__/FakeChangeEvidencePort.js'
 import { fakeChangesetStore } from './__fixtures__/FakeChangesetStore.js'
+import { fakeLedgerPort } from './__fixtures__/FakeLedgerPort.js'
 import { fakeWorkspaceStore } from './__fixtures__/FakeWorkspaceStore.js'
 
 const Feature = makeFeature({ it, layer })
@@ -55,6 +56,7 @@ Feature('Changeset intents').body(({ scenario }) => {
       fakeWorkspaceStore(members),
       fakeChangeEvidencePort({ members, touched, raw: null }),
       fakeChangesetStore({ intents: [] }).layer,
+      fakeLedgerPort(),
     )
     const runnable = Cell.provide(live)(gateChangesCell)
     scenario(
@@ -85,6 +87,7 @@ Feature('Changeset intents').body(({ scenario }) => {
       fakeWorkspaceStore(members),
       fakeChangeEvidencePort({ members, touched, raw: null }),
       fakeChangesetStore({ intents: [intent('fix-a', [intentEntry('@s/a', 'patch')])] }).layer,
+      fakeLedgerPort(),
     )
     const runnable = Cell.provide(live)(gateChangesCell)
     scenario(
@@ -116,6 +119,7 @@ Feature('Changeset intents').body(({ scenario }) => {
       fakeWorkspaceStore(members),
       fakeChangeEvidencePort({ members, touched, raw: null }),
       fakeChangesetStore({ intents: [intent('other', [intentEntry('@s/b', 'none')])] }).layer,
+      fakeLedgerPort(),
     )
     const runnable = Cell.provide(live)(gateChangesCell)
     scenario(
@@ -143,6 +147,7 @@ Feature('Changeset intents').body(({ scenario }) => {
       fakeWorkspaceStore(members),
       fakeChangeEvidencePort({ members, touched: [], raw: null }),
       fakeChangesetStore({ intents: [intent('ghost', [intentEntry('ghost-pkg', 'patch')])] }).layer,
+      fakeLedgerPort(),
     )
     const runnable = Cell.provide(live)(gateChangesCell)
     scenario(
@@ -169,6 +174,7 @@ Feature('Changeset intents').body(({ scenario }) => {
       fakeWorkspaceStore(members),
       fakeChangeEvidencePort({ members, touched: [], raw: null }),
       fakeChangesetStore({ intents: [intent('ghost', [intentEntry('ghost-pkg', 'patch')])] }).layer,
+      fakeLedgerPort(),
     )
     const runnable = Cell.provide(live)(gateChangesCell)
     scenario(

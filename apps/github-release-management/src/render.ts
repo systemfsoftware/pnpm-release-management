@@ -1,20 +1,27 @@
 import { Reporter, type WorkspaceRootNotAbsolute } from '@systemfsoftware/cli-adapter'
 import {
+  AdoptionRefused,
+  type AdoptionReport,
   type GithubReleaseDecision,
   type PlanReport,
   type PullRequestDecision,
   type TagDecision,
 } from '@systemfsoftware/github-release-engine'
 import {
+  type AdoptionFailure,
   type ConfigRefusal,
   FsPath,
   type GithubReleaseRefusal,
   type IntegrityRefusal,
   type IntentRefusal,
+  type LedgerIdentityRefusal,
+  type LedgerRefusal,
+  type LedgerUnwritable,
   type MemberRefusal,
   type PlanDeferredUnknown,
   type PlanRefusal,
   type PullRequestRefusal,
+  type RelativePath,
   type ReleaseTag,
   type TagRefusal,
   type TarballRefusal,
@@ -41,6 +48,8 @@ export type PlanFailure =
   | PlanRefusal
   | TagRefusal
   | IntegrityRefusal
+  | LedgerRefusal
+  | LedgerIdentityRefusal
   | VersionIntentMalformed
   | VersionUnknownPackage
 
@@ -148,6 +157,14 @@ export const renderPlanRefusal = (refusal: PlanFailure): Effect.Effect<void, nev
         TarballMissing: (missing) => `refused: tarball-missing, package: ${missing.package}@${missing.version}`,
         TarballUnreadable: (unreadable) =>
           `refused: tarball-unreadable, path: ${unreadable.path}, reason: ${unreadable.reason}`,
+        LedgerUnreadable: (unreadable) => `cannot read release ledger ${unreadable.path}: ${unreadable.reason}`,
+        LedgerMalformed: (malformed) => `cannot parse release ledger ${malformed.path}: ${malformed.reason}`,
+        LedgerUnwritable: (unwritable) => `cannot write release ledger ${unwritable.path}: ${unwritable.reason}`,
+        LedgerTagMissing: (missing) => `refused: ledger-tag-missing, tag: ${missing.tag}`,
+        LedgerTagMoved: (moved) =>
+          `refused: ledger-tag-moved, tag: ${moved.tag}, recorded: ${moved.recorded}, current: ${moved.current}`,
+        LedgerEntryMismatch: (mismatch) =>
+          `refused: ledger-entry-mismatch, tag: ${mismatch.tag}, recorded: ${mismatch.recorded}, current: ${mismatch.current}`,
         VersionIntentMalformed: (malformed) => `refused: version-intent-malformed, path: ${malformed.path}`,
         VersionUnknownPackage: (unknown) => `refused: version-unknown-package, package: ${unknown.package}`,
       }),
@@ -322,6 +339,60 @@ export const renderPlan = (
     }
     yield* appendFile(output, block)
   })
+
+export type AdoptFailure = PlatformRefusal | MemberRefusal | TagRefusal | LedgerUnwritable | AdoptionRefused
+
+export const renderAdoptRefusal = (refusal: AdoptFailure): Effect.Effect<void, never, Reporter> =>
+  refuse(
+    Match.value(refusal).pipe(
+      Match.tagsExhaustive({
+        AdoptionRefused: (refused) =>
+          [
+            ...refused.failures.map(adoptionFailureText),
+            `adoption refused: ${refused.failures.length} version(s) could not be recorded against the registry`,
+          ].join('\n'),
+        ConfigUnreadable: (unreadable) => `${unreadable.path}: cannot be read`,
+        ConfigMalformed: (malformed) => `${malformed.path}: ${malformed.reason}`,
+        ConfigFieldMissing: (missing) => `${missing.path}: missing field ${missing.field}`,
+        ConfigFieldInvalid: (invalid) => `${invalid.path}: invalid field ${invalid.field}: ${invalid.reason}`,
+        InvalidFlags: (invalid) => `invalid flags: ${invalid.reason}`,
+        OutputUnwritable: (unwritable) => `cannot write ${unwritable.path}: ${unwritable.reason}`,
+        OutputUnreadable: (unreadable) => `cannot read ${unreadable.path}: ${unreadable.reason}`,
+        WorkspaceRootNotAbsolute: (notAbsolute) => `refused: workspace-root-not-absolute, path: ${notAbsolute.given}`,
+        ManifestUnreadable: (unreadable) => `refused: manifest-unreadable, path: ${unreadable.path}`,
+        ManifestInvalid: (invalid) => `refused: manifest-invalid, path: ${invalid.path}`,
+        TagCapturedMalformed: (malformed) => `refused: tag-captured-malformed, path: ${malformed.path}`,
+        TagExcludedMalformed: (malformed) => `refused: tag-excluded-malformed, path: ${malformed.path}`,
+        LedgerUnwritable: (unwritable) => `cannot write release ledger ${unwritable.path}: ${unwritable.reason}`,
+      }),
+    ),
+  )
+
+const adoptionFailureText = (failure: AdoptionFailure): string =>
+  Match.value(failure).pipe(
+    Match.tagsExhaustive({
+      RegistryFetchFailed: (fetched) =>
+        `refused: registry-fetch-failed, package: ${fetched.package}@${fetched.version}, reason: ${fetched.reason}`,
+      RegistryMetadataMalformed: (malformed) =>
+        `refused: registry-metadata-malformed, package: ${malformed.package}@${malformed.version}, reason: ${malformed.reason}`,
+      RegistryDownloadFailed: (download) =>
+        `refused: registry-download-failed, url: ${download.url}, reason: ${download.reason}`,
+      RegistryIntegrityMismatch: (mismatch) =>
+        `refused: registry-integrity-mismatch, package: ${mismatch.package}@${mismatch.version}, expected: ${mismatch.expected}, actual: ${mismatch.actual}`,
+      TarballUnreadable: (unreadable) =>
+        `refused: tarball-unreadable, path: ${unreadable.path}, reason: ${unreadable.reason}`,
+    }),
+  )
+
+export const renderAdoption = (
+  report: AdoptionReport,
+  output: RelativePath,
+): Effect.Effect<void, never, Reporter> =>
+  Match.value(report).pipe(
+    Match.tag('AdoptionRecorded', (recorded) => emit(`adopted ${recorded.entries} release tag(s); wrote ${output}`)),
+    Match.tag('AdoptionVacant', () => emit(`adopted 0 release tag(s); wrote ${output}`)),
+    Match.exhaustive,
+  )
 
 export const renderRelease = (decision: GithubReleaseDecision): Effect.Effect<void, never, Reporter> =>
   Match.value(decision).pipe(

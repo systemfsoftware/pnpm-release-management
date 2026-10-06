@@ -39,6 +39,10 @@ export interface GitPort {
     remote: RemoteName,
     tag: ReleaseTag,
   ) => Effect.Effect<Option.Option<string>, TagRefusal, never>
+  readonly tagCommit: (
+    remote: RemoteName,
+    tag: ReleaseTag,
+  ) => Effect.Effect<Option.Option<CommitSha>, TagRefusal, never>
   readonly repoSlug: () => Effect.Effect<RepoSlug, TagRefusal, never>
   readonly stagedPaths: () => Effect.Effect<
     ReadonlyArray<StagedPath>,

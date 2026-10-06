@@ -18,16 +18,12 @@ const messageOf = (cause: unknown): string => {
   return 'unreadable tarball'
 }
 
-const readOne = (
-  fs: FileSystem,
-  path: Path,
-  dir: FsPath,
-  name: string,
+const digestOf = (
+  source: FsPath,
+  bytes: Uint8Array,
 ): Effect.Effect<TarballDigest, TarballUnreadable> =>
   Effect.gen(function*() {
-    const full = path.join(dir, name)
-    const refusable = (reason: string): TarballUnreadable => TarballUnreadable.make({ path: FsPath.make(full), reason })
-    const bytes = yield* fs.readFile(full).pipe(Effect.mapError((cause) => refusable(cause.message)))
+    const refusable = (reason: string): TarballUnreadable => TarballUnreadable.make({ path: source, reason })
     const entries = yield* Effect.try({
       try: () => parseTar(gunzipSync(bytes)),
       catch: (cause) => refusable(messageOf(cause)),
@@ -54,6 +50,20 @@ const readOne = (
     }
   })
 
+const readOne = (
+  fs: FileSystem,
+  path: Path,
+  dir: FsPath,
+  name: string,
+): Effect.Effect<TarballDigest, TarballUnreadable> =>
+  Effect.gen(function*() {
+    const full = path.join(dir, name)
+    const bytes = yield* fs.readFile(full).pipe(
+      Effect.mapError((cause) => TarballUnreadable.make({ path: FsPath.make(full), reason: cause.message })),
+    )
+    return yield* digestOf(FsPath.make(full), bytes)
+  })
+
 const readTarballs = (
   fs: FileSystem,
   path: Path,
@@ -72,6 +82,10 @@ export const TarballLive: Layer.Layer<TarballPort, never, FileSystem | Path> = L
   Effect.gen(function*() {
     const fs = yield* FileSystem
     const path = yield* Path
-    return { read: (dir: FsPath) => readTarballs(fs, path, dir) }
+    return {
+      read: (dir: FsPath) => readTarballs(fs, path, dir),
+      digest: (source: FsPath, bytes: Uint8Array) => digestOf(source, bytes),
+      sha256: (bytes: Uint8Array) => `sha256-${createHash('sha256').update(bytes).digest('base64')}`,
+    }
   }),
 )
