@@ -15,6 +15,17 @@ export const TargetSuffix = S.String.pipe(
 )
 export type TargetSuffix = S.Schema.Type<typeof TargetSuffix>
 
+const duplicateSuffixOf = (suffixes: ReadonlyArray<string>): string | undefined =>
+  suffixes.find((suffix, index) => suffixes.indexOf(suffix) !== index)
+
+export const uniqueSuffixes = S.makeFilter<ReadonlyArray<string>>(
+  (suffixes) => {
+    const duplicate = duplicateSuffixOf(suffixes)
+    return duplicate === undefined || `target suffix "${duplicate}" is declared more than once`
+  },
+  { arbitrary: { constraint: { unique: true } } },
+)
+
 export const OsName = S.NonEmptyString.pipe(S.brand('OsName'))
 export type OsName = S.Schema.Type<typeof OsName>
 
@@ -108,7 +119,28 @@ export type DistributionTarget = S.Schema.Type<typeof DistributionTarget>
 
 export const Distribution = S.Struct({
   launcherManifest: RelativePath,
-  targets: S.NonEmptyArray(DistributionTarget),
+  targets: S.NonEmptyArray(DistributionTarget).pipe(
+    S.check(
+      S.makeFilter(
+        (targets) => {
+          const duplicate = duplicateSuffixOf(targets.map((target) => target.suffix))
+          return duplicate === undefined || `target suffix "${duplicate}" is declared by more than one target`
+        },
+        {
+          arbitrary: {
+            candidate: {
+              make: (fc) =>
+                fc.uniqueArray(S.toArbitrary(DistributionTarget)(fc), {
+                  minLength: 1,
+                  maxLength: 4,
+                  selector: (target) => target.suffix,
+                }),
+            },
+          },
+        },
+      ),
+    ),
+  ),
 })
 export type Distribution = S.Schema.Type<typeof Distribution>
 

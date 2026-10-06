@@ -56,10 +56,11 @@ const parseCommand = (
       Result.flatMap(
         S.decodeUnknownResult(S.Record(S.String, S.Unknown))(parsed),
         (manifest) =>
-          Result.map(
+          Result.flatMap(
             S.decodeUnknownResult(PinnedManifest)(manifest),
             (pinned) =>
-              PinRootManifestCommand.make({
+              S.decodeUnknownResult(PinRootManifestCommand)({
+                _tag: 'PinRootManifestCommand',
                 manifestText: text,
                 manifest,
                 path: request.manifest,
