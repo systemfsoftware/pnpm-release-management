@@ -25,6 +25,7 @@ let
     inherit version src mitmCache;
     nativeBuildInputs = [ pnpm iplConfigHook ];
     pnpmInstallFlags = [ "--store-dir=${placeholder "out"}" ];
+    prePnpmInstall = import ./pnpm-mitm-replay.nix;
     dontInstall = true;
     dontFixup = true;
     buildPhase = ''

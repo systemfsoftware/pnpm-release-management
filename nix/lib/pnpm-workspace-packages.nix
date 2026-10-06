@@ -83,6 +83,7 @@ let
       pname = "${pname}-tarballs";
       version = "0";
       inherit src mitmCache;
+      prePnpmInstall = import ./pnpm-mitm-replay.nix;
 
       nativeBuildInputs = [ nodejs pnpm iplConfigHook pkgs.jq ] ++ nativeBuildInputs;
 

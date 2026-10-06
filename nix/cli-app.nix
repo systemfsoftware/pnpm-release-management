@@ -3,6 +3,7 @@ stdenv.mkDerivation (finalAttrs: {
   pname = appName;
   version = "0.0.0";
   inherit src mitmCache;
+  prePnpmInstall = import ./lib/pnpm-mitm-replay.nix;
 
   nativeBuildInputs = [ nodejs_24 pnpm_11 iplConfigHook deno ];
 
