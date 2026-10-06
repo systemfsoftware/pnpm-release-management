@@ -1,0 +1,24 @@
+# Dogfood: this repository runs its OWN reusable release workflow
+# (.github/workflows/release.yml) against itself, exactly as a consumer repo
+# would. The reusable is the single definition of the release flow; this caller
+# only supplies the trigger and the permissions, per the documented contract.
+#
+# tools-ref pins the toolchain revision the release runs from. A consumer pins
+# @main; this repo IS the toolchain, so it pins its own trunk — the reusable's
+# default of `main` would run a stale copy of the tools against trunk.
+name: Release (dogfood)
+
+on:
+  push:
+    branches: [prm/toolchain]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    uses: ./.github/workflows/release.yml
+    with:
+      tools-ref: prm/toolchain
