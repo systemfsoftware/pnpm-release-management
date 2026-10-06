@@ -26,13 +26,15 @@ apps/*/dist/main.js           the tsdown bundles the workflows and the e2e image
 e2e/                          the containerised pipeline test (vitest)
 ```
 
-Apps are Node programs built with tsdown into self-contained ESM bundles, so a
-workflow builds the tools once and runs one directly:
+Apps are Node programs built with tsdown into self-contained ESM bundles, then
+compiled with `deno compile` into one binary each. The flake exports them, and
+`packages.<system>.release-tools` joins the three release apps. A repository
+takes this flake as an input, pinned by its `flake.lock`, and puts
+`release-tools` in its dev shell, so a workflow runs the locked revision without
+installing anything:
 
 ```bash
-pnpm --dir .release-tools install --frozen-lockfile
-pnpm --dir .release-tools build
-node .release-tools/apps/github-release-management/dist/main.js plan --output "$GITHUB_OUTPUT"
+nix develop --command github-release-management plan --output "$GITHUB_OUTPUT"
 ```
 
 Each app is a composition root: `main.ts` declares the `Flag`/`Argument`
@@ -232,15 +234,25 @@ agree on what this cycle owns.
 
 ## CI
 
-| Workflow              | Inputs                                       | Caller must grant                         |
-| --------------------- | -------------------------------------------- | ----------------------------------------- |
-| `release.yml`         | `tools-ref`, `artifacts-dir`, `node-version` | `contents: write`, `pull-requests: write` |
-| `changeset-check.yml` | `tools-ref`, `base-sha`, `node-version`      | `contents: read`, `pull-requests: read`   |
+| Workflow              | Inputs                                    | Caller must grant                                           |
+| --------------------- | ----------------------------------------- | ----------------------------------------------------------- |
+| `release.yml`         | `ci-workflow` (required), `artifacts-dir` | `contents: write`, `pull-requests: write`, `actions: write` |
+| `changeset-check.yml` | `base-sha`                                | `contents: read`                                            |
 
-`tools-ref` pins the revision of this repository that a release runs from;
-`@main` tracks the tip. Both workflows check this repository out into
-`.release-tools`, build it with pnpm, and run its `dist/main.js` bundles
-against the caller's workspace.
+A pull request opened with the workflow token starts no workflows, so after
+opening or updating the release PR, `release.yml` dispatches the caller's CI
+workflow (`ci-workflow`, which must accept `workflow_dispatch`) on the release
+branch. That gives the release PR the checks the branch protection requires.
+
+Both workflows run the apps from the caller's dev shell (`nix develop`). The
+revision is the one the caller's `flake.lock` pins for its
+`pnpm-release-management` input; `nix flake update pnpm-release-management`
+moves it. The caller's `devShells.<system>.default` must provide
+`release-tools`, pnpm, the `sandbox` and `SANDBOX_PNPM_STORE` (see
+[Distribution through Nix](#distribution-through-nix)). `changeset-check.yml`
+runs turbo, which is the caller's dependency code, so its install and the gate
+both run inside `sandbox`, offline from the Nix-built pnpm store. Neither
+workflow installs packages from a registry.
 
 ## Distribution through Nix
 

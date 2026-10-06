@@ -1,4 +1,4 @@
-# The publish phase is never triggered by the release PR merging: closing it
+# The release phase is never triggered by the release PR merging: closing it
 # destroys refs/pull/<n>/merge and cancels the queued run with zero jobs, so a
 # release triggered that way can vanish silently. Phase comes from repository
 # state instead, which also lets a half-finished release resume on the next push.
@@ -7,21 +7,15 @@ name: Release
 on:
   workflow_call:
     inputs:
-      tools-ref:
-        description: ref of systemfsoftware/pnpm-release-management to run
-        required: false
-        type: string
-        default: main
       artifacts-dir:
         description: directory the captured cycle is written to
         required: false
         type: string
         default: .release
-      node-version:
-        description: node version used for pnpm
-        required: false
+      ci-workflow:
+        description: the caller's CI workflow file, dispatched on the release PR branch
+        required: true
         type: string
-        default: "24"
 
 permissions: {}
 
@@ -40,28 +34,13 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
-
-      - uses: actions/checkout@v7
-        with:
-          repository: systemfsoftware/pnpm-release-management
-          ref: ${{ inputs.tools-ref }}
-          path: .release-tools
-
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
-        with:
-          node-version: ${{ inputs.node-version }}
-
-      - name: Build the release tools
-        run: |
-          pnpm --dir .release-tools install --frozen-lockfile
-          pnpm --dir .release-tools build
+      - uses: cachix/install-nix-action@v31
 
       - id: plan
         name: Decide release phase from repository state
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: node .release-tools/apps/github-release-management/dist/main.js plan --output "$GITHUB_OUTPUT"
+        run: nix develop --command github-release-management plan --output "$GITHUB_OUTPUT"
 
   version:
     name: version · open release PR
@@ -71,35 +50,29 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: write
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: true
+      - uses: cachix/install-nix-action@v31
 
-      - uses: actions/checkout@v7
-        with:
-          repository: systemfsoftware/pnpm-release-management
-          ref: ${{ inputs.tools-ref }}
-          path: .release-tools
-
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
-        with:
-          node-version: ${{ inputs.node-version }}
-
-      - name: Build the release tools
-        run: |
-          pnpm --dir .release-tools install --frozen-lockfile
-          pnpm --dir .release-tools build
-
-      - name: Bump every version surface and consume the intents
-        run: node .release-tools/apps/version-management/dist/main.js bump
+      - name: Bump every package and version surface, consuming the intents
+        run: nix develop --command version-management bump
 
       - name: Open or update the release PR
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node .release-tools/apps/github-release-management/dist/main.js pr
+        run: nix develop --command github-release-management pr
+
+      - name: Run the caller's CI on the release PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_WORKFLOW: ${{ inputs.ci-workflow }}
+        run: |
+          branch="$(gh pr list --label release --state open --json headRefName --jq '.[0].headRefName // empty')"
+          if [ -n "$branch" ]; then gh workflow run "$CI_WORKFLOW" --ref "$branch"; fi
 
   release:
     name: release · tag · GitHub releases
@@ -114,42 +87,24 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: true
-
-      - uses: actions/checkout@v7
-        with:
-          repository: systemfsoftware/pnpm-release-management
-          ref: ${{ inputs.tools-ref }}
-          path: .release-tools
-
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
-        with:
-          node-version: ${{ inputs.node-version }}
-
-      - name: Build the release tools
-        run: |
-          pnpm --dir .release-tools install --frozen-lockfile
-          pnpm --dir .release-tools build
-
-      - name: Install
-        run: pnpm install --frozen-lockfile
+      - uses: cachix/install-nix-action@v31
 
       - name: Capture this cycle
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           mkdir -p "${{ inputs.artifacts-dir }}"
-          node .release-tools/apps/github-release-management/dist/main.js tag \
+          nix develop --command github-release-management tag \
             --output "${{ inputs.artifacts-dir }}/captured.json"
 
       - name: Tag released versions
         run: |
-          node .release-tools/apps/github-release-management/dist/main.js tag \
+          nix develop --command github-release-management tag \
             --captured "${{ inputs.artifacts-dir }}/captured.json"
 
       - name: GitHub Releases from the authored changelogs
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          node .release-tools/apps/github-release-management/dist/main.js release \
+          nix develop --command github-release-management release \
             --captured "${{ inputs.artifacts-dir }}/captured.json"
