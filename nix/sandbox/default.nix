@@ -1,4 +1,4 @@
-{ lib, stdenv, writeShellApplication, bubblewrap, socat, nodejs_24, cacert, coreutils, git, bash }:
+{ lib, stdenv, writeShellApplication, bubblewrap, socat, nodejs_24, cacert, coreutils, git, bash, nix }:
 let
   substitutions = {
     node = lib.getExe nodejs_24;
@@ -8,6 +8,7 @@ let
     socat = lib.getExe socat;
     sh = lib.getExe bash;
     sleep = "${coreutils}/bin/sleep";
+    nixStore = lib.getExe' nix "nix-store";
     darwinProfile = builtins.path { path = ./darwin.sb; name = "sandbox-darwin.sb"; };
   };
 in

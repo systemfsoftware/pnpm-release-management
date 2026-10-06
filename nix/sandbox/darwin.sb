@@ -31,10 +31,10 @@
 (allow file-read-metadata (path-ancestors (param "PROJECT")))
 (allow file-read-metadata (path-ancestors (param "HOME")))
 (allow file-read-metadata (subpath "/var") (subpath "/private/var") (literal "/etc") (literal "/tmp"))
+(allow file-read-metadata (literal "/nix") (literal "/nix/store"))
 (allow file-read* (literal "/"))
 
 (allow file-read*
-  (subpath "/nix/store")
   (subpath "/System")
   (subpath "/Library/Apple")
   (subpath "/Library/Preferences")
@@ -51,7 +51,11 @@
   (literal "/dev/urandom")
   (literal "/dev/autofs_nowait")
   (subpath "/dev/fd"))
-(allow file-map-executable (subpath "/nix/store") (subpath "/System") (subpath "/usr/lib"))
+(allow file-map-executable (subpath "/System") (subpath "/usr/lib"))
+
+;;CLOSURE_READ;;
+
+;;CLOSURE_EXEC;;
 
 (allow file-read* file-write* file-ioctl
   (literal "/dev/null")
@@ -66,7 +70,8 @@
   (subpath (param "HOME"))
   (subpath (param "TMP")))
 
-(allow network-bind (local ip "localhost:*"))
+;;BIND;;
+
 (allow network-inbound (local ip "localhost:*"))
 (allow network-outbound (remote ip "localhost:*"))
 (allow network-outbound (literal "/private/var/run/syslog"))

@@ -1,17 +1,24 @@
-import { writeFileSync } from 'node:fs'
+import { appendFileSync, writeFileSync } from 'node:fs'
 import { connect, createServer } from 'node:net'
 
 const [listen, readyFile, ...declared] = process.argv.slice(2)
+const logPath = process.env.SANDBOX_EGRESS_LOG ?? ''
 
 const allowed = declared.map((entry) => {
   const [host, port = '443'] = entry.split(':')
-  return { host: host.toLowerCase(), port: Number(port) }
+  return { host: host.toLowerCase(), port: Number(port), entry }
 })
 
 const permits = (host, port) =>
-  allowed.some((rule) =>
-    rule.port === port && (rule.host === host || (rule.host.startsWith('*.') && host.endsWith(rule.host.slice(1))))
+  allowed.find(
+    (rule) =>
+      rule.port === port && (rule.host === host || (rule.host.startsWith('*.') && host.endsWith(rule.host.slice(1)))),
   )
+
+const log = (record) => {
+  if (logPath === '') return
+  appendFileSync(logPath, `${JSON.stringify(record)}\n`)
+}
 
 const refuse = (socket, status) => {
   socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\n\r\n`)
@@ -21,13 +28,19 @@ const server = createServer((client) => {
   client.once('data', (head) => {
     const line = head.toString('latin1').split('\r\n', 1)[0]
     const match = /^CONNECT ([^\s:]+):(\d+) HTTP\/1\.[01]$/.exec(line)
-    if (match === null) return refuse(client, '405 Only CONNECT tunnels leave the sandbox')
+    if (match === null) {
+      log({ host: null, port: null, decision: 'refused', rule: null })
+      return refuse(client, '405 Only CONNECT tunnels leave the sandbox')
+    }
     const host = match[1].toLowerCase()
     const port = Number(match[2])
-    if (!permits(host, port)) {
+    const rule = permits(host, port)
+    if (rule === undefined) {
+      log({ host, port, decision: 'refused', rule: null })
       process.stderr.write(`sandbox: egress to ${host}:${port} refused (not declared)\n`)
       return refuse(client, '403 Egress not declared')
     }
+    log({ host, port, decision: 'allowed', rule: rule.entry })
     const upstream = connect(port, host, () => {
       client.write('HTTP/1.1 200 Connection Established\r\n\r\n')
       upstream.pipe(client)
