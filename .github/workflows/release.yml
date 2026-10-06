@@ -36,11 +36,14 @@ jobs:
           fetch-tags: true
       - uses: cachix/install-nix-action@v31
 
+      - name: Pack the workspace through the caller's flake
+        run: echo "TARBALLS=$(nix build --no-link --print-out-paths .#workspace-tarballs)" >> "$GITHUB_ENV"
+
       - id: plan
         name: Decide release phase from repository state
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: nix develop --command github-release-management plan --output "$GITHUB_OUTPUT"
+        run: nix develop --command github-release-management plan --tarballs "$TARBALLS" --output "$GITHUB_OUTPUT"
 
   version:
     name: version · open release PR
@@ -89,17 +92,20 @@ jobs:
           persist-credentials: true
       - uses: cachix/install-nix-action@v31
 
+      - name: Pack the workspace through the caller's flake
+        run: echo "TARBALLS=$(nix build --no-link --print-out-paths .#workspace-tarballs)" >> "$GITHUB_ENV"
+
       - name: Capture this cycle
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           mkdir -p "${{ inputs.artifacts-dir }}"
-          nix develop --command github-release-management tag \
+          nix develop --command github-release-management tag --tarballs "$TARBALLS" \
             --output "${{ inputs.artifacts-dir }}/captured.json"
 
-      - name: Tag released versions
+      - name: Tag released versions, recording each tarball's integrity
         run: |
-          nix develop --command github-release-management tag \
+          nix develop --command github-release-management tag --tarballs "$TARBALLS" \
             --captured "${{ inputs.artifacts-dir }}/captured.json"
 
       - name: GitHub Releases from the authored changelogs

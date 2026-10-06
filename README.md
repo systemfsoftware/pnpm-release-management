@@ -34,7 +34,9 @@ takes this flake as an input, pinned by its `flake.lock`, and puts
 installing anything:
 
 ```bash
-nix develop --command github-release-management plan --output "$GITHUB_OUTPUT"
+nix develop --command github-release-management plan \
+  --tarballs "$(nix build --no-link --print-out-paths .#workspace-tarballs)" \
+  --output "$GITHUB_OUTPUT"
 ```
 
 Each app is a composition root: `main.ts` declares the `Flag`/`Argument`
