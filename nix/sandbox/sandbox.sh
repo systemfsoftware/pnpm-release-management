@@ -306,7 +306,9 @@ done
   Darwin)
     home="$work/home"
     tmp="$work/tmp"
-    mkdir -p "$home" "$tmp"
+    runtime="$tmp/runtime"
+    mkdir -p "$home" "$tmp" "$runtime"
+    chmod 0700 "$runtime"
 
     closure_read=""
     closure_exec=""
@@ -331,13 +333,19 @@ done
     done <"@darwinProfile@" >"$profile"
 
     darwin_envs=()
+    runtime_env=0
     for entry in "${envs[@]}"; do
       case "$entry" in
         HOME=*) darwin_envs+=("HOME=$home") ;;
         TMPDIR=*) darwin_envs+=("TMPDIR=$tmp") ;;
+        XDG_RUNTIME_DIR=*)
+          darwin_envs+=("XDG_RUNTIME_DIR=$runtime")
+          runtime_env=1
+          ;;
         *) darwin_envs+=("$entry") ;;
       esac
     done
+    if [ "$runtime_env" -eq 0 ]; then darwin_envs+=("XDG_RUNTIME_DIR=$runtime"); fi
     if [ "${#hosts[@]}" -gt 0 ] || [ -n "$egress_log" ]; then
       start_proxy tcp
       url="http://$(cat "$work/proxy.addr")"
