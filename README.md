@@ -358,12 +358,14 @@ github-release-management adopt \
 tag `<name>@v<version>` on `--remote` (`origin` by default) — not only the
 current version of a current member. The published name comes from the manifest
 at the tagged commit, never from the tag string alone: adoption reads every
-`package.json` in that commit's tree and takes the one whose `version` equals the
-tag version and whose `name` equals the tag name or ends with `/<tag name>`. So a
+`package.json` in that commit's tree and takes the one whose `name` equals the
+tag name or ends with `/<tag name>`. So a
 tag left over from before a package was scoped (`hex-schema@v1.0.0`, whose
 manifest says `@systemfsoftware/hex-schema`) resolves to the name the registry
 actually serves. Exactly one match is required; zero or several matches is a hard
-error naming the tag and the candidate names. It fetches the published
+error naming the tag and the candidate names. When the manifest's version differs
+from the tag's, the entry is `mismatched` and records both versions. It fetches
+the published
 `<name>@<version>` from the registry, downloads `dist.tarball`, and records one
 entry:
 
@@ -402,6 +404,8 @@ admitted silently, and an adoption with any error writes no ledger at all.
 
 The report prints a summary — `adopted <n> release tag(s), excluded <m> private
 tag(s), errors <k>` — followed by one line per error, `name@version: <reason>`.
+A tag whose manifest version differs from its tag name also prints one
+`mismatched <tag>: claims <a>, manifest <b>` line, naming both versions.
 
 The ledger is one JSON file at the repository root, written by the command and
 never hand-edited: keys in a stable order, entries sorted by tag. It lands in its

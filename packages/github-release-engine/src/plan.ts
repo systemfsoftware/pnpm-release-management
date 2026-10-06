@@ -25,6 +25,7 @@ import {
   TarballIntegrity,
   TarballMissing,
   TarballPort,
+  type VersionBurned,
   type VersionIntentMalformed,
   type VersionUnknownPackage,
   WorkspaceStore,
@@ -34,7 +35,14 @@ import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import { cycleOf, dropExcluded, tagOf } from './cycle.js'
-import { exemptNames, identityCandidates } from './integrity.js'
+import {
+  burnedOf,
+  exemptNames,
+  identityCandidates,
+  publishedRecorded,
+  stateForVersion,
+  tagEntryOf,
+} from './integrity.js'
 import { PlanCommand, type PlanDeferredUnknown, planRelease } from './plan-release.workflow.js'
 import { type PlanDecision, PlanReport } from './plan.schema.js'
 import { type IntegrityCheck, IntegrityCommand, verifyIntegrity } from './verify-integrity.workflow.js'
@@ -51,6 +59,7 @@ export type PlanReadRefusal =
   | IntegrityRefusal
   | LedgerRefusal
   | LedgerIdentityRefusal
+  | VersionBurned
   | VersionIntentMalformed
   | VersionUnknownPackage
   | IntentRefusal
@@ -114,41 +123,54 @@ const read = (
     }
     const checks: Array<IntegrityCheck> = []
     const ledger = yield* ledgerPort.read(LEDGER_PATH)
-    const recordedEntries = Option.getOrElse(ledger, () => ReleaseLedger.make({ entries: [] })).entries
+    const ledgerEntries = Option.getOrElse(ledger, () => ReleaseLedger.make({ entries: [] })).entries
     for (const member of toCheck) {
       const version = member.version
-      const digest = digests.find((entry) => entry.name === member.name && entry.version === version)
-      if (digest === undefined) {
-        return yield* Effect.fail(TarballMissing.make({ package: member.name, version }))
-      }
       const tag = tagOf(member.name, version)
-      const recorded = recordedEntries.find((entry) => entry.tag === tag)
-      if (recorded !== undefined) {
-        if (recorded.package !== member.name || recorded.version !== version) {
-          return yield* Effect.fail(
-            LedgerEntryMismatch.make({
-              tag,
-              recorded: `${recorded.package}@${recorded.version}`,
-              current: `${member.name}@${version}`,
-            }),
-          )
+      const state = stateForVersion(ledgerEntries, member.name, version)
+      if (state !== undefined) {
+        const burned = burnedOf(member.name, version, state)
+        if (burned !== undefined) {
+          return yield* Effect.fail(burned)
         }
+      }
+      const entry = tagEntryOf(ledgerEntries, tag)
+      if (entry !== undefined) {
         const commit = yield* git.tagCommit(remote, tag)
         if (Option.isNone(commit)) {
           return yield* Effect.fail(LedgerTagMissing.make({ tag }))
         }
-        if (commit.value !== recorded.commit) {
+        if (commit.value !== entry.commit) {
           return yield* Effect.fail(
-            LedgerTagMoved.make({ tag, recorded: recorded.commit, current: commit.value }),
+            LedgerTagMoved.make({ tag, recorded: entry.commit, current: commit.value }),
           )
+        }
+      }
+      const digest = digests.find((candidate) => candidate.name === member.name && candidate.version === version)
+      if (digest === undefined) {
+        return yield* Effect.fail(TarballMissing.make({ package: member.name, version }))
+      }
+      if (state !== undefined) {
+        const recorded = publishedRecorded(state)
+        if (recorded === undefined) {
+          return yield* Effect.fail(burnedOf(member.name, version, state) ?? LedgerTagMissing.make({ tag }))
         }
         checks.push({
           package: member.name,
           version,
-          recorded: { integrity: recorded.integrity, files: recorded.files },
+          recorded,
           current: { integrity: digest.integrity, files: digest.files },
         })
         continue
+      }
+      if (entry !== undefined) {
+        return yield* Effect.fail(
+          LedgerEntryMismatch.make({
+            tag,
+            recorded: entry.tag,
+            current: `${member.name}@${version}`,
+          }),
+        )
       }
       const annotation = yield* git.tagAnnotation(remote, tag)
       if (Option.isNone(annotation)) {

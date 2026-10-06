@@ -1,12 +1,12 @@
 import {
-  type LedgerEntry,
   LedgerPort,
   type ReleaseLedger,
   ReleaseLedger as ReleaseLedgerSchema,
+  type ReleaseLedgerEntry,
 } from '@systemfsoftware/release-language'
 import { Effect, Layer, Option } from 'effect'
 
-export const makeFakeLedger = (entries: ReadonlyArray<LedgerEntry> = []) => {
+export const makeFakeLedger = (entries: ReadonlyArray<ReleaseLedgerEntry> = []) => {
   const ledger: ReleaseLedger = ReleaseLedgerSchema.make({ entries: [...entries] })
   return Layer.succeed(LedgerPort, {
     read: () => {

@@ -85,7 +85,6 @@ export {
   LedgerAppendChanged,
   LedgerAppendRefusal,
   LedgerAppendRemoved,
-  LedgerEntry,
   LedgerEntryMismatch,
   LedgerIdentityRefusal,
   LedgerMalformed,
@@ -94,7 +93,15 @@ export {
   LedgerTagMoved,
   LedgerUnreadable,
   LedgerUnwritable,
+  MismatchedLedgerEntry,
+  PublishedLedgerEntry,
+  PublishedState,
   ReleaseLedger,
+  ReleaseLedgerEntry,
+  UnpublishedLedgerEntry,
+  UnpublishedState,
+  VersionBurned,
+  VersionState,
 } from './Ledger.schema.js'
 export { LEDGER_PATH, LedgerPort } from './LedgerPort.js'
 export {

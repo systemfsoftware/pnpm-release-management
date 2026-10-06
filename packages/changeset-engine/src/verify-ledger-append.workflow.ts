@@ -1,5 +1,5 @@
 import { Workflow } from '@systemfsoftware/effect-cell-types'
-import { DecisionTypeId, LedgerEntry, ReleaseTag } from '@systemfsoftware/release-language'
+import { DecisionTypeId, ReleaseLedgerEntry, ReleaseTag, type VersionState } from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
@@ -27,8 +27,8 @@ export class LedgerAppendChanged extends S.TaggedError<LedgerAppendChanged>()('L
 }) {}
 
 export class LedgerAppendCommand extends S.TaggedClass<LedgerAppendCommand>()('LedgerAppendCommand', {
-  base: S.Array(LedgerEntry),
-  head: S.Array(LedgerEntry),
+  base: S.Array(ReleaseLedgerEntry),
+  head: S.Array(ReleaseLedgerEntry),
 }) {}
 
 const RemovedCase = S.TaggedStruct('Removed', { tag: ReleaseTag })
@@ -47,15 +47,59 @@ const comparePaths = (left: string, right: string): number => {
 const ordered = (files: Readonly<Record<string, string>>): Readonly<Record<string, string>> =>
   Object.fromEntries(Object.entries(files).sort(([left], [right]) => comparePaths(left, right)))
 
-const fingerprint = (entry: LedgerEntry): string =>
-  JSON.stringify({
-    commit: entry.commit,
-    package: entry.package,
-    version: entry.version,
-    integrity: entry.integrity,
-    sha256: entry.sha256,
-    files: ordered(entry.files),
-  })
+const canonicalState = (state: VersionState): unknown =>
+  Match.value(state).pipe(
+    Match.tag('published', (published) => ({
+      kind: 'published',
+      integrity: published.integrity,
+      sha256: published.sha256,
+      files: ordered(published.files),
+    })),
+    Match.tag('unpublished', (unpublished) => ({
+      kind: 'unpublished',
+      url: unpublished.url,
+      status: unpublished.status,
+      fetchedAt: unpublished.fetchedAt,
+    })),
+    Match.exhaustive,
+  )
+
+const fingerprint = (entry: ReleaseLedgerEntry): string =>
+  JSON.stringify(
+    Match.value(entry).pipe(
+      Match.tag('published', (published) => ({
+        kind: 'published',
+        tag: published.tag,
+        commit: published.commit,
+        package: published.package,
+        version: published.version,
+        integrity: published.integrity,
+        sha256: published.sha256,
+        files: ordered(published.files),
+      })),
+      Match.tag('unpublished', (unpublished) => ({
+        kind: 'unpublished',
+        tag: unpublished.tag,
+        commit: unpublished.commit,
+        package: unpublished.package,
+        version: unpublished.version,
+        url: unpublished.url,
+        status: unpublished.status,
+        fetchedAt: unpublished.fetchedAt,
+      })),
+      Match.tag('mismatched', (mismatched) => ({
+        kind: 'mismatched',
+        tag: mismatched.tag,
+        commit: mismatched.commit,
+        package: mismatched.package,
+        claimedVersion: mismatched.claimedVersion,
+        manifestVersion: mismatched.manifestVersion,
+        claimed: canonicalState(mismatched.claimed),
+        manifest: canonicalState(mismatched.manifest),
+      })),
+      Match.exhaustive,
+    ),
+  )
 
 const appendCaseOf = (command: LedgerAppendCommand): AppendCase => {
   if (command.base.length === 0 && command.head.length === 0) {

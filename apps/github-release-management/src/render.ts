@@ -21,9 +21,11 @@ import {
   type PlanDeferredUnknown,
   type PlanRefusal,
   type PullRequestRefusal,
+  type ReleaseLedgerEntry,
   type ReleaseTag,
   type TagRefusal,
   type TarballRefusal,
+  type VersionBurned,
   type VersionIntentMalformed,
   type VersionUnknownPackage,
 } from '@systemfsoftware/release-language'
@@ -49,15 +51,18 @@ export type PlanFailure =
   | IntegrityRefusal
   | LedgerRefusal
   | LedgerIdentityRefusal
+  | VersionBurned
   | VersionIntentMalformed
   | VersionUnknownPackage
 
 export type TagFailure =
   | PlatformRefusal
   | MemberRefusal
+  | LedgerRefusal
   | PlanDeferredUnknown
   | TagRefusal
   | TarballRefusal
+  | VersionBurned
 
 export type ReleaseFailure =
   | PlatformRefusal
@@ -164,6 +169,8 @@ export const renderPlanRefusal = (refusal: PlanFailure): Effect.Effect<void, nev
           `refused: ledger-tag-moved, tag: ${moved.tag}, recorded: ${moved.recorded}, current: ${moved.current}`,
         LedgerEntryMismatch: (mismatch) =>
           `refused: ledger-entry-mismatch, tag: ${mismatch.tag}, recorded: ${mismatch.recorded}, current: ${mismatch.current}`,
+        VersionBurned: (burned) =>
+          `refused: version-burned, package: ${burned.package}@${burned.version}, url: ${burned.url}, status: ${burned.status}, fetchedAt: ${burned.fetchedAt}`,
         VersionIntentMalformed: (malformed) => `refused: version-intent-malformed, path: ${malformed.path}`,
         VersionUnknownPackage: (unknown) => `refused: version-unknown-package, package: ${unknown.package}`,
       }),
@@ -185,11 +192,16 @@ export const renderTagRefusal = (refusal: TagFailure): Effect.Effect<void, never
         ManifestUnreadable: (unreadable) => `refused: manifest-unreadable, path: ${unreadable.path}`,
         ManifestInvalid: (invalid) => `refused: manifest-invalid, path: ${invalid.path}`,
         PlanDeferredUnknown: (unknown) => `unknown excluded package(s): ${unknown.packages.join(', ')}`,
+        LedgerUnreadable: (unreadable) => `cannot read release ledger ${unreadable.path}: ${unreadable.reason}`,
+        LedgerMalformed: (malformed) => `cannot parse release ledger ${malformed.path}: ${malformed.reason}`,
+        LedgerUnwritable: (unwritable) => `cannot write release ledger ${unwritable.path}: ${unwritable.reason}`,
         TagCapturedMalformed: (malformed) => `cannot read captured file: ${malformed.path}`,
         TagExcludedMalformed: (malformed) => `cannot read exclude file: ${malformed.path}`,
         TarballMissing: (missing) => `refused: tarball-missing, package: ${missing.package}@${missing.version}`,
         TarballUnreadable: (unreadable) =>
           `refused: tarball-unreadable, path: ${unreadable.path}, reason: ${unreadable.reason}`,
+        VersionBurned: (burned) =>
+          `refused: version-burned, package: ${burned.package}@${burned.version}, url: ${burned.url}, status: ${burned.status}, fetchedAt: ${burned.fetchedAt}`,
       }),
     ),
   )
@@ -348,7 +360,9 @@ export const renderAdoptRefusal = (refusal: AdoptFailure): Effect.Effect<void, n
         AdoptionRefused: (refused) =>
           [
             ...refused.failures.map(adoptionFailureText),
-            `adopted ${refused.ledgered} release tag(s), excluded ${refused.excluded.length} private tag(s), errors ${refused.failures.length}`,
+            ...ledgerEntryNotes(refused.ledgered),
+            ...refused.excluded.map((entry) => `${entry.tag}: ${entry.reason}`),
+            adoptionSummary(refused.ledgered, refused.excluded.length, refused.failures.length),
           ].join('\n'),
         ConfigUnreadable: (unreadable) => `${unreadable.path}: cannot be read`,
         ConfigMalformed: (malformed) => `${malformed.path}: ${malformed.reason}`,
@@ -378,24 +392,36 @@ const adoptionFailureText = (failure: AdoptionFailure): string =>
     }),
   )
 
-const adoptionLedgered = (decision: AdoptionReport['decision']): number =>
-  Match.value(decision).pipe(
-    Match.tag('AdoptionRecorded', (recorded) => recorded.entries),
-    Match.tag('AdoptionVacant', () => 0),
-    Match.exhaustive,
+const adoptionSummary = (
+  entries: ReadonlyArray<ReleaseLedgerEntry>,
+  excluded: number,
+  errors: number,
+): string => `adopted ${entries.length} release tag(s), excluded ${excluded} private tag(s), errors ${errors}`
+
+const ledgerEntryNotes = (entries: ReadonlyArray<ReleaseLedgerEntry>): ReadonlyArray<string> =>
+  entries.flatMap((entry) =>
+    Match.value(entry).pipe(
+      Match.tag('published', () => []),
+      Match.tag('unpublished', (unpublished) => [
+        `${unpublished.tag}: ${unpublished.package}@${unpublished.version} unpublished (${unpublished.url} -> ${unpublished.status})`,
+      ]),
+      Match.tag('mismatched', (mismatched) => [
+        `mismatched ${mismatched.tag}: claims ${mismatched.claimedVersion}, manifest ${mismatched.manifestVersion}`,
+      ]),
+      Match.exhaustive,
+    )
   )
 
 export const renderAdoption = (report: AdoptionReport): Effect.Effect<void, never, Reporter> =>
   Effect.gen(function*() {
     const reporter = yield* Reporter
-    yield* reporter.emit(
-      `adopted ${
-        adoptionLedgered(report.decision)
-      } release tag(s), excluded ${report.excluded.length} private tag(s), wrote ${report.output}`,
-    )
+    for (const line of ledgerEntryNotes(report.entries)) {
+      yield* reporter.emit(line)
+    }
     for (const entry of report.excluded) {
       yield* reporter.note(`${entry.tag}: ${entry.reason}`)
     }
+    yield* reporter.emit(adoptionSummary(report.entries, report.excluded.length, 0))
   })
 
 export const renderRelease = (decision: GithubReleaseDecision): Effect.Effect<void, never, Reporter> =>

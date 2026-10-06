@@ -3,8 +3,8 @@ import {
   AdoptionExcluded,
   AdoptionFailure as AdoptionFailureSchema,
   DecisionTypeId,
-  LedgerEntry,
   RelativePath,
+  ReleaseLedgerEntry,
 } from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
@@ -25,11 +25,11 @@ export type AdoptionDecision = AdoptionRecorded | AdoptionVacant
 export class AdoptionRefused extends S.TaggedError<AdoptionRefused>()('AdoptionRefused', {
   failures: S.Array(AdoptionFailureSchema),
   excluded: S.Array(AdoptionExcluded),
-  ledgered: S.Finite,
+  ledgered: S.Array(ReleaseLedgerEntry),
 }) {}
 
 export class AdoptionCommand extends S.TaggedClass<AdoptionCommand>()('AdoptionCommand', {
-  entries: S.Array(LedgerEntry),
+  entries: S.Array(ReleaseLedgerEntry),
   failures: S.Array(AdoptionFailureSchema),
   excluded: S.Array(AdoptionExcluded),
   output: RelativePath,
@@ -38,7 +38,7 @@ export class AdoptionCommand extends S.TaggedClass<AdoptionCommand>()('AdoptionC
 const RefusedCase = S.TaggedStruct('Refused', {
   failures: S.Array(AdoptionFailureSchema),
   excluded: S.Array(AdoptionExcluded),
-  ledgered: S.Finite,
+  ledgered: S.Array(ReleaseLedgerEntry),
 })
 const RecordedCase = S.TaggedStruct('Recorded', { entries: S.Finite })
 const VacantCase = S.TaggedStruct('Vacant', {})
@@ -50,7 +50,7 @@ const adoptionCaseOf = (command: AdoptionCommand): AdoptionCase => {
     return RefusedCase.make({
       failures: [...command.failures],
       excluded: [...command.excluded],
-      ledgered: command.entries.length,
+      ledgered: [...command.entries],
     })
   }
   if (command.entries.length === 0) {
@@ -68,7 +68,7 @@ export const adoptRelease: Workflow.Workflow<AdoptionCommand, AdoptionDecision, 
           AdoptionRefused.make({
             failures: [...refused.failures],
             excluded: [...refused.excluded],
-            ledgered: refused.ledgered,
+            ledgered: [...refused.ledgered],
           }),
         )),
       Match.tag('Recorded', (recorded) => Result.succeed(AdoptionRecorded.make({ entries: recorded.entries }))),

@@ -11,18 +11,24 @@ import {
   CycleStore,
   FsPath,
   GitPort,
+  LEDGER_PATH,
+  LedgerPort,
+  type LedgerRefusal,
   RelativePath,
+  ReleaseLedger,
   RemoteName,
   type TarballDigest,
   TarballMissing,
   TarballPort,
+  type VersionBurned,
   WorkspaceStore,
 } from '@systemfsoftware/release-language'
-import { Effect } from 'effect'
+import { Effect, Option } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import { cycleOf, dropExcluded } from './cycle.js'
+import { burnedOf, stateForVersion } from './integrity.js'
 import {
   type TagAnnotation,
   TagCapturedMalformed,
@@ -137,8 +143,8 @@ const read = (
   request: S.Schema.Type<typeof TagRequest>,
 ): Effect.Effect<
   TagCommand,
-  MemberRefusal | TagRefusal | PlanDeferredUnknown | TarballRefusal,
-  WorkspaceStore | GitPort | CycleStore | TarballPort
+  MemberRefusal | TagRefusal | PlanDeferredUnknown | TarballRefusal | VersionBurned | LedgerRefusal,
+  WorkspaceStore | GitPort | CycleStore | TarballPort | LedgerPort
 > =>
   Effect.gen(function*() {
     const remote = request.remote ?? RemoteName.make('origin')
@@ -146,6 +152,7 @@ const read = (
     const git = yield* GitPort
     const cycles = yield* CycleStore
     const tarballs = yield* TarballPort
+    const ledgerPort = yield* LedgerPort
     const exclusion = yield* readExclusion(cycles, request.exclude)
     const scan = yield* readCycle({
       cycles,
@@ -159,6 +166,17 @@ const read = (
     let digests: ReadonlyArray<TarballDigest> = []
     if (scan.entries.length > 0) {
       digests = yield* tarballs.read(request.tarballs)
+    }
+    const ledger = yield* ledgerPort.read(LEDGER_PATH)
+    const ledgerEntries = Option.getOrElse(ledger, () => ReleaseLedger.make({ entries: [] })).entries
+    for (const entry of scan.entries) {
+      const state = stateForVersion(ledgerEntries, entry.name, entry.version)
+      if (state !== undefined) {
+        const burned = burnedOf(entry.name, entry.version, state)
+        if (burned !== undefined) {
+          return yield* Effect.fail(burned)
+        }
+      }
     }
     const annotations = yield* Effect.fromResult(annotationsOf(scan.entries, digests))
     return TagCommand.make({
@@ -227,8 +245,8 @@ const write = (
 export const tagCell: Cell.Cell<
   S.Schema.Type<typeof TagRequest>,
   TagDecision,
-  MemberRefusal | TagRefusal | PlanDeferredUnknown | TarballRefusal,
-  WorkspaceStore | GitPort | CycleStore | TarballPort
+  MemberRefusal | TagRefusal | PlanDeferredUnknown | TarballRefusal | VersionBurned | LedgerRefusal,
+  WorkspaceStore | GitPort | CycleStore | TarballPort | LedgerPort
 > = Cell.layer({
   read,
   decide: tagPackages,

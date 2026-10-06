@@ -24,11 +24,14 @@ import {
   LedgerPort,
   ManifestUnreadable,
   type Member,
+  MismatchedLedgerEntry,
   PackageManifest,
   PackageName,
   PackageVersion,
+  PublishedLedgerEntry,
   RelativePath,
   ReleaseLedger,
+  type ReleaseLedgerEntry,
   RepoRoot,
   WorkspaceStore,
 } from '@systemfsoftware/release-language'
@@ -70,6 +73,15 @@ const betaMember: Member = {
   name: BETA_NAME,
   dir: RelativePath.make('packages/beta'),
   manifest: { name: BETA_NAME, version: BETA_VERSION },
+  publishable: true,
+}
+
+const DAEMON_NAME = PackageName.make('@e2e/effect-daemon-spec')
+
+const daemonMember: Member = {
+  name: DAEMON_NAME,
+  dir: RelativePath.make('packages/effect-daemon-spec'),
+  manifest: { name: DAEMON_NAME, version: PackageVersion.make('0.1.0') },
   publishable: true,
 }
 
@@ -320,6 +332,38 @@ const planDecisionTag = (decision: PlanDecision): string =>
     }),
   )
 
+const publishedEntries = (
+  entries: ReadonlyArray<ReleaseLedgerEntry>,
+): ReadonlyArray<PublishedLedgerEntry> =>
+  entries.flatMap((entry) =>
+    Match.value(entry).pipe(
+      Match.tag('published', (published) => [published]),
+      Match.tag('unpublished', () => []),
+      Match.tag('mismatched', () => []),
+      Match.exhaustive,
+    )
+  )
+
+const kindOf = (entry: ReleaseLedgerEntry): string =>
+  Match.value(entry).pipe(
+    Match.tag('published', () => 'published'),
+    Match.tag('unpublished', () => 'unpublished'),
+    Match.tag('mismatched', () => 'mismatched'),
+    Match.exhaustive,
+  )
+
+const mismatchedEntries = (
+  entries: ReadonlyArray<ReleaseLedgerEntry>,
+): ReadonlyArray<MismatchedLedgerEntry> =>
+  entries.flatMap((entry) =>
+    Match.value(entry).pipe(
+      Match.tag('mismatched', (mismatched) => [mismatched]),
+      Match.tag('published', () => []),
+      Match.tag('unpublished', () => []),
+      Match.exhaustive,
+    )
+  )
+
 const failureTag = (failure: AdoptionFailure): string =>
   Match.value(failure).pipe(
     Match.tagsExhaustive({
@@ -442,9 +486,10 @@ Feature('Adoption ledger').body(({ scenario }) => {
             ])
             const unscoped = entries.find((entry) => entry.tag === 'hex-schema@v1.0.0')
             expect(unscoped?.package).toBe('@e2e/hex-schema')
-            expect(entries[1]?.commit).toBe(outcome.commit)
-            expect(entries[1]?.version).toBe(ALPHA_VERSION)
-            expect(entries.every((entry) => entry.sha256.startsWith('sha256-'))).toBe(true)
+            const published = publishedEntries(entries)
+            expect(published[1]?.commit).toBe(outcome.commit)
+            expect(published[1]?.version).toBe(ALPHA_VERSION)
+            expect(published.every((entry) => entry.sha256.startsWith('sha256-'))).toBe(true)
             expect(Result.match(outcome.adopted, {
               onFailure: () => -1,
               onSuccess: (report) => report.excluded.length,
@@ -740,6 +785,7 @@ Feature('Adoption ledger').body(({ scenario }) => {
             })
             const commit = yield* git(context.work, ['rev-parse', 'HEAD'])
             const entry = {
+              _tag: 'published',
               tag: tagOf(ALPHA_NAME, ALPHA_VERSION),
               commit,
               package: ALPHA_NAME,
@@ -799,6 +845,86 @@ Feature('Adoption ledger').body(({ scenario }) => {
               onSuccess: () => 'held',
             })
             expect(tag).toBe(tagOf(ALPHA_NAME, ALPHA_VERSION))
+            yield* cleanup(s.context)
+          }),
+      ),
+    ),
+  )
+
+  const daemonFixture: PrepareOptions = {
+    commits: [
+      {
+        packages: [
+          { name: DAEMON_NAME, version: PackageVersion.make('0.1.0') },
+        ],
+        tags: [
+          { name: DAEMON_NAME, version: PackageVersion.make('0.1.0') },
+          { name: DAEMON_NAME, version: PackageVersion.make('0.1.1') },
+        ],
+      },
+    ],
+    serve: [
+      {
+        name: DAEMON_NAME,
+        version: PackageVersion.make('0.1.0'),
+        files: { 'package/index.js': 'export const daemon = 1\n' },
+      },
+      {
+        name: DAEMON_NAME,
+        version: PackageVersion.make('0.1.1'),
+        files: { 'package/index.js': 'export const daemon = 2\n' },
+      },
+    ],
+  }
+
+  scenario(
+    'A tag whose manifest version differs records both registry states',
+    { scenarioLayer: NodeServices.layer },
+    Gherkin.Do.pipe(
+      Given('a fixture with a tag whose manifest version differs')(
+        'context',
+        () => prepare(daemonFixture),
+      ),
+      When('adoption runs')(
+        'outcome',
+        (s) =>
+          Effect.gen(function*() {
+            const live = adaptersOf(s.context, [daemonMember])
+            return yield* withWorkdir(
+              s.context,
+              Effect.gen(function*() {
+                yield* attempt(Cell.run(Cell.provide(adoptCell, live), adoptRequest(s.context)))
+                return yield* LedgerPort.pipe(
+                  Effect.flatMap((port) => port.read(LEDGER_PATH)),
+                  Effect.provide(live),
+                )
+              }),
+            )
+          }),
+      ),
+      Then('the ledger holds one published and one mismatched entry')(
+        (s) =>
+          Effect.gen(function*() {
+            expect(Option.isSome(s.outcome)).toBe(true)
+            const entries = Option.getOrThrow(s.outcome).entries
+            expect(entries.map(kindOf).sort()).toEqual(['mismatched', 'published'])
+            const mismatched = mismatchedEntries(entries)[0]
+            expect(mismatched?.package).toBe(DAEMON_NAME)
+            expect(mismatched?.claimedVersion).toBe('0.1.1')
+            expect(mismatched?.manifestVersion).toBe('0.1.0')
+            const sides: Array<string> = []
+            if (mismatched !== undefined) {
+              for (const state of [mismatched.claimed, mismatched.manifest]) {
+                sides.push(
+                  Match.value(state).pipe(
+                    Match.tag('published', () => 'published'),
+                    Match.tag('unpublished', () => 'unpublished'),
+                    Match.exhaustive,
+                  ),
+                )
+              }
+            }
+            expect(sides).toEqual(['published', 'published'])
             yield* cleanup(s.context)
           }),
       ),

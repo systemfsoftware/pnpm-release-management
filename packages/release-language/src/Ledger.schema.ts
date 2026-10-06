@@ -1,8 +1,25 @@
 import * as S from 'effect/Schema'
 import { CommitSha } from './Tag.schema.js'
-import { FsPath, PackageName, PackageVersion, ReleaseTag } from './Workspace.schema.js'
+import { FsPath, HttpUrl, PackageName, PackageVersion, ReleaseTag } from './Workspace.schema.js'
 
-export const LedgerEntry = S.Struct({
+export const PublishedState = S.TaggedStruct('published', {
+  integrity: S.String,
+  sha256: S.String,
+  files: S.Record(S.String, S.String),
+})
+export type PublishedState = S.Schema.Type<typeof PublishedState>
+
+export const UnpublishedState = S.TaggedStruct('unpublished', {
+  url: HttpUrl,
+  status: S.Number,
+  fetchedAt: S.String,
+})
+export type UnpublishedState = S.Schema.Type<typeof UnpublishedState>
+
+export const VersionState = S.Union([PublishedState, UnpublishedState])
+export type VersionState = S.Schema.Type<typeof VersionState>
+
+export const PublishedLedgerEntry = S.TaggedStruct('published', {
   tag: ReleaseTag,
   commit: CommitSha,
   package: PackageName,
@@ -11,10 +28,39 @@ export const LedgerEntry = S.Struct({
   sha256: S.String,
   files: S.Record(S.String, S.String),
 })
-export type LedgerEntry = S.Schema.Type<typeof LedgerEntry>
+export type PublishedLedgerEntry = S.Schema.Type<typeof PublishedLedgerEntry>
+
+export const UnpublishedLedgerEntry = S.TaggedStruct('unpublished', {
+  tag: ReleaseTag,
+  commit: CommitSha,
+  package: PackageName,
+  version: PackageVersion,
+  url: HttpUrl,
+  status: S.Number,
+  fetchedAt: S.String,
+})
+export type UnpublishedLedgerEntry = S.Schema.Type<typeof UnpublishedLedgerEntry>
+
+export const MismatchedLedgerEntry = S.TaggedStruct('mismatched', {
+  tag: ReleaseTag,
+  commit: CommitSha,
+  package: PackageName,
+  claimedVersion: PackageVersion,
+  manifestVersion: PackageVersion,
+  claimed: VersionState,
+  manifest: VersionState,
+})
+export type MismatchedLedgerEntry = S.Schema.Type<typeof MismatchedLedgerEntry>
+
+export const ReleaseLedgerEntry = S.Union([
+  PublishedLedgerEntry,
+  UnpublishedLedgerEntry,
+  MismatchedLedgerEntry,
+])
+export type ReleaseLedgerEntry = S.Schema.Type<typeof ReleaseLedgerEntry>
 
 export const ReleaseLedger = S.Struct({
-  entries: S.Array(LedgerEntry),
+  entries: S.Array(ReleaseLedgerEntry),
 })
 export type ReleaseLedger = S.Schema.Type<typeof ReleaseLedger>
 
@@ -60,6 +106,15 @@ export type LedgerEntryMismatch = S.Schema.Type<typeof LedgerEntryMismatch>
 
 export const LedgerIdentityRefusal = S.Union([LedgerTagMissing, LedgerTagMoved, LedgerEntryMismatch])
 export type LedgerIdentityRefusal = S.Schema.Type<typeof LedgerIdentityRefusal>
+
+export const VersionBurned = S.TaggedStruct('VersionBurned', {
+  package: PackageName,
+  version: PackageVersion,
+  url: HttpUrl,
+  status: S.Number,
+  fetchedAt: S.String,
+})
+export type VersionBurned = S.Schema.Type<typeof VersionBurned>
 
 export const LedgerAppendRemoved = S.TaggedStruct('LedgerAppendRemoved', {
   tag: ReleaseTag,

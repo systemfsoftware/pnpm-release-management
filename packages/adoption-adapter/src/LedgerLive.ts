@@ -2,7 +2,6 @@ import { NodeServices } from '@effect/platform-node'
 import {
   FsPath,
   GitRef,
-  type LedgerEntry,
   LedgerMalformed,
   LedgerPort,
   LedgerUnreadable,
@@ -10,10 +9,12 @@ import {
   type RelativePath,
   type ReleaseLedger,
   ReleaseLedger as ReleaseLedgerSchema,
+  type ReleaseLedgerEntry,
   type RepoRoot,
 } from '@systemfsoftware/release-language'
 import { Effect, Layer, Option } from 'effect'
 import { FileSystem } from 'effect/FileSystem'
+import * as Match from 'effect/Match'
 import { Path } from 'effect/Path'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
@@ -31,24 +32,58 @@ const decodeLedger = (
     ),
   )
 
-const compareTags = (left: LedgerEntry, right: LedgerEntry): number => {
+const compareTags = (left: ReleaseLedgerEntry, right: ReleaseLedgerEntry): number => {
   if (left.tag < right.tag) return -1
   if (left.tag > right.tag) return 1
   return 0
 }
 
+const comparePaths = (left: string, right: string): number => {
+  if (left < right) return -1
+  if (left > right) return 1
+  return 0
+}
+
+const ordered = (files: Readonly<Record<string, string>>): Readonly<Record<string, string>> =>
+  Object.fromEntries(Object.entries(files).sort(([left], [right]) => comparePaths(left, right)))
+
+const canonicalEntry = (entry: ReleaseLedgerEntry): unknown =>
+  Match.value(entry).pipe(
+    Match.tag('published', (published) => ({
+      _tag: 'published',
+      tag: published.tag,
+      commit: published.commit,
+      package: published.package,
+      version: published.version,
+      integrity: published.integrity,
+      sha256: published.sha256,
+      files: ordered(published.files),
+    })),
+    Match.tag('unpublished', (unpublished) => ({
+      _tag: 'unpublished',
+      tag: unpublished.tag,
+      commit: unpublished.commit,
+      package: unpublished.package,
+      version: unpublished.version,
+      url: unpublished.url,
+      status: unpublished.status,
+      fetchedAt: unpublished.fetchedAt,
+    })),
+    Match.tag('mismatched', (mismatched) => ({
+      _tag: 'mismatched',
+      tag: mismatched.tag,
+      commit: mismatched.commit,
+      package: mismatched.package,
+      claimedVersion: mismatched.claimedVersion,
+      manifestVersion: mismatched.manifestVersion,
+      claimed: mismatched.claimed,
+      manifest: mismatched.manifest,
+    })),
+    Match.exhaustive,
+  )
+
 const canonical = (ledger: ReleaseLedger): string => {
-  const entries = [...ledger.entries]
-    .sort(compareTags)
-    .map((entry) => ({
-      tag: entry.tag,
-      commit: entry.commit,
-      package: entry.package,
-      version: entry.version,
-      integrity: entry.integrity,
-      sha256: entry.sha256,
-      files: entry.files,
-    }))
+  const entries = [...ledger.entries].sort(compareTags).map(canonicalEntry)
   return `${JSON.stringify({ entries }, null, 2)}\n`
 }
 
