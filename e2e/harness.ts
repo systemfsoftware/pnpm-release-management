@@ -8,12 +8,17 @@ export const ORIGIN = '/srv/origin.git'
 export const GITHUB_API_URL = 'https://api.github.com'
 export const GITHUB_TOKEN = 'test_token_admin'
 export const GITHUB_REPOSITORY = 'admin/fixture'
+export const REGISTRY = 'https://registry.npmjs.org'
+export const REGISTRY_LOG = '/tmp/verdaccio/verdaccio.log'
+export const REGISTRY_STORAGE = '/tmp/verdaccio/storage'
 
 export const REDIRECTED_HOSTS = [
   { host: 'api.github.com', ipAddress: '127.0.0.1' },
+  { host: 'registry.npmjs.org', ipAddress: '127.0.0.1' },
 ]
 
-const READY = 'curl -fsS https://api.github.com/meta > /dev/null'
+const READY = 'curl -fsS https://api.github.com/meta > /dev/null && ' +
+  'curl -fsS https://registry.npmjs.org/-/ping > /dev/null'
 
 const GITHUB_HEADERS: ReadonlyArray<string> = [
   `Authorization: Bearer ${GITHUB_TOKEN}`,
@@ -60,6 +65,7 @@ export interface Snapshot {
   files: string
   releases: unknown
   pulls: unknown
+  registry: Record<string, unknown>
 }
 
 export interface World {
@@ -194,6 +200,11 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
       'for p in packages/*/package.json; do printf "%s " "$p"; grep -m1 \'"version"\' "$p"; done',
     )
 
+    const registry: Record<string, unknown> = {}
+    for (const name of ['@e2e/alpha', '@e2e/beta']) {
+      registry[name] = await tolerant(async () => (await curlJson(`${REGISTRY}/${encodeURIComponent(name)}`)).body)
+    }
+
     const versions: Record<string, string> = {}
     for (const line of versionsRaw.split('\n')) {
       if (!line.includes('"version"')) continue
@@ -215,6 +226,7 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
       pulls: await tolerant(async () =>
         (await curlJson(`${GITHUB_API_URL}/repos/admin/fixture/pulls?state=all&per_page=100`, GITHUB_HEADERS)).body
       ),
+      registry,
     }
   }
 
