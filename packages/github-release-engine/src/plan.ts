@@ -26,7 +26,7 @@ import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import { cycleOf, dropExcluded, tagOf } from './cycle.js'
-import { exemptNames } from './integrity.js'
+import { exemptNames, identityCandidates } from './integrity.js'
 import { PlanCommand, type PlanDeferredUnknown, planRelease } from './plan-release.workflow.js'
 import { type PlanDecision, PlanReport } from './plan.schema.js'
 import { type IntegrityCheck, IntegrityCommand, verifyIntegrity } from './verify-integrity.workflow.js'
@@ -84,9 +84,16 @@ const read = (
     const tags = yield* git.remoteTags(remote)
     const deferred = yield* cycles.readDeferred(request.deferred)
     const planned = yield* port.plan()
-    const candidates = members.filter((member) => tags.includes(tagOf(member.name, member.manifest.version)))
+    const candidates = identityCandidates(
+      members.map((member) => ({
+        name: member.name,
+        version: member.manifest.version,
+        publishable: member.publishable,
+      })),
+      tags,
+    )
     const exempt = exemptNames(
-      candidates.map((member) => ({ name: member.name, version: member.manifest.version })),
+      candidates.map((member) => ({ name: member.name, version: member.version })),
       planned.releases,
     )
     const toCheck = candidates.filter((member) => exempt.includes(member.name) === false)
@@ -96,7 +103,7 @@ const read = (
     }
     const checks: Array<IntegrityCheck> = []
     for (const member of toCheck) {
-      const version = member.manifest.version
+      const version = member.version
       const digest = digests.find((entry) => entry.name === member.name && entry.version === version)
       if (digest === undefined) {
         return yield* Effect.fail(TarballMissing.make({ package: member.name, version }))

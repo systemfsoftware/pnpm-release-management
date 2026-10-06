@@ -1,9 +1,9 @@
 import { it } from '@effect/vitest'
-import { PackageName, PackageVersion } from '@systemfsoftware/release-language'
+import { PackageName, PackageVersion, ReleaseTag } from '@systemfsoftware/release-language'
 import { Result } from 'effect'
 import * as Match from 'effect/Match'
 import * as fc from 'effect/testing/FastCheck'
-import { exemptNames } from '../integrity.js'
+import { exemptNames, identityCandidates } from '../integrity.js'
 import { type IntegrityCheck, IntegrityCommand, verifyIntegrity } from '../verify-integrity.workflow.js'
 
 const nameArb = fc
@@ -128,4 +128,50 @@ it.prop(
     if (exempt.length !== expected.length) return false
     return exempt.every((name, index) => name === expected[index])
   },
+)
+
+const identityMemberArb = fc.record({
+  name: nameArb,
+  version: versionArb,
+  publishable: fc.boolean(),
+})
+
+const identityMembersArb = fc.uniqueArray(identityMemberArb, {
+  selector: (member) => String(member.name),
+  maxLength: 4,
+})
+
+const tagPairsArb = fc.uniqueArray(fc.tuple(nameArb, versionArb), {
+  selector: ([name, version]) => `${name}@v${version}`,
+  maxLength: 3,
+})
+
+const releaseTagsOf = (pairs: ReadonlyArray<readonly [PackageName, PackageVersion]>): ReadonlyArray<ReleaseTag> =>
+  pairs.map(([name, version]) => ReleaseTag.make(`${name}@v${version}`))
+
+const createIdentityCandidates = (
+  members: ReadonlyArray<
+    { readonly name: PackageName; readonly version: PackageVersion; readonly publishable: boolean }
+  >,
+  pairs: ReadonlyArray<readonly [PackageName, PackageVersion]>,
+) => identityCandidates(members, releaseTagsOf(pairs))
+
+it.prop(
+  '∀members_IdentityCandidates_≡PublishableTagged',
+  [identityMembersArb, tagPairsArb],
+  ([members, pairs]) => {
+    const candidates = createIdentityCandidates(members, pairs)
+    const tags = releaseTagsOf(pairs)
+    const expected = members.filter((member) =>
+      member.publishable && tags.includes(ReleaseTag.make(`${member.name}@v${member.version}`))
+    )
+    if (candidates.length !== expected.length) return false
+    return candidates.every((candidate, index) => candidate.name === expected[index]?.name)
+  },
+)
+
+it.prop(
+  '∀private_IdentityCandidates_⊥Candidate',
+  [identityMembersArb, tagPairsArb],
+  ([members, pairs]) => createIdentityCandidates(members, pairs).every((candidate) => candidate.publishable),
 )

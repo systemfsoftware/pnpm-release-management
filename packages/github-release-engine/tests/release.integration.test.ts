@@ -43,6 +43,11 @@ const member = (name: string, version: string): Member => ({
 
 const tagOf = (name: string, version: string): ReleaseTag => ReleaseTag.make(`${name}@v${version}`)
 
+const privateMember = (name: string, version: string): Member => ({
+  ...member(name, version),
+  publishable: false,
+})
+
 const intentPath = (slug: string): RelativePath => RelativePath.make(`${slug}.md`)
 
 const changelogFor = (name: string, version: string): RelativePath =>
@@ -177,6 +182,43 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
               )
             }),
             Match.tag('refused', () => failUnexpected('expected a plan report')),
+            Match.exhaustive,
+          )
+        }),
+      ),
+    )
+  }
+
+  {
+    const members = [privateMember('gritlint', '0.1.0')]
+    const changesets = makeFakeChangesetStore([])
+    const workspace = makeFakeWorkspaceStore({ members, files: {} })
+    const git = makeFakeGit({ tags: [tagOf('gritlint', '0.1.0')] })
+    const cycles = makeFakeCycleStore()
+    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer, makeFakeTarball(), makeFakeChangesetsPort())
+    scenario(
+      'A tagged private member with no tarball does not refuse the plan',
+      { scenarioLayer: live },
+      Gherkin.Do.pipe(
+        Given('a private member whose version is already tagged and never packed')(
+          'input',
+          () => Effect.succeed({ tarballs: FsPath.make('tarballs'), changelogDir }),
+        ),
+        When('planning the release')('outcome', (s) =>
+          Effect.match(Cell.run(Cell.provide(planCell, live), s.input), {
+            onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
+            onSuccess: (value) => ({ _tag: 'decided' as const, value }),
+          })),
+        Then('the plan settles without a tarball-missing refusal')((s) => {
+          Match.value(s.outcome).pipe(
+            Match.tag('decided', (decided) => {
+              expect(decided.value.decision._tag).toEqual('PlanSettled')
+            }),
+            Match.tag(
+              'refused',
+              (refused) =>
+                failUnexpected(`expected the private member to be skipped, got ${JSON.stringify(refused.refusal)}`),
+            ),
             Match.exhaustive,
           )
         }),
