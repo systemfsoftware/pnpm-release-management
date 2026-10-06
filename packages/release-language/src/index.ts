@@ -1,6 +1,8 @@
 export { ChangeEvidencePort } from './ChangeEvidencePort.js'
 export type { ChangeEvidenceRefusal } from './ChangeEvidencePort.js'
 export { ChangelogStore } from './ChangelogStore.js'
+export { ChangesetsPort } from './ChangesetsPort.js'
+export { PlannedBump, PlannedRelease } from './ChangesetsPort.schema.js'
 export { ChangesetStore } from './ChangesetStore.js'
 export {
   CommandArg,
@@ -13,11 +15,13 @@ export {
 export { ConfigFieldInvalid, ConfigFieldMissing, ConfigMalformed, ConfigUnreadable } from './Config.schema.js'
 export {
   CargoSurface,
+  ChangesetsVersioning,
   ConfigField,
   ConfigRefusal,
   Gate,
   PrTitle,
   ReleaseConfig,
+  SurfacesVersioning,
   TargetSuffix,
   TaskName,
   TomlHeader,

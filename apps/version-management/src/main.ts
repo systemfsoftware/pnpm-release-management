@@ -1,7 +1,6 @@
 import { NodeRuntime, NodeServices } from '@effect/platform-node'
 import { program, ReporterLive } from '@systemfsoftware/cli-adapter'
 import { Cell } from '@systemfsoftware/effect-cell-types'
-import { ProcessLive } from '@systemfsoftware/process-adapter'
 import { bumpCell, pinRootManifestCell, syncCell } from '@systemfsoftware/version-engine'
 import { ReleaseConfigStoreLive } from '@systemfsoftware/workspace-adapter'
 import { Effect, Layer, Option, Result } from 'effect'
@@ -98,7 +97,6 @@ const versionCommand = Command.make('version').pipe(
 
 const edgeLive = Layer.mergeAll(
   ReleaseConfigStoreLive,
-  ProcessLive,
   ReporterLive,
   NodeServices.layer,
 ).pipe(Layer.provide(NodeServices.layer))

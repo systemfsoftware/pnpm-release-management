@@ -1,7 +1,6 @@
 import { Reporter, type WorkspaceRootNotAbsolute } from '@systemfsoftware/cli-adapter'
 import type {
   ChangelogRefusal,
-  CommandRefusal,
   ConfigRefusal,
   IntentRefusal,
   MemberRefusal,
@@ -30,7 +29,6 @@ export type AppRefusal =
   | MemberRefusal
   | VersionRefusal
   | ChangelogRefusal
-  | CommandRefusal
   | PinRefusal
   | SchemaError
 
@@ -158,13 +156,6 @@ export const renderRefusal = (refusal: AppRefusal): Effect.Effect<void, never, R
           fields('ChangelogUnwritable', [
             ['path', unwritable.path],
             ['reason', unwritable.reason],
-          ]),
-        ),
-      CommandRefused: (command) =>
-        refuse(
-          fields('CommandRefused', [
-            ['command', `${command.command.program} ${command.command.args.join(' ')}`],
-            ['reason', command.reason],
           ]),
         ),
       PinVersionUnusable: (unusable) =>
