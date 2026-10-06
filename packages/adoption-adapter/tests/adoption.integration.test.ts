@@ -172,10 +172,23 @@ interface Context {
   readonly close: () => Promise<void>
 }
 
+interface PackEntry {
+  readonly name: PackageName
+  readonly version: PackageVersion
+  readonly manifestName?: PackageName
+  readonly private?: boolean
+}
+
+interface TagEntry {
+  readonly name: PackageName
+  readonly version: PackageVersion
+}
+
 interface PrepareOptions {
-  readonly pack: ReadonlyArray<{ name: PackageName; version: PackageVersion }>
+  readonly commits: ReadonlyArray<
+    { readonly packages: ReadonlyArray<PackEntry>; readonly tags: ReadonlyArray<TagEntry> }
+  >
   readonly serve: ReadonlyArray<{ name: PackageName; version: PackageVersion; files: Record<string, string> }>
-  readonly tag: ReadonlyArray<{ name: PackageName; version: PackageVersion }>
 }
 
 const prepare = (options: PrepareOptions) =>
@@ -188,23 +201,32 @@ const prepare = (options: PrepareOptions) =>
     yield* fs.makeDirectory(work, { recursive: true })
     yield* fs.makeDirectory(tarballs, { recursive: true })
     yield* fs.writeFileString(path.join(work, 'README.md'), '# fixture\n')
-    const members = [...options.pack, ...options.serve].map((entry) => [entry.name, entry.version] as const)
-    const created: Array<PackageName> = []
-    for (const [name, version] of members) {
-      if (created.includes(name)) continue
-      created.push(name)
-      const dir = path.join(work, 'packages', name.replace(/[/@]/g, '-'))
-      yield* fs.makeDirectory(dir, { recursive: true })
-      yield* fs.writeFileString(path.join(dir, 'package.json'), JSON.stringify({ name, version }))
-    }
     yield* git(work, ['init', '-q', '-b', 'main'])
     yield* git(work, ['config', 'user.email', 'test@example.invalid'])
     yield* git(work, ['config', 'user.name', 'test'])
-    yield* git(work, ['add', '-A'])
-    yield* git(work, ['commit', '-q', '-m', 'chore: fixture'])
+    for (const step of options.commits) {
+      for (const entry of step.packages) {
+        const dir = path.join(work, 'packages', entry.name.replace(/[/@]/g, '-'))
+        yield* fs.makeDirectory(dir, { recursive: true })
+        const manifest: Record<string, unknown> = {
+          name: entry.manifestName ?? entry.name,
+          version: entry.version,
+        }
+        if (entry.private === true) {
+          manifest['private'] = true
+        }
+        yield* fs.writeFileString(path.join(dir, 'package.json'), JSON.stringify(manifest))
+      }
+      yield* git(work, ['add', '-A'])
+      yield* git(work, ['commit', '-q', '-m', 'chore: fixture'])
+      for (const entry of step.tags) {
+        yield* git(work, ['tag', tagOf(entry.name, entry.version)])
+      }
+    }
     yield* git(root, ['init', '-q', '--bare', 'origin.git'])
     yield* git(work, ['remote', 'add', 'origin', path.join(root, 'origin.git')])
     yield* git(work, ['push', '-q', '-u', 'origin', 'main'])
+    yield* git(work, ['push', '-q', 'origin', '--tags'])
     const served: Array<Served> = []
     for (const entry of options.serve) {
       const bytes = tarballBytes(entry.name, entry.version, entry.files)
@@ -215,12 +237,6 @@ const prepare = (options: PrepareOptions) =>
         bytes,
         integrity: integrityOf(bytes),
       })
-    }
-    for (const entry of options.tag) {
-      yield* git(work, ['tag', tagOf(entry.name, entry.version)])
-    }
-    if (options.tag.length > 0) {
-      yield* git(work, ['push', '-q', 'origin', '--tags'])
     }
     const registry = yield* startRegistry(served)
     return { root, work, tarballs, registry: registry.base, close: registry.close }
@@ -310,6 +326,7 @@ const failureTag = (failure: AdoptionFailure): string =>
       RegistryFetchFailed: () => 'RegistryFetchFailed',
       RegistryMetadataMalformed: () => 'RegistryMetadataMalformed',
       RegistryIntegrityMismatch: () => 'RegistryIntegrityMismatch',
+      AdoptionTagUnresolved: () => 'AdoptionTagUnresolved',
     }),
   )
 
@@ -342,9 +359,31 @@ Feature('Adoption ledger').body(({ scenario }) => {
         'context',
         () =>
           prepare({
-            pack: [
-              { name: ALPHA_NAME, version: ALPHA_VERSION },
-              { name: gritlintMember.name, version: gritlintMember.manifest.version },
+            commits: [
+              {
+                packages: [{ name: ALPHA_NAME, version: PackageVersion.make('0.9.0') }],
+                tags: [{ name: ALPHA_NAME, version: PackageVersion.make('0.9.0') }],
+              },
+              {
+                packages: [
+                  { name: ALPHA_NAME, version: ALPHA_VERSION },
+                  { name: gritlintMember.name, version: gritlintMember.manifest.version, private: true },
+                  {
+                    name: PackageName.make('hex-schema'),
+                    version: PackageVersion.make('1.0.0'),
+                    manifestName: PackageName.make('@e2e/hex-schema'),
+                  },
+                ],
+                tags: [
+                  { name: ALPHA_NAME, version: ALPHA_VERSION },
+                  { name: gritlintMember.name, version: gritlintMember.manifest.version },
+                  { name: PackageName.make('hex-schema'), version: PackageVersion.make('1.0.0') },
+                ],
+              },
+              {
+                packages: [{ name: BETA_NAME, version: BETA_VERSION }],
+                tags: [{ name: BETA_NAME, version: BETA_VERSION }],
+              },
             ],
             serve: [
               { name: ALPHA_NAME, version: ALPHA_VERSION, files: { 'package/index.js': 'export const alpha = 1\n' } },
@@ -354,12 +393,11 @@ Feature('Adoption ledger').body(({ scenario }) => {
                 files: { 'package/index.js': 'export const alpha = 0\n' },
               },
               { name: BETA_NAME, version: BETA_VERSION, files: { 'package/index.js': 'export const retired = 1\n' } },
-            ],
-            tag: [
-              { name: ALPHA_NAME, version: ALPHA_VERSION },
-              { name: ALPHA_NAME, version: PackageVersion.make('0.9.0') },
-              { name: BETA_NAME, version: BETA_VERSION },
-              { name: gritlintMember.name, version: gritlintMember.manifest.version },
+              {
+                name: PackageName.make('@e2e/hex-schema'),
+                version: PackageVersion.make('1.0.0'),
+                files: { 'package/index.js': 'export const hex = 1\n' },
+              },
             ],
           }),
       ),
@@ -395,12 +433,15 @@ Feature('Adoption ledger').body(({ scenario }) => {
             ).toBe('AdoptionRecorded')
             expect(Option.isSome(outcome.ledger)).toBe(true)
             const entries = Option.getOrThrow(outcome.ledger).entries
-            expect(entries.length).toBe(3)
+            expect(entries.length).toBe(4)
             expect(entries.map((entry) => entry.tag)).toEqual([
               `${ALPHA_NAME}@v0.9.0`,
               `${ALPHA_NAME}@v1.0.0`,
               `${BETA_NAME}@v${BETA_VERSION}`,
+              'hex-schema@v1.0.0',
             ])
+            const unscoped = entries.find((entry) => entry.tag === 'hex-schema@v1.0.0')
+            expect(unscoped?.package).toBe('@e2e/hex-schema')
             expect(entries[1]?.commit).toBe(outcome.commit)
             expect(entries[1]?.version).toBe(ALPHA_VERSION)
             expect(entries.every((entry) => entry.sha256.startsWith('sha256-'))).toBe(true)
@@ -423,13 +464,15 @@ Feature('Adoption ledger').body(({ scenario }) => {
         'context',
         () =>
           prepare({
-            pack: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+            commits: [{
+              packages: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+              tags: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+            }],
             serve: [{
               name: ALPHA_NAME,
               version: ALPHA_VERSION,
               files: { 'package/index.js': 'export const alpha = 1\n' },
             }],
-            tag: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
           }),
       ),
       When('the tag is moved to a new commit and the plan runs')(
@@ -491,13 +534,15 @@ Feature('Adoption ledger').body(({ scenario }) => {
         'context',
         () =>
           prepare({
-            pack: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+            commits: [{
+              packages: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+              tags: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+            }],
             serve: [{
               name: ALPHA_NAME,
               version: ALPHA_VERSION,
               files: { 'package/index.js': 'export const alpha = 1\n' },
             }],
-            tag: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
           }),
       ),
       When('the new member is tagged lightweight and the plan runs')(
@@ -566,13 +611,15 @@ Feature('Adoption ledger').body(({ scenario }) => {
         'context',
         () =>
           prepare({
-            pack: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+            commits: [{
+              packages: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+              tags: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+            }],
             serve: [{
               name: ALPHA_NAME,
               version: ALPHA_VERSION,
               files: { 'package/index.js': 'export const alpha = 1\n' },
             }],
-            tag: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
           }),
       ),
       When('the packed tarball changes and the plan runs')(
@@ -631,9 +678,11 @@ Feature('Adoption ledger').body(({ scenario }) => {
         'context',
         () =>
           prepare({
-            pack: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+            commits: [{
+              packages: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+              tags: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+            }],
             serve: [],
-            tag: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
           }),
       ),
       When('adoption runs against the empty registry')(
@@ -656,8 +705,6 @@ Feature('Adoption ledger').body(({ scenario }) => {
               onFailure: (error) =>
                 Match.value(error).pipe(
                   Match.tag('AdoptionRefused', (refused) => refused.failures.map(failureTag)),
-                  Match.tag('ManifestUnreadable', () => ['manifest-unreadable']),
-                  Match.tag('ManifestInvalid', () => ['manifest-invalid']),
                   Match.tag('TagCapturedMalformed', () => ['tag-captured-malformed']),
                   Match.tag('TagExcludedMalformed', () => ['tag-excluded-malformed']),
                   Match.tag('LedgerUnwritable', () => ['ledger-unwritable']),
@@ -685,9 +732,11 @@ Feature('Adoption ledger').body(({ scenario }) => {
             const fs = yield* FileSystem
             const path = yield* Path
             const context = yield* prepare({
-              pack: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+              commits: [{
+                packages: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+                tags: [],
+              }],
               serve: [],
-              tag: [],
             })
             const commit = yield* git(context.work, ['rev-parse', 'HEAD'])
             const entry = {

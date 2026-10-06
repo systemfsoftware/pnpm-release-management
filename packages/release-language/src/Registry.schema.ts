@@ -52,9 +52,16 @@ export const AdoptionExcluded = S.Struct({
 })
 export type AdoptionExcluded = S.Schema.Type<typeof AdoptionExcluded>
 
+export const AdoptionTagUnresolved = S.TaggedStruct('AdoptionTagUnresolved', {
+  tag: ReleaseTag,
+  reason: S.String,
+})
+export type AdoptionTagUnresolved = S.Schema.Type<typeof AdoptionTagUnresolved>
+
 export const AdoptionFailure = S.Union([
   RegistryFetchFailed,
   RegistryMetadataMalformed,
   RegistryIntegrityMismatch,
+  AdoptionTagUnresolved,
 ])
 export type AdoptionFailure = S.Schema.Type<typeof AdoptionFailure>

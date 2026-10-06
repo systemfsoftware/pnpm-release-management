@@ -1,10 +1,12 @@
 import { Cell, Wire } from '@systemfsoftware/effect-cell-types'
-import type { AdoptionFailure, LedgerEntry, MemberRefusal, TagRefusal } from '@systemfsoftware/release-language'
+import type { AdoptionFailure, TaggedTree, TagRefusal } from '@systemfsoftware/release-language'
 import {
   AdoptionExcluded,
+  AdoptionTagUnresolved,
   FsPath,
   GitPort,
   HttpUrl,
+  LedgerEntry,
   LedgerPort,
   LedgerUnwritable,
   PackageName,
@@ -18,14 +20,13 @@ import {
   type ReleaseTag,
   RemoteName,
   TarballPort,
-  WorkspaceStore,
 } from '@systemfsoftware/release-language'
 import { Effect, Option, Schedule } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import { AdoptionCommand, type AdoptionDecision, AdoptionRefused, adoptRelease } from './adopt-release.workflow.js'
-import { AdoptionReport } from './adopt.schema.js'
+import { AdoptionExcludedTag, AdoptionLedgered, type AdoptionProduct, AdoptionReport } from './adopt.schema.js'
 
 export const AdoptionRequest = Wire.wire({
   registry: Wire.mint(HttpUrl),
@@ -33,7 +34,7 @@ export const AdoptionRequest = Wire.wire({
   output: Wire.mint(RelativePath),
 })
 
-export type AdoptionReadRefusal = MemberRefusal | TagRefusal
+export type AdoptionReadRefusal = TagRefusal
 
 type AdoptionRequestInput = S.Schema.Type<typeof AdoptionRequest>
 
@@ -80,8 +81,16 @@ const isTransient = (failure: AdoptionFailure): boolean =>
     Match.tag('RegistryFetchFailed', (fetched) => fetched.status === undefined || fetched.status >= 500),
     Match.tag('RegistryMetadataMalformed', () => false),
     Match.tag('RegistryIntegrityMismatch', () => false),
+    Match.tag('AdoptionTagUnresolved', () => false),
     Match.exhaustive,
   )
+
+const declaredAtTree = (tree: TaggedTree, candidate: Candidate): ReadonlyArray<TaggedTree['manifests'][number]> =>
+  tree.manifests.filter((candidateManifest) => {
+    const manifest = candidateManifest.manifest
+    if (manifest.version !== candidate.version) return false
+    return manifest.name === candidate.name || manifest.name.endsWith(`/${candidate.name}`)
+  })
 
 const fetchEntry = (
   request: AdoptionRequestInput,
@@ -90,18 +99,67 @@ const fetchEntry = (
   tarballs: TarballPort,
   remote: RemoteName,
   candidate: Candidate,
-): Effect.Effect<LedgerEntry, AdoptionFailure> =>
+): Effect.Effect<AdoptionProduct, AdoptionFailure> =>
   Effect.gen(function*() {
-    const name = candidate.name
-    const version = candidate.version
     const tag = candidate.tag
-    const metadata = yield* registry.metadata(request.registry, name, version).pipe(
-      Effect.mapError((failure) => registryFailureOf(failure, name, version)),
+    const version = candidate.version
+    const treeOption = yield* git.tagTree(remote, tag).pipe(
+      Effect.mapError(() => AdoptionTagUnresolved.make({ tag, reason: `tag ${tag} is not readable on ${remote}` })),
+    )
+    if (Option.isNone(treeOption)) {
+      return yield* Effect.fail(
+        AdoptionTagUnresolved.make({ tag, reason: `tag ${tag} does not resolve to a commit on ${remote}` }),
+      )
+    }
+    const tree = treeOption.value
+    const matches = declaredAtTree(tree, candidate)
+    if (matches.length === 0) {
+      const sameVersion = tree.manifests
+        .filter((candidateManifest) => candidateManifest.manifest.version === version)
+        .map((candidateManifest) => `${candidateManifest.manifest.name}@${candidateManifest.manifest.version}`)
+      let candidates = ''
+      if (sameVersion.length > 0) {
+        candidates = `; candidates: ${sameVersion.join(', ')}`
+      }
+      return yield* Effect.fail(
+        AdoptionTagUnresolved.make({
+          tag,
+          reason: `no package.json at ${tree.commit} declares ${candidate.name}@${version}${candidates}`,
+        }),
+      )
+    }
+    if (matches.length > 1) {
+      return yield* Effect.fail(
+        AdoptionTagUnresolved.make({
+          tag,
+          reason: `several package.json declare ${candidate.name}@${version}: ${
+            matches.map((candidateManifest) => candidateManifest.manifest.name).join(', ')
+          }`,
+        }),
+      )
+    }
+    const [matched] = matches
+    if (matched === undefined) {
+      return yield* Effect.fail(AdoptionTagUnresolved.make({ tag, reason: `cannot resolve ${tag}` }))
+    }
+    const published = matched.manifest.name
+    if (matched.manifest.private === true) {
+      return AdoptionExcludedTag.make({
+        excluded: AdoptionExcluded.make({
+          tag,
+          package: published,
+          version,
+          reason: 'private, never published',
+        }),
+      })
+    }
+    const metadata = yield* registry.metadata(request.registry, published, version).pipe(
+      Effect.mapError((failure) => registryFailureOf(failure, published, version)),
     )
     const downloaded = yield* registry.download(metadata.tarball).pipe(
       Effect.mapError((failure) =>
         RegistryFetchFailed.make({
-          package: name,
+          package: published,
           version,
           reason: `${failure.url}: ${failure.reason}`,
           status: failure.status,
@@ -110,13 +168,17 @@ const fetchEntry = (
     )
     const digested = yield* tarballs.digest(FsPath.make(metadata.tarball), downloaded).pipe(
       Effect.mapError((failure) =>
-        RegistryMetadataMalformed.make({ package: name, version, reason: `tarball unreadable: ${failure.reason}` })
+        RegistryMetadataMalformed.make({
+          package: published,
+          version,
+          reason: `tarball unreadable: ${failure.reason}`,
+        })
       ),
     )
-    if (digested.name !== name || digested.version !== version) {
+    if (digested.name !== published || digested.version !== version) {
       return yield* Effect.fail(
         RegistryMetadataMalformed.make({
-          package: name,
+          package: published,
           version,
           reason: `dist.tarball holds ${digested.name}@${digested.version}`,
         }),
@@ -125,30 +187,24 @@ const fetchEntry = (
     if (digested.integrity !== metadata.integrity) {
       return yield* Effect.fail(
         RegistryIntegrityMismatch.make({
-          package: name,
+          package: published,
           version,
           expected: metadata.integrity,
           actual: digested.integrity,
         }),
       )
     }
-    const commit = yield* git.tagCommit(remote, tag).pipe(
-      Effect.mapError(() => RegistryFetchFailed.make({ package: name, version, reason: `tag ${tag} unreadable` })),
-    )
-    if (Option.isNone(commit)) {
-      return yield* Effect.fail(
-        RegistryFetchFailed.make({ package: name, version, reason: `tag ${tag} is not on ${remote}` }),
-      )
-    }
-    return {
-      tag,
-      commit: commit.value,
-      package: name,
-      version,
-      integrity: metadata.integrity,
-      sha256: tarballs.sha256(downloaded),
-      files: digested.files,
-    }
+    return AdoptionLedgered.make({
+      entry: {
+        tag,
+        commit: tree.commit,
+        package: published,
+        version,
+        integrity: metadata.integrity,
+        sha256: tarballs.sha256(downloaded),
+        files: digested.files,
+      },
+    })
   }).pipe(Effect.retry({ schedule: Schedule.exponential('200 millis'), times: 2, while: isTransient }))
 
 const gather = (
@@ -156,15 +212,13 @@ const gather = (
 ): Effect.Effect<
   AdoptionCommand,
   AdoptionReadRefusal,
-  WorkspaceStore | GitPort | RegistryPort | TarballPort
+  GitPort | RegistryPort | TarballPort
 > =>
   Effect.gen(function*() {
     const remote = request.remote ?? RemoteName.make('origin')
-    const workspace = yield* WorkspaceStore
     const git = yield* GitPort
     const registry = yield* RegistryPort
     const tarballs = yield* TarballPort
-    const members = yield* workspace.listMembers()
     const tags = yield* git.remoteTags(remote)
     const candidates: Array<Candidate> = []
     for (const tag of tags) {
@@ -173,36 +227,24 @@ const gather = (
         candidates.push({ tag, name: parsed.value.name, version: parsed.value.version })
       }
     }
-    const toAdopt: Array<Candidate> = []
-    const excluded: Array<AdoptionExcluded> = []
-    for (const candidate of candidates) {
-      const member = members.find((known) => known.name === candidate.name)
-      if (member !== undefined && !member.publishable) {
-        excluded.push(
-          AdoptionExcluded.make({
-            tag: candidate.tag,
-            package: candidate.name,
-            version: candidate.version,
-            reason: 'private, never published',
-          }),
-        )
-        continue
-      }
-      toAdopt.push(candidate)
-    }
     const outcomes = yield* Effect.forEach(
-      toAdopt,
+      candidates,
       (candidate) => Effect.result(fetchEntry(request, git, registry, tarballs, remote, candidate)),
       { concurrency: 4 },
     )
     const entries: Array<LedgerEntry> = []
+    const excluded: Array<AdoptionExcluded> = []
     const failures: Array<AdoptionFailure> = []
     for (const outcome of outcomes) {
       if (Result.isFailure(outcome)) {
         failures.push(outcome.failure)
-      } else {
-        entries.push(outcome.success)
+        continue
       }
+      Match.value(outcome.success).pipe(
+        Match.tag('Ledgered', (ledgered) => entries.push(ledgered.entry)),
+        Match.tag('Excluded', (skipped) => excluded.push(skipped.excluded)),
+        Match.exhaustive,
+      )
     }
     entries.sort(compareTags)
     return AdoptionCommand.make({ entries, failures, excluded, output: request.output })
@@ -225,7 +267,7 @@ export const adoptCell: Cell.Cell<
   AdoptionRequestInput,
   AdoptionReport,
   AdoptionReadRefusal | AdoptionRefused | LedgerUnwritable,
-  WorkspaceStore | GitPort | RegistryPort | TarballPort | LedgerPort
+  GitPort | RegistryPort | TarballPort | LedgerPort
 > = Cell.layer({
   read: gather,
   decide: adoptRelease,

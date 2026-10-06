@@ -2,6 +2,7 @@ import { it } from '@effect/vitest'
 import {
   AdoptionExcluded,
   type AdoptionFailure,
+  AdoptionTagUnresolved,
   CommitSha,
   LedgerEntry,
   PackageName,
@@ -55,6 +56,7 @@ const refusalArb: fc.Arbitrary<AdoptionFailure> = fc.oneof(
   fc.record({ package: nameArb, version: versionArb, expected: hashArb, actual: hashArb }).map((fields) =>
     RegistryIntegrityMismatch.make(fields)
   ),
+  fc.record({ tag: tagArb, reason: fc.string() }).map((fields) => AdoptionTagUnresolved.make(fields)),
 )
 
 const output = RelativePath.make('release-ledger.json')

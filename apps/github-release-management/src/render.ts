@@ -374,6 +374,7 @@ const adoptionFailureText = (failure: AdoptionFailure): string =>
       RegistryMetadataMalformed: (malformed) => `${malformed.package}@${malformed.version}: ${malformed.reason}`,
       RegistryIntegrityMismatch: (mismatch) =>
         `${mismatch.package}@${mismatch.version}: dist.integrity ${mismatch.expected} but the download hashes to ${mismatch.actual}`,
+      AdoptionTagUnresolved: (unresolved) => `${unresolved.tag}: ${unresolved.reason}`,
     }),
   )
 

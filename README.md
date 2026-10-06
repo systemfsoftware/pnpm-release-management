@@ -356,8 +356,16 @@ github-release-management adopt \
 
 `--registry <url>` is required and has no default. Adoption reads every release
 tag `<name>@v<version>` on `--remote` (`origin` by default) — not only the
-current version of a current member. For each tag it fetches `<name>@<version>`
-from the registry, downloads `dist.tarball`, and records one entry:
+current version of a current member. The published name comes from the manifest
+at the tagged commit, never from the tag string alone: adoption reads every
+`package.json` in that commit's tree and takes the one whose `version` equals the
+tag version and whose `name` equals the tag name or ends with `/<tag name>`. So a
+tag left over from before a package was scoped (`hex-schema@v1.0.0`, whose
+manifest says `@systemfsoftware/hex-schema`) resolves to the name the registry
+actually serves. Exactly one match is required; zero or several matches is a hard
+error naming the tag and the candidate names. It fetches the published
+`<name>@<version>` from the registry, downloads `dist.tarball`, and records one
+entry:
 
 ```json
 {
@@ -377,9 +385,12 @@ from the registry, downloads `dist.tarball`, and records one entry:
 
 That covers an older version of a current member (the immutability law applies if
 anyone re-releases that `name@version`) and a name that is no longer a workspace
-member (the tag name gives `name@version`, split on the last `@v`). A tag of a
-current private member is never published, so it is excluded and listed in the
-report as `private, never published`.
+member (the tag name gives `name@version`, split on the last `@v`), both resolved
+through the tagged manifest. The manifest's `private: true` at that commit means
+the version was never published, so it is excluded and listed in the report as
+`private, never published`. The ledger entry keeps the tag as its key and records
+the resolved published name, so the identity check — which looks tags up by
+`<name>@v<version>` — is unaffected.
 
 The `files` map is the same digest shape the tag annotations use, so a later
 mismatch can name the first differing file. Fetches run four at a time and retry

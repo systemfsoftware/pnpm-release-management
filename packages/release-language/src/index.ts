@@ -122,6 +122,7 @@ export {
 export {
   AdoptionExcluded,
   AdoptionFailure,
+  AdoptionTagUnresolved,
   RegistryDownloadFailed,
   RegistryFetchFailed,
   RegistryIntegrityMismatch,
@@ -148,6 +149,8 @@ export {
   RepoSlug,
   TagCapturedMalformed,
   TagExcludedMalformed,
+  TaggedManifest,
+  TaggedTree,
   TagRefusal,
 } from './Tag.schema.js'
 export { TarballPort } from './TarballPort.js'
