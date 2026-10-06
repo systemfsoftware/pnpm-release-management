@@ -76,6 +76,19 @@ refused "writing outside the project is refused" \
   sandbox -- sh -c "echo $alive; echo escaped > '$outside/written'"
 if [ -e "$outside/written" ]; then fail "nothing lands outside the project"; else pass "nothing lands outside the project"; fi
 
+tmp_canary="/tmp/sandbox-proof-$$-$(date +%s)"
+case "$(uname -s)" in
+  Darwin)
+    refused "writing to the real /tmp is refused" \
+      sandbox -- sh -c "echo $alive; echo escaped > '$tmp_canary'"
+    ;;
+  *)
+    allowed "a write to /tmp lands in the sandbox's private tmpfs" \
+      sandbox -- sh -c "echo escaped > '$tmp_canary' && echo $alive"
+    ;;
+esac
+if [ -e "$tmp_canary" ]; then fail "nothing lands in the host /tmp"; else pass "nothing lands in the host /tmp"; fi
+
 allowed "the project directory is writable" \
   sandbox -- sh -c "echo inside > written && echo $alive"
 if [ "$(cat "$project/written" 2>/dev/null)" = inside ]; then pass "project writes reach the host"; else fail "project writes reach the host"; fi
@@ -102,6 +115,38 @@ refused "listing /nix/store is refused" \
 
 allowed "a tool from the closure still runs" \
   sandbox -- node -e "const fs = require('fs'); const fd = fs.openSync(process.execPath, 'r'); const buf = Buffer.alloc(4); fs.readSync(fd, buf, 0, 4, 0); console.log('$alive')"
+
+tiny="$project/tiny-workspace"
+mkdir -p "$tiny"
+cp -R "@tinyWorkspace@/." "$tiny/"
+chmod -R u+w "$tiny"
+if [ "$(pnpm --version)" = "@pnpm12Version@" ]; then
+  pass "the install proof runs pnpm @pnpm12Version@"
+else
+  fail "the install proof runs pnpm @pnpm12Version@"
+fi
+allowed "an offline pnpm install resolves from the --pnpm-store store" \
+  sh -c "cd '$tiny' && sandbox --pnpm-store '@tinyStore@' -- sh -c 'pnpm install && echo $alive'"
+if [ -f "$tiny/node_modules/ms/package.json" ]; then
+  pass "the offline install links the store's package into node_modules"
+else
+  fail "the offline install links the store's package into node_modules"
+fi
+
+if [ "$(uname -s)" = Darwin ]; then
+  bare="$project/tiny-workspace-bare"
+  mkdir -p "$bare"
+  cp -R "@tinyWorkspace@/." "$bare/"
+  chmod -R u+w "$bare"
+  lock_status=0
+  lock_out="$(cd "$bare" && sandbox --pnpm-store '@tinyStore@' -- env -u XDG_RUNTIME_DIR pnpm install 2>&1)" || lock_status=$?
+  if [ "$lock_status" -ne 0 ] && printf '%s\n' "$lock_out" | grep -q ERR_PNPM_STORE_DIR_OPEN_OPERATION_LOCK; then
+    pass "without the private XDG_RUNTIME_DIR the install fails on the /tmp store lock"
+  else
+    printf '%s\n' "$lock_out" | tail -5
+    fail "without the private XDG_RUNTIME_DIR the install fails on the /tmp store lock"
+  fi
+fi
 
 rejects "a malformed --publish is refused" \
   sandbox --publish 70000:1 -- sh -c "echo $alive"

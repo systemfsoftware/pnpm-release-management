@@ -1,6 +1,7 @@
 {
   "$schema": "https://v2-10-1.turborepo.dev/schema.json",
   "globalPassThroughEnv": [
+    "TMPDIR",
     "XDG_CACHE_HOME"
   ],
   "tasks": {

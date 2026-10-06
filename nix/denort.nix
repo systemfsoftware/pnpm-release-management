@@ -5,23 +5,23 @@ let
   releases = {
     x86_64-linux = {
       target = "x86_64-unknown-linux-gnu";
-      sha256 = "sha256-9diJt3ks+a0Jk0luLuUyJRbn4d66NsGlp5oAK/AHWbs=";
+      sha256 = "sha256-q0FrdHDz98bXtDY75HXl2M89hGnYZrO4RZozKlh0zQ0=";
     };
     aarch64-linux = {
       target = "aarch64-unknown-linux-gnu";
-      sha256 = "sha256-jHNAcJjW+p/FE9HY0Hgc+0u+SsGZ7P9aEnhruc4QQcw=";
+      sha256 = "sha256-ALoK4hq8Zc8V7f7aatdGRvrs2tWxSCifO0ESEAgSvts=";
     };
     aarch64-darwin = {
       target = "aarch64-apple-darwin";
-      sha256 = "sha256-MV02kF6hCB49Dhw5iQ8aG7DUd+SXmVkp6ZMw+7Z59ZU=";
+      sha256 = "sha256-sKCN68ujR/m/I5GsDhL5nyfHo3WtVhuuzLNfATaazaQ=";
     };
   };
 
   system = stdenvNoCC.hostPlatform.system;
   release = releases.${system} or (throw "denort: no release archive pinned for ${system}");
 in
-assert lib.assertMsg (version == "2.9.6")
-  "denort: pinned zips are v2.9.6 but pkgs.deno is ${version} — re-pin releases";
+assert lib.assertMsg (version == "2.9.7")
+  "denort: pinned zips are v2.9.7 but pkgs.deno is ${version} — re-pin releases";
 stdenvNoCC.mkDerivation {
   pname = "denort-cache";
   inherit version;

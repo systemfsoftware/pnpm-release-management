@@ -292,7 +292,10 @@ the lockfile. Each invocation gets a private copy of the store's index database
 that is discarded at exit, so the Nix store stays read-only. `$HOME` is a fresh
 tmpfs every time, so nothing a dependency plants survives. Tool caches that
 should persist (turbo, vite, `tsbuildinfo`) belong in the project's gitignored
-`.cache/`; the sandbox sets `XDG_CACHE_HOME` to it.
+`.cache/`; the sandbox sets `XDG_CACHE_HOME` to it. On macOS the run also gets a
+private `0700` `XDG_RUNTIME_DIR` beneath its `$TMPDIR`, so a tool that locks
+there — pnpm's store-operation lock, for one — works without a `/tmp` write
+root.
 
 | Boundary    | Inside the sandbox                                                                                                                                                               |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -341,14 +344,16 @@ violation from the unified log and prints an error naming `--listen`.
 `packages.<system>.sandbox-proofs` is the gate. Each refusal proof first prints
 from inside the same sandbox, so a sandbox that fails to start fails the proof
 instead of passing it. The proofs: reading `~/.ssh` and `~/.config` fails,
-writing outside the project fails, agent sockets and secrets do not cross the
-cleared environment, a store path outside the closure and the listing of
-`/nix/store` both fail while a closure tool still runs, `--egress-log` records
-exactly the allowed and refused decisions and refuses a log inside the project,
-an undeclared connection fails, a declared host is reachable while every other
-host is refused, a loopback dev server still answers, a published port answers
-from the host while an unpublished one does not, and — on macOS — an undeclared
-bind is refused naming `--listen`. CI runs them on Linux and macOS. It then
+writing outside the project fails, a write to the real `/tmp` leaves nothing on
+the host, agent sockets and secrets do not cross the cleared environment, a
+store path outside the closure and the listing of `/nix/store` both fail while a
+closure tool still runs and an offline `pnpm` 12 install of a tiny workspace
+resolves from the `--pnpm-store` store, `--egress-log` records exactly the
+allowed and refused decisions and refuses a log inside the project, an
+undeclared connection fails, a declared host is reachable while every other host
+is refused, a loopback dev server still answers, a published port answers from
+the host while an unpublished one does not, and — on macOS — an undeclared bind
+is refused naming `--listen`. CI runs them on Linux and macOS. It then
 installs, builds and tests this repository as three separate sandbox
 invocations with no network at all.
 
