@@ -133,6 +133,51 @@ else
   fail "the offline install links the store's package into node_modules"
 fi
 
+consumer_of() {
+  local dir="$project/$1"
+  mkdir -p "$dir/.deps"
+  cp -R "@tinyConsumer@/." "$dir/"
+  cp "@tinyLib@/tiny-lib-1.0.0.tgz" "$dir/.deps/"
+  chmod -R u+w "$dir"
+  if [ -n "${2:-}" ]; then
+    (cd "$dir" && node -e 'const fs = require("fs"); const m = JSON.parse(fs.readFileSync("package.json", "utf8")); m.packageManager = process.argv[1]; fs.writeFileSync("package.json", JSON.stringify(m, null, 2) + "\n")' "$2")
+    (cd "$dir" && node -e 'const fs = require("fs"); const [, from, to] = process.argv; fs.writeFileSync("pnpm-lock.yaml", fs.readFileSync("pnpm-lock.yaml", "utf8").replaceAll(from, to))' "@pnpm12Version@" "${2#pnpm@}")
+  fi
+  printf '%s\n' "$dir"
+}
+
+consumer="$(consumer_of consumer)"
+allowed "a consumer installs a workspace tarball frozen and offline from the consumer store" \
+  sh -c "cd '$consumer' && sandbox --pnpm-store '@consumerStore@' -- sh -c 'pnpm install && node -e \"require(\\\"@sandbox-proof/tiny-lib\\\") === 60000 && console.log(\\\"$alive\\\")\"'"
+
+starved="$(consumer_of consumer-starved)"
+status=0
+(cd "$starved" && sandbox --pnpm-store '@tinyStore@' -- pnpm install >/dev/null 2>&1) || status=$?
+if [ "$status" -ne 0 ]; then
+  pass "the same install fails from a store without the workspace tarball"
+else
+  fail "the same install fails from a store without the workspace tarball"
+fi
+
+minor="$(consumer_of consumer-minor "pnpm@12.6.0")"
+rejects "a packageManager pin on another pnpm minor is refused" \
+  sh -c "cd '$minor' && sandbox --pnpm-store '@consumerStore@' -- sh -c 'echo $alive'"
+
+provided="@pnpm12Version@"
+next_patch="pnpm@${provided%.*}.$((${provided##*.} + 1))"
+patch="$(consumer_of consumer-patch "$next_patch")"
+allowed "a packageManager pin on the same pnpm minor installs offline with the provided pnpm" \
+  sh -c "cd '$patch' && sandbox --pnpm-store '@consumerStore@' -- sh -c 'pnpm install && echo $alive'"
+
+managed="$(consumer_of consumer-managed "$next_patch")"
+status=0
+(cd "$managed" && sandbox --pnpm-store '@consumerStore@' -- env pnpm_config_manage_package_manager_versions=true pnpm install >/dev/null 2>&1) || status=$?
+if [ "$status" -ne 0 ]; then
+  pass "with pnpm managing its version the same install fails offline"
+else
+  fail "with pnpm managing its version the same install fails offline"
+fi
+
 if [ "$(uname -s)" = Darwin ]; then
   bare="$project/tiny-workspace-bare"
   mkdir -p "$bare"

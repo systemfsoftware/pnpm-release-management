@@ -46,7 +46,7 @@ let
             resolution = builtins.match "    resolution:[[:space:]]*(.+)" line;
           in
           if builtins.match "---[[:space:]]*" line != null then
-            state // { inPackages = false; current = null; }
+            state // { inPackages = false; current = null; documents = state.documents + 1; }
           else if builtins.match "packages:[[:space:]]*" line != null then
             state // { inPackages = true; current = null; }
           else if builtins.match "[^[:space:]#-][^:]*:.*" line != null then
@@ -55,6 +55,12 @@ let
             state
           else if entryKey != null then
             state // { current = unquote (trim (builtins.head entryKey)); }
+          # pnpm 12 opens a lockfile stream with the env document: its
+          # packageManagerDependencies are pnpm's own binaries for every
+          # platform, which run only when pnpm manages its version, and the
+          # sandbox and store builds turn that off.
+          else if state.documents == 1 && state.current != null && builtins.match "(pnpm|@pnpm/exe\\.[^@]+)@.*" state.current != null then
+            state
           else if state.current != null && resolution != null then
             state
             // {
@@ -68,6 +74,7 @@ let
         {
           inPackages = false;
           current = null;
+          documents = 0;
           entries = { };
         }
         (lib.splitString "\n" (builtins.readFile lockFile));
