@@ -87,6 +87,7 @@ Feature('Changeset intents').body(({ scenario }) => {
       fakeWorkspaceStore(members),
       fakeChangeEvidencePort({ members, touched: [], deleted, raw: null }),
       fakeChangesetStore({ intents: [] }).layer,
+      fakeLedgerPort(),
     )
     const runnable = Cell.provide(live)(gateChangesCell)
     scenario(
