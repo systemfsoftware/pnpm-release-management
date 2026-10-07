@@ -222,15 +222,21 @@ agree on what this cycle owns.
 
 ## CI
 
-| Workflow              | Inputs                                       | Caller must grant                         |
-| --------------------- | -------------------------------------------- | ----------------------------------------- |
-| `release.yml`         | `tools-ref`, `artifacts-dir`, `node-version` | `contents: write`, `pull-requests: write` |
-| `changeset-check.yml` | `tools-ref`, `base-sha`, `node-version`      | `contents: read`, `pull-requests: read`   |
+| Workflow              | Inputs                                              | Caller must grant                         |
+| --------------------- | --------------------------------------------------- | ----------------------------------------- |
+| `release.yml`         | `tools-ref`, `artifacts-dir`, `node-version`        | `contents: write`, `pull-requests: write` |
+| `changeset-check.yml` | `tools-ref`, `base-sha`, `node-version`, `devshell` | `contents: read`, `pull-requests: read`   |
 
 `tools-ref` pins the revision of this repository that a release runs from;
 `@main` tracks the tip. Both workflows check this repository out into
 `.release-tools`, build it with pnpm, and run its `dist/main.js` bundles
 against the caller's workspace.
+
+`devshell: true` makes the changeset check install Nix and run both the
+workspace install and the check inside the caller's `nix develop` shell. A
+caller needs it when its lockfile points at tarballs its flake builds, such as
+`file:.sfs-deps/<name>-<version>.tgz`; a plain install cannot read those. The
+default, `false`, installs with plain pnpm as before.
 
 ## Distribution through Nix
 

@@ -18,6 +18,11 @@ on:
         required: false
         type: string
         default: "24"
+      devshell:
+        description: install the workspace and run the check inside the caller's `nix develop` shell
+        required: false
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -45,15 +50,20 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
 
+      - uses: cachix/install-nix-action@v31
+        if: inputs.devshell
+
       - name: Build the release tools
         run: |
           pnpm --dir .release-tools install --frozen-lockfile
           pnpm --dir .release-tools build
 
       - name: Install the caller's workspace
-        run: pnpm install --frozen-lockfile
+        run: ${{ inputs.devshell && 'nix develop --command' || '' }} pnpm install --frozen-lockfile
 
       - name: Require an intent for every publishable-package change
+        env:
+          BASE_SHA: ${{ inputs.base-sha || github.event.pull_request.base.sha }}
         run: |
-          node .release-tools/apps/changeset-management/dist/main.js check \
-            "${{ inputs.base-sha || github.event.pull_request.base.sha }}"
+          ${{ inputs.devshell && 'nix develop --command' || '' }} \
+            node .release-tools/apps/changeset-management/dist/main.js check "$BASE_SHA"
