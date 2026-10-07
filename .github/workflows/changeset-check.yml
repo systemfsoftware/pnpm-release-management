@@ -59,11 +59,29 @@ jobs:
           pnpm --dir .release-tools build
 
       - name: Install the caller's workspace
-        run: ${{ inputs.devshell && 'nix develop --command' || '' }} pnpm install --frozen-lockfile
+        if: ${{ !inputs.devshell }}
+        run: pnpm install --frozen-lockfile
+
+      - name: Allow unprivileged user namespaces for the caller's sandbox
+        if: inputs.devshell
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Install the caller's workspace through its own bootstrap script
+        if: inputs.devshell
+        run: |
+          if ! jq -e '.scripts.bootstrap | strings' package.json >/dev/null; then
+            echo "::error file=package.json::devshell: true runs the caller's \"bootstrap\" script inside its nix develop shell, and package.json defines none. Add a bootstrap script that installs the workspace in its sandbox, for example \"sandbox -- pnpm install\"."
+            exit 1
+          fi
+          nix develop --command pnpm run bootstrap
 
       - name: Require an intent for every publishable-package change
         env:
           BASE_SHA: ${{ inputs.base-sha || github.event.pull_request.base.sha }}
+          DEVSHELL: ${{ inputs.devshell }}
         run: |
-          ${{ inputs.devshell && 'nix develop --command' || '' }} \
+          if [ "$DEVSHELL" = true ]; then
+            nix develop --command node .release-tools/apps/changeset-management/dist/main.js check "$BASE_SHA"
+          else
             node .release-tools/apps/changeset-management/dist/main.js check "$BASE_SHA"
+          fi

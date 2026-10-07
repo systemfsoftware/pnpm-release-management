@@ -232,11 +232,21 @@ agree on what this cycle owns.
 `.release-tools`, build it with pnpm, and run its `dist/main.js` bundles
 against the caller's workspace.
 
-`devshell: true` makes the changeset check install Nix and run both the
-workspace install and the check inside the caller's `nix develop` shell. A
-caller needs it when its lockfile points at tarballs its flake builds, such as
-`file:.sfs-deps/<name>-<version>.tgz`; a plain install cannot read those. The
-default, `false`, installs with plain pnpm as before.
+`devshell: true` makes the changeset check install Nix and run the caller's
+own `bootstrap` script inside its `nix develop` shell
+(`nix develop --command pnpm run bootstrap`) instead of a plain
+`pnpm install`, then run the check in that shell. The bootstrap script is
+where the caller installs its workspace inside its own sandbox, so no
+dependency code runs outside it; a caller without a `bootstrap` script is
+refused with an error naming the missing script. The workflow takes no
+install command of its own. The job allows unprivileged user namespaces so a
+bubblewrap sandbox can start. A caller needs this mode when its lockfile points
+at tarballs its flake builds, such as `file:.sfs-deps/<name>-<version>.tgz`; a
+plain install cannot read those. With `devshell: true`, `node-version` is
+ignored for the caller's install and check: they use the dev shell's node, and
+`node-version` only selects the node that builds the release tools. The
+default, `false`, installs with plain pnpm as before. This repository's own CI
+calls the check with `devshell: true` on every pull request.
 
 ## Distribution through Nix
 
