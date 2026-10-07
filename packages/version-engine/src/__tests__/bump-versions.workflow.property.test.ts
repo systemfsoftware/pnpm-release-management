@@ -1,5 +1,5 @@
 import { it } from '@effect/vitest'
-import { type Bump, Intent, Member, PackageVersion, RelativePath } from '@systemfsoftware/release-language'
+import { type Bump, Intent, Member, RelativePath } from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
 import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
@@ -7,7 +7,8 @@ import * as S from 'effect/Schema'
 import * as fc from 'effect/testing/FastCheck'
 import { derivePnpmBump, deriveSurfacesBump } from '../bump-derive.js'
 import { bumpVersions } from '../bump-versions.workflow.js'
-import { BumpCommand } from '../bump.schema.js'
+import { commandOf } from '../bump.js'
+import type { BumpCommand } from '../bump.schema.js'
 
 const RANK_ORDER: Record<string, number> = { none: 0, patch: 1, minor: 2, major: 3 }
 
@@ -77,20 +78,7 @@ const toCommand = (input: {
   const changelogDir = RelativePath.make(input.changelogDir)
   if (input.strategy === 'pnpm') {
     const derived = derivePnpmBump({ intents, members, changelogDir: input.changelogDir })
-    return BumpCommand.make({
-      versioning: { strategy: 'pnpm' },
-      intents: [...intents],
-      members: [...members],
-      changelogDir,
-      consolidated: derived.consolidated,
-      nexts: [...derived.nexts],
-      moved: [...derived.moved],
-      changelogPaths: [...derived.changelogPaths],
-      packageRanks: [...derived.packages],
-      unknownPackage: derived.unknownPackage,
-      malformedPath: derived.malformedPath,
-      intentCount: derived.intentCount,
-    })
+    return commandOf({ versioning: { strategy: 'pnpm' }, intents, members, changelogDir, derived })
   }
   const derived = deriveSurfacesBump({
     intents,
@@ -102,7 +90,7 @@ const toCommand = (input: {
     Option.fromNullishOr(input.rootChangelog),
     (path) => RelativePath.make(path),
   )
-  return BumpCommand.make({
+  return commandOf({
     versioning: {
       strategy: 'surfaces',
       manifest: {
@@ -111,20 +99,12 @@ const toCommand = (input: {
       },
       surfaces: [],
       rootChangelog: Option.getOrUndefined(rootChangelog),
-      manifestVersion: PackageVersion.make(input.manifestVersion),
       consolidatedNext: derived.consolidatedNext,
     },
-    intents: [...intents],
-    members: [...members],
+    intents,
+    members,
     changelogDir,
-    consolidated: derived.consolidated,
-    nexts: [...derived.nexts],
-    moved: [...derived.moved],
-    changelogPaths: [...derived.changelogPaths],
-    packageRanks: [...derived.packages],
-    unknownPackage: derived.unknownPackage,
-    malformedPath: derived.malformedPath,
-    intentCount: derived.intentCount,
+    derived,
   })
 }
 

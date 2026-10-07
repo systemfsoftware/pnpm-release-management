@@ -40,7 +40,6 @@ const SurfacesVersioning = S.Struct({
   manifest: VersionTarget,
   surfaces: S.Array(VersionTarget),
   rootChangelog: S.optional(RelativePath),
-  manifestVersion: PackageVersion,
   consolidatedNext: PackageVersion,
 })
 export type SurfacesVersioning = S.Schema.Type<typeof SurfacesVersioning>

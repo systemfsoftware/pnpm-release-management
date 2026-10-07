@@ -8,6 +8,7 @@ import {
   type CommandRefusal,
   type Intent,
   type IntentRefusal,
+  type Member,
   type MemberRefusal,
   type PackageManifest,
   type PackageName,
@@ -21,10 +22,38 @@ import {
 import { Effect } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
-import { derivePnpmBump, deriveSurfacesBump, rootBulletsOf, summaryForPackage } from './bump-derive.js'
+import {
+  derivePnpmBump,
+  deriveSurfacesBump,
+  type PnpmBumpDerivation,
+  rootBulletsOf,
+  summaryForPackage,
+} from './bump-derive.js'
 import type { VersionBumped, VersionDecision } from './bump-versions.workflow.js'
 import { bumpVersions } from './bump-versions.workflow.js'
 import { BumpCommand, type BumpInput, type SurfacesVersioning } from './bump.schema.js'
+
+export const commandOf = (args: {
+  readonly versioning: BumpCommand['versioning']
+  readonly intents: ReadonlyArray<Intent>
+  readonly members: ReadonlyArray<Member>
+  readonly changelogDir: RelativePath
+  readonly derived: PnpmBumpDerivation
+}): BumpCommand =>
+  BumpCommand.make({
+    versioning: args.versioning,
+    intents: [...args.intents],
+    members: [...args.members],
+    changelogDir: args.changelogDir,
+    consolidated: args.derived.consolidated,
+    nexts: args.derived.nexts,
+    moved: args.derived.moved,
+    changelogPaths: args.derived.changelogPaths,
+    packageRanks: args.derived.packages,
+    unknownPackage: args.derived.unknownPackage,
+    malformedPath: args.derived.malformedPath,
+    intentCount: args.derived.intentCount,
+  })
 
 const read = (
   request: BumpInput,
@@ -46,19 +75,12 @@ const read = (
         members,
         changelogDir: request.changelogDir,
       })
-      return BumpCommand.make({
+      return commandOf({
         versioning: { strategy: 'pnpm' },
-        intents: [...intents],
-        members: [...members],
+        intents,
+        members,
         changelogDir: request.changelogDir,
-        consolidated: derived.consolidated,
-        nexts: derived.nexts,
-        moved: derived.moved,
-        changelogPaths: derived.changelogPaths,
-        packageRanks: derived.packages,
-        unknownPackage: derived.unknownPackage,
-        malformedPath: derived.malformedPath,
-        intentCount: derived.intentCount,
+        derived,
       })
     }
     const manifestVersion = yield* surfaces.readSurface(
@@ -71,26 +93,18 @@ const read = (
       changelogDir: request.changelogDir,
       manifestVersion,
     })
-    return BumpCommand.make({
+    return commandOf({
       versioning: {
         strategy: 'surfaces',
         manifest: request.manifest,
         surfaces: [...request.surfaces],
         rootChangelog: request.rootChangelog,
-        manifestVersion,
         consolidatedNext: derived.consolidatedNext,
       },
-      intents: [...intents],
-      members: [...members],
+      intents,
+      members,
       changelogDir: request.changelogDir,
-      consolidated: derived.consolidated,
-      nexts: derived.nexts,
-      moved: derived.moved,
-      changelogPaths: derived.changelogPaths,
-      packageRanks: derived.packages,
-      unknownPackage: derived.unknownPackage,
-      malformedPath: derived.malformedPath,
-      intentCount: derived.intentCount,
+      derived,
     })
   })
 
