@@ -1,13 +1,13 @@
-import { GitPort, GitRef } from '@systemfsoftware/release-language'
+import { GitPort, GitRef, type RelativePath } from '@systemfsoftware/release-language'
 import { Effect, Layer } from 'effect'
 
 const unimplemented = (method: string): Effect.Effect<never> =>
   Effect.die(new Error(`FakeGitPort: ${method} is not implemented`))
 
-export const FakeGitOnMain: Layer.Layer<GitPort> = Layer.succeed(GitPort, {
+const onMain = (changed: ReadonlyArray<RelativePath>) => ({
   currentBranch: () => Effect.succeed(GitRef.make('main')),
   headSha: () => unimplemented('headSha'),
-  changedPaths: () => unimplemented('changedPaths'),
+  changedPaths: () => Effect.succeed(changed),
   remoteTags: () => unimplemented('remoteTags'),
   commitAll: () => unimplemented('commitAll'),
   pushBranch: () => unimplemented('pushBranch'),
@@ -18,3 +18,8 @@ export const FakeGitOnMain: Layer.Layer<GitPort> = Layer.succeed(GitPort, {
   stagedPaths: () => unimplemented('stagedPaths'),
   mergeInProgress: () => unimplemented('mergeInProgress'),
 })
+
+export const FakeGitOnMain: Layer.Layer<GitPort> = Layer.succeed(GitPort, onMain([]))
+
+export const fakeGitChanging = (changed: ReadonlyArray<RelativePath>): Layer.Layer<GitPort> =>
+  Layer.succeed(GitPort, onMain(changed))

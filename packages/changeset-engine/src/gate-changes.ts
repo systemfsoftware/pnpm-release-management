@@ -67,6 +67,7 @@ const read = (
     return GateCommand.make({
       members,
       touched: evidence.touched,
+      deleted: evidence.deleted,
       intents,
       skipLiveness: request.skipLiveness,
     })
@@ -104,13 +105,20 @@ const refusalReport = (refusal: GateIntentMissing | GateUnknownPackage): GateRep
     Match.exhaustive,
   )
 
+const deletedLine = (deleted: ReadonlyArray<string>): string => {
+  if (deleted.length === 0) return ''
+  return `\nchangeset gate: ${deleted.length} package(s) deleted, nothing left to release — ${deleted.join(', ')}`
+}
+
 const decisionReport = (decision: ChangesVacant | ChangesGated): GateReport =>
   Match.value(decision).pipe(
     Match.tag(
       'ChangesVacant',
       (vacant): GateReport => ({
         ok: true,
-        text: `changeset gate: no publishable package changed (${vacant.members.length} member(s))`,
+        text: `changeset gate: no publishable package changed (${vacant.members.length} member(s))${
+          deletedLine(vacant.deleted)
+        }`,
       }),
     ),
     Match.tag(
@@ -119,7 +127,7 @@ const decisionReport = (decision: ChangesVacant | ChangesGated): GateReport =>
         ok: true,
         text: `changeset gate: ${gated.touched.length} publishable package(s) changed, each named by an intent — ${
           gated.touched.join(', ')
-        }`,
+        }${deletedLine(gated.deleted)}`,
       }),
     ),
     Match.exhaustive,
