@@ -1,5 +1,6 @@
 import { Cell, Wire } from '@systemfsoftware/effect-cell-types'
 import type {
+  ChangelogStorage,
   CycleEntry,
   GithubReleaseRefusal,
   MemberRefusal,
@@ -21,7 +22,7 @@ import { Effect } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import { cycleOf } from './cycle.js'
+import { cycleOf, releaseNotesOf } from './cycle.js'
 import {
   type CreatedRelease,
   githubRelease,
@@ -46,6 +47,7 @@ const readCycle = (
   git: GitPort,
   capturedPath: FsPath | undefined,
   changelogDir: RelativePath,
+  storage: ChangelogStorage,
 ): Effect.Effect<ReadonlyArray<CycleEntry>, PlanRefusal | MemberRefusal | TagRefusal, never> => {
   if (capturedPath !== undefined) {
     return cycles.readCaptured(capturedPath)
@@ -53,7 +55,7 @@ const readCycle = (
   return Effect.gen(function*() {
     const members = yield* workspace.listMembers()
     const tags = yield* git.remoteTags(RemoteName.make('origin'))
-    return cycleOf(members, tags, changelogDir)
+    return cycleOf(members, tags, changelogDir, storage)
   })
 }
 
@@ -69,19 +71,21 @@ const read = (
     const git = yield* GitPort
     const cycles = yield* CycleStore
     const forge = yield* ForgePort
+    const storage = yield* workspace.changelogStorage()
     const cycle = yield* readCycle(
       cycles,
       workspace,
       git,
       request.captured ?? request.capturedFile,
       request.changelogDir,
+      storage,
     )
     const slug = yield* git.repoSlug()
     const items = yield* Effect.forEach(cycle, (entry) =>
       Effect.map(
         Effect.match(workspace.readFileFromRoot(entry.changelog), {
           onFailure: () => undefined,
-          onSuccess: (file) => file.text,
+          onSuccess: (file) => releaseNotesOf(storage, file.text, entry.version),
         }),
         (body) => ({ entry, body }),
       ))

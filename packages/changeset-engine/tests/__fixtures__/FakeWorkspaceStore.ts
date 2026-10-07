@@ -8,4 +8,5 @@ export const fakeWorkspaceStore = (members: ReadonlyArray<Member>) =>
     listMembers: () => Effect.succeed(members),
     readManifest: () => Effect.die(new Error('FakeWorkspaceStore.readManifest is not used by these cells')),
     readFileFromRoot: () => Effect.die(new Error('FakeWorkspaceStore.readFileFromRoot is not used by these cells')),
+    changelogStorage: () => Effect.die(new Error('FakeWorkspaceStore.changelogStorage is not used by these cells')),
   })

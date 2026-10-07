@@ -42,9 +42,10 @@ const read = (
     const members = yield* workspace.listMembers()
     const tags = yield* git.remoteTags(remote)
     const deferred = yield* cycles.readDeferred(request.deferred)
+    const storage = yield* workspace.changelogStorage()
     return PlanCommand.make({
       pending: Count.make(intents.length),
-      cycle: dropExcluded(cycleOf(members, tags, request.changelogDir), deferred),
+      cycle: dropExcluded(cycleOf(members, tags, request.changelogDir, storage), deferred),
       deferred: [...deferred],
       unknownDeferred: [],
       members: members.map((member) => member.name),
