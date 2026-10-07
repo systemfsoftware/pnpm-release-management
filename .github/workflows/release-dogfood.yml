@@ -4,13 +4,13 @@
 # only supplies the trigger and the permissions, per the documented contract.
 #
 # tools-ref pins the toolchain revision the release runs from. A consumer pins
-# @main; this repo IS the toolchain, so it pins its own trunk — the reusable's
-# default of `main` would run a stale copy of the tools against trunk.
+# @main; this repo IS the toolchain, so it pins its own trunk `main` — the
+# release runs against the tools as they exist on trunk, dogfooding every change.
 name: Release (dogfood)
 
 on:
   push:
-    branches: [prm/toolchain]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -21,4 +21,4 @@ jobs:
   release:
     uses: ./.github/workflows/release.yml
     with:
-      tools-ref: prm/toolchain
+      tools-ref: main
