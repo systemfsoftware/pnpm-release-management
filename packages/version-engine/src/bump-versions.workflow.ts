@@ -80,14 +80,7 @@ const highestCoreOf = (
   versions: ReadonlyArray<PackageVersion>,
 ): PackageVersion | undefined => [...versions].sort((left, right) => coreKeyOf(right).localeCompare(coreKeyOf(left)))[0]
 
-const bumpedVersionOf = (command: BumpCommand): PackageVersion => {
-  if (command.strategy === 'surfaces') return command.consolidatedNext
-  const highest = highestCoreOf(command.nexts.map((entry) => entry.next))
-  if (highest === undefined) return command.consolidatedNext
-  return highest
-}
-
-const bumpCaseOf = (command: BumpCommand): BumpCase => {
+const surfacesCase = (command: BumpCommand): BumpCase => {
   if (command.intents.length === 0) return NoIntentsCase.make({ pending: command.intentCount })
   if (command.unknownPackage !== undefined) {
     return UnknownPackageCase.make({ package: command.unknownPackage })
@@ -97,10 +90,27 @@ const bumpCaseOf = (command: BumpCommand): BumpCase => {
   }
   if (command.consolidated === 'none') return OnlyNoneCase.make({ count: command.intentCount })
   return BumpedCase.make({
-    version: bumpedVersionOf(command),
+    version: command.consolidatedNext,
     moved: [...command.moved],
     changelogs: command.changelogPaths.map((entry) => entry.path),
   })
+}
+
+const changesetsCase = (command: BumpCommand): BumpCase => {
+  if (command.intentCount === 0) return NoIntentsCase.make({ pending: command.intentCount })
+  if (command.planned.length === 0) return OnlyNoneCase.make({ count: command.intentCount })
+  const version = highestCoreOf(command.planned.map((release) => release.newVersion))
+  if (version === undefined) return OnlyNoneCase.make({ count: command.intentCount })
+  return BumpedCase.make({
+    version,
+    moved: [...command.moved],
+    changelogs: command.changelogPaths.map((entry) => entry.path),
+  })
+}
+
+const bumpCaseOf = (command: BumpCommand): BumpCase => {
+  if (command.strategy === 'changesets') return changesetsCase(command)
+  return surfacesCase(command)
 }
 
 export const bumpVersions: Workflow.Workflow<

@@ -91,15 +91,15 @@ export const SurfacesVersioning = S.Struct({
 })
 export type SurfacesVersioning = S.Schema.Type<typeof SurfacesVersioning>
 
-export const PnpmVersioning = S.Struct({
-  strategy: S.Literal('pnpm'),
+export const ChangesetsVersioning = S.Struct({
+  strategy: S.Literal('changesets'),
   surfaces: S.Array(VersionSurface).pipe(
     S.withDecodingDefault(Effect.succeed([])),
   ),
 })
-export type PnpmVersioning = S.Schema.Type<typeof PnpmVersioning>
+export type ChangesetsVersioning = S.Schema.Type<typeof ChangesetsVersioning>
 
-export const Versioning = S.Union([SurfacesVersioning, PnpmVersioning])
+export const Versioning = S.Union([SurfacesVersioning, ChangesetsVersioning])
 export type Versioning = S.Schema.Type<typeof Versioning>
 
 export const TurboGate = S.Struct({

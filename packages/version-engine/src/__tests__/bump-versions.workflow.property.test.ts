@@ -64,7 +64,7 @@ type PlainIntent = {
 }
 
 const toCommand = (input: {
-  readonly strategy: 'pnpm' | 'surfaces'
+  readonly strategy: 'changesets' | 'surfaces'
   readonly intents: ReadonlyArray<unknown>
   readonly members: ReadonlyArray<unknown>
   readonly manifestVersion: string
@@ -76,7 +76,6 @@ const toCommand = (input: {
   const derived = deriveBump({
     intents,
     members,
-    strategy: input.strategy,
     manifestVersion: input.manifestVersion,
     changelogDir: input.changelogDir,
   })
@@ -92,13 +91,12 @@ const toCommand = (input: {
     surfaces: [],
     consolidated: derived.consolidated,
     consolidatedNext: derived.consolidatedNext,
-    nexts: derived.nexts,
     moved: derived.moved,
     changelogPaths: derived.changelogPaths,
-    packageRanks: derived.packages,
     unknownPackage: derived.unknownPackage,
     malformedPath: derived.malformedPath,
     intentCount: derived.intentCount,
+    planned: [],
   })
 }
 
@@ -106,11 +104,6 @@ const parseCore = (version: string): readonly [number, number, number] => {
   const hit = /^(\d+)\.(\d+)\.(\d+)/.exec(version)
   return [Number(hit?.[1] ?? 0), Number(hit?.[2] ?? 0), Number(hit?.[3] ?? 0)]
 }
-
-const compareCores = (
-  left: readonly [number, number, number],
-  right: readonly [number, number, number],
-): number => left[0] - right[0] || left[1] - right[1] || left[2] - right[2]
 
 const expectedNext = (
   core: readonly [number, number, number],
@@ -177,7 +170,7 @@ it.prop(
       packages: [{ name: foreign, bump: 'minor' }],
       summary,
     }]
-    const command = toCommand({ strategy: 'pnpm', intents, members, manifestVersion, changelogDir })
+    const command = toCommand({ strategy: 'surfaces', intents, members, manifestVersion, changelogDir })
     const outcome = bumpVersions(command)
     if (Result.isSuccess(outcome)) {
       return false
@@ -194,7 +187,7 @@ it.prop(
   [membersArb, versionArb, relativePathArb, summaryArb, relativePathArb],
   ([members, manifestVersion, changelogDir, summary, emptyPath]) => {
     const intents: ReadonlyArray<PlainIntent> = [{ path: emptyPath, packages: [], summary }]
-    const command = toCommand({ strategy: 'pnpm', intents, members, manifestVersion, changelogDir })
+    const command = toCommand({ strategy: 'surfaces', intents, members, manifestVersion, changelogDir })
     const outcome = bumpVersions(command)
     if (Result.isSuccess(outcome)) {
       return false
@@ -269,52 +262,6 @@ it.prop(
             path.endsWith(`@${bumped.version}.md`) &&
             path.includes((bumped.moved[index] ?? '').replaceAll('/', '!'))
           )
-      }),
-      Match.orElse(() => false),
-    )
-  },
-)
-
-it.prop(
-  '∀cmd_BumpVersions_≡HighestNext',
-  [membersArb, versionArb, relativePathArb, summaryArb],
-  ([members, manifestVersion, changelogDir, summary]) => {
-    const ranks = members.map((_, index): Bump => {
-      if (index % 2 === 0) {
-        return 'minor'
-      }
-      return 'patch'
-    })
-    const intents: ReadonlyArray<PlainIntent> = members.map((member, index) => ({
-      path: `changeset/pkg-${index}.md`,
-      packages: [{ name: member.name, bump: ranks[index] ?? 'patch' }],
-      summary,
-    }))
-    const command = toCommand({ strategy: 'pnpm', intents, members, manifestVersion, changelogDir })
-    const outcome = bumpVersions(command)
-    if (Result.isFailure(outcome)) {
-      return false
-    }
-    return Match.value(outcome.success).pipe(
-      Match.tag('VersionBumped', (bumped) => {
-        const expectedAt = (index: number): string => {
-          const member = members[index]
-          if (member === undefined) {
-            return ''
-          }
-          return expectedNext(parseCore(member.manifest.version), ranks[index] ?? 'patch').join('.')
-        }
-        const first = expectedAt(0)
-        const second = expectedAt(1)
-        const third = expectedAt(2)
-        const decisionCore = parseCore(bumped.version)
-        const decisionText = decisionCore.join('.')
-        const coversFirst = compareCores(decisionCore, parseCore(first)) >= 0
-        const coversSecond = compareCores(decisionCore, parseCore(second)) >= 0
-        const coversThird = compareCores(decisionCore, parseCore(third)) >= 0
-        const isMember = decisionText === first || decisionText === second || decisionText === third
-        const isMaximum = coversFirst && coversSecond && coversThird && isMember
-        return isMaximum && bumped.moved.length === members.length
       }),
       Match.orElse(() => false),
     )

@@ -1,15 +1,12 @@
 import { Cell } from '@systemfsoftware/effect-cell-types'
 import { Gherkin, Given, it, layer, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
 import {
-  type CommandRefusal,
   Intent,
   Member,
   PackageVersion,
-  type ProcessCompleted,
   RelativePath,
   RepoRoot,
   VersionRefusal,
-  type WorkspaceCommand,
 } from '@systemfsoftware/release-language'
 import {
   bumpCell,
@@ -30,7 +27,6 @@ import * as S from 'effect/Schema'
 import { expect } from 'vitest'
 import { makeFakeChangelogStore } from './__fixtures__/FakeChangelogStore.js'
 import { makeFakeChangesetStore } from './__fixtures__/FakeChangesetStore.js'
-import { makeFakeProcessPort } from './__fixtures__/FakeProcessPort.js'
 import { makeFakeSurfaceStore } from './__fixtures__/FakeSurfaceStore.js'
 import { makeFakeWorkspaceStore } from './__fixtures__/FakeWorkspaceStore.js'
 
@@ -39,11 +35,6 @@ const Feature = makeFeature({ it, layer })
 const brandVersion = (version: string) => S.decodeUnknownSync(PackageVersion)(version)
 const brandPath = (path: string) => S.decodeUnknownSync(RelativePath)(path)
 const brandRoot = (root: string) => S.decodeUnknownSync(RepoRoot)(root)
-
-const bumpCore = (version: string): readonly [number, number, number] => {
-  const hit = /^(\d+)\.(\d+)\.(\d+)/.exec(version)
-  return [Number(hit?.[1] ?? 0), Number(hit?.[2] ?? 0), Number(hit?.[3] ?? 0)]
-}
 
 const jsonSurface = (path: string) => ({ _tag: 'JsonSurface', kind: 'json', path })
 const tomlSurface = (path: string) => ({ _tag: 'TomlSurface', kind: 'toml', path })
@@ -111,13 +102,11 @@ Feature('Versioning packages').body(({ scenario }) => {
       ),
     )
     const changelogs = makeFakeChangelogStore()
-    const process = makeFakeProcessPort()
     const live = Layer.mergeAll(
       surfaces.layer,
       workspace.layer,
       changesets.layer,
       changelogs.layer,
-      process.layer,
     )
     scenario(
       'Two intents collapse into one consolidated version',
@@ -173,88 +162,6 @@ Feature('Versioning packages').body(({ scenario }) => {
   }
 
   {
-    const members = membersOf([
-      { name: 'a', version: '1.2.3' },
-      { name: 'b', version: '0.1.0' },
-    ])
-    const surfaces = makeFakeSurfaceStore(
-      new Map([[brandPath('package.json'), brandVersion('1.2.3')]]),
-    )
-    const workspace = makeFakeWorkspaceStore(members, brandRoot('/test'))
-    const changesets = makeFakeChangesetStore(
-      new Map(
-        intentsOf([
-          { path: '.changeset/a-major.md', name: 'a', bump: 'major', summary: 'ship a' },
-          { path: '.changeset/b-patch.md', name: 'b', bump: 'patch', summary: 'fix b' },
-        ]).map((intent) => [intent.path, intent] as const),
-      ),
-    )
-    const changelogs = makeFakeChangelogStore()
-    const process = makeFakeProcessPort(
-      (command: WorkspaceCommand): Effect.Effect<ProcessCompleted, CommandRefusal> =>
-        Effect.sync(() => {
-          workspace.state.members.forEach((member, index) => {
-            const [major, minor, patch] = bumpCore(member.manifest.version)
-            const next = S.decodeUnknownSync(PackageVersion)(`${major}.${minor}.${patch + 1}`)
-            workspace.state.members[index] = {
-              ...member,
-              manifest: { ...member.manifest, version: next },
-            }
-          })
-          return { _tag: 'ProcessCompleted' as const, command }
-        }),
-    )
-    const live = Layer.mergeAll(
-      surfaces.layer,
-      workspace.layer,
-      changesets.layer,
-      changelogs.layer,
-      process.layer,
-    )
-    scenario(
-      'Version moves delegate to the external package manager',
-      { scenarioLayer: live },
-      Gherkin.Do.pipe(
-        Given('two releasable packages with a manager that applies patch moves')(
-          'input',
-          () => Effect.succeed(bumpInputOf({ strategy: 'pnpm', changelogDir: 'changelog', ...surfacesInput })),
-        ),
-        When('the pending intents are versioned per package')(
-          'outcome',
-          (s) =>
-            Effect.match(Cell.run(Cell.provide(bumpCell, live), s.input), {
-              onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
-              onSuccess: (decision) => ({ _tag: 'decided' as const, decision }),
-            }),
-        ),
-        Then('changelogs record the versions the manager applied')((s) => {
-          Match.value(s.outcome).pipe(
-            Match.tag('decided', (decided) =>
-              Match.value(decided.decision).pipe(
-                Match.tag('VersionBumped', (bumped) => {
-                  expect(bumped.version).toEqual('2.0.0')
-                  expect([...bumped.moved]).toEqual(['a', 'b'])
-                  expect(changesets.state.intents.size).toEqual(0)
-                  expect(changelogs.state.memberChangelogs.get(brandPath('changelog/a@1.2.4.md'))).toEqual(
-                    '# a@1.2.4\n\nship a\n',
-                  )
-                  expect(changelogs.state.memberChangelogs.get(brandPath('changelog/b@0.1.1.md'))).toEqual(
-                    '# b@0.1.1\n\nfix b\n',
-                  )
-                }),
-                Match.tag('VersionConsumed', () => failUnexpected('expected a delegated bump')),
-                Match.tag('VersionIdle', () => failUnexpected('expected a delegated bump')),
-                Match.exhaustive,
-              )),
-            Match.tag('refused', () => failUnexpected('expected a version decision')),
-            Match.exhaustive,
-          )
-        }),
-      ),
-    )
-  }
-
-  {
     const members = membersOf([{ name: 'a', version: '1.2.3' }])
     const surfaces = makeFakeSurfaceStore(
       new Map([[brandPath('package.json'), brandVersion('1.2.3')]]),
@@ -262,13 +169,11 @@ Feature('Versioning packages').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore(members, brandRoot('/test'))
     const changesets = makeFakeChangesetStore()
     const changelogs = makeFakeChangelogStore()
-    const process = makeFakeProcessPort()
     const live = Layer.mergeAll(
       surfaces.layer,
       workspace.layer,
       changesets.layer,
       changelogs.layer,
-      process.layer,
     )
     scenario(
       'An empty workspace idles without touching anything',
@@ -320,13 +225,11 @@ Feature('Versioning packages').body(({ scenario }) => {
       ),
     )
     const changelogs = makeFakeChangelogStore()
-    const process = makeFakeProcessPort()
     const live = Layer.mergeAll(
       surfaces.layer,
       workspace.layer,
       changesets.layer,
       changelogs.layer,
-      process.layer,
     )
     scenario(
       'An intent naming an unknown package is refused',
@@ -385,13 +288,11 @@ Feature('Versioning packages').body(({ scenario }) => {
       ),
     )
     const changelogs = makeFakeChangelogStore()
-    const process = makeFakeProcessPort()
     const live = Layer.mergeAll(
       surfaces.layer,
       workspace.layer,
       changesets.layer,
       changelogs.layer,
-      process.layer,
     )
     scenario(
       'Intents without a version bump are consumed quietly',
@@ -672,7 +573,7 @@ Feature('Versioning packages').body(({ scenario }) => {
       Gherkin.Do.pipe(
         Given('a check request under a foreign strategy')(
           'input',
-          () => Effect.succeed(syncInputOf({ strategy: 'pnpm', action: 'check', ...surfacesInput })),
+          () => Effect.succeed(syncInputOf({ strategy: 'changesets', action: 'check', ...surfacesInput })),
         ),
         When('the sync runs')('outcome', (s) =>
           Effect.match(Cell.run(Cell.provide(syncCell, live), s.input), {
@@ -685,7 +586,7 @@ Feature('Versioning packages').body(({ scenario }) => {
               const refusal = S.decodeUnknownSync(SyncRefusal)(refused.refusal)
               Match.value(refusal).pipe(
                 Match.tag('SyncStrategyMismatch', (mismatch) => {
-                  expect(mismatch.strategy).toEqual('pnpm')
+                  expect(mismatch.strategy).toEqual('changesets')
                 }),
                 Match.tag('SyncVersionMissing', () => failUnexpected('expected a strategy mismatch')),
                 Match.tag('SyncActionUnknown', () => failUnexpected('expected a strategy mismatch')),
@@ -1115,13 +1016,11 @@ Feature('Versioning packages').body(({ scenario }) => {
       ),
     )
     const changelogs = makeFakeChangelogStore()
-    const process = makeFakeProcessPort()
     const live = Layer.mergeAll(
       surfaces.layer,
       workspace.layer,
       changesets.layer,
       changelogs.layer,
-      process.layer,
     )
     scenario(
       'Moved members borrow the intent summary when they have none',
@@ -1170,92 +1069,6 @@ Feature('Versioning packages').body(({ scenario }) => {
   }
 
   {
-    const members = membersOf([
-      { name: '@e2e/alpha', version: '1.0.0' },
-      { name: '@e2e/beta', version: '1.0.0' },
-    ])
-    const surfaces = makeFakeSurfaceStore(
-      new Map([
-        [brandPath('package.json'), brandVersion('1.0.0')],
-        [brandPath('Cargo.toml'), brandVersion('1.0.0')],
-      ]),
-    )
-    const workspace = makeFakeWorkspaceStore(members, brandRoot('/test'))
-    const changesets = makeFakeChangesetStore(
-      new Map(
-        intentsOf([{
-          path: '.changeset/alpha-patch.md',
-          name: '@e2e/alpha',
-          bump: 'patch',
-          summary: 'alpha patches',
-        }]).map((intent) => [intent.path, intent] as const),
-      ),
-    )
-    const changelogs = makeFakeChangelogStore()
-    const process = makeFakeProcessPort(
-      (command: WorkspaceCommand): Effect.Effect<ProcessCompleted, CommandRefusal> =>
-        Effect.sync(() => {
-          workspace.state.members.forEach((member, index) => {
-            const [major, minor, patch] = bumpCore(member.manifest.version)
-            const next = S.decodeUnknownSync(PackageVersion)(`${major}.${minor}.${patch + 1}`)
-            workspace.state.members[index] = {
-              ...member,
-              manifest: { ...member.manifest, version: next },
-            }
-          })
-          return { _tag: 'ProcessCompleted' as const, command }
-        }),
-    )
-    const live = Layer.mergeAll(
-      surfaces.layer,
-      workspace.layer,
-      changesets.layer,
-      changelogs.layer,
-      process.layer,
-    )
-    scenario(
-      'A cargo surface under pnpm follows its named member',
-      { scenarioLayer: live },
-      Gherkin.Do.pipe(
-        Given('a cargo surface bound to a package the manager will move')('input', () =>
-          Effect.succeed(bumpInputOf({
-            strategy: 'pnpm',
-            changelogDir: 'changelog',
-            manifest: { file: 'package.json', surface: jsonSurface('package.json') },
-            surfaces: [{
-              file: 'Cargo.toml',
-              surface: { kind: 'cargo', path: 'Cargo.toml', package: '@e2e/alpha' },
-            }],
-          }))),
-        When('the pending intents are versioned per package')(
-          'outcome',
-          (s) =>
-            Effect.match(Cell.run(Cell.provide(bumpCell, live), s.input), {
-              onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
-              onSuccess: (decision) => ({ _tag: 'decided' as const, decision }),
-            }),
-        ),
-        Then('the cargo workspace carries the named member version')((s) => {
-          Match.value(s.outcome).pipe(
-            Match.tag('decided', (decided) =>
-              Match.value(decided.decision).pipe(
-                Match.tag('VersionBumped', (bumped) => {
-                  expect(bumped.version).toEqual('1.0.1')
-                  expect(surfaces.state.versions.get(brandPath('Cargo.toml'))).toEqual('1.0.1')
-                }),
-                Match.tag('VersionConsumed', () => failUnexpected('expected a delegated bump')),
-                Match.tag('VersionIdle', () => failUnexpected('expected a delegated bump')),
-                Match.exhaustive,
-              )),
-            Match.tag('refused', () => failUnexpected('expected a version decision')),
-            Match.exhaustive,
-          )
-        }),
-      ),
-    )
-  }
-
-  {
     const members = membersOf([{ name: '@e2e/alpha', version: '1.0.0' }])
     const surfaces = makeFakeSurfaceStore(
       new Map([
@@ -1275,84 +1088,11 @@ Feature('Versioning packages').body(({ scenario }) => {
       ),
     )
     const changelogs = makeFakeChangelogStore()
-    const process = makeFakeProcessPort()
     const live = Layer.mergeAll(
       surfaces.layer,
       workspace.layer,
       changesets.layer,
       changelogs.layer,
-      process.layer,
-    )
-    scenario(
-      'A cargo surface without a package is refused under pnpm',
-      { scenarioLayer: live },
-      Gherkin.Do.pipe(
-        Given('a cargo surface that names no member under the pnpm strategy')(
-          'input',
-          () =>
-            Effect.succeed(bumpInputOf({
-              strategy: 'pnpm',
-              changelogDir: 'changelog',
-              manifest: { file: 'package.json', surface: jsonSurface('package.json') },
-              surfaces: [{ file: 'Cargo.toml', surface: { kind: 'cargo', path: 'Cargo.toml' } }],
-            })),
-        ),
-        When('versioning runs')('outcome', (s) =>
-          Effect.match(Cell.run(Cell.provide(bumpCell, live), s.input), {
-            onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
-            onSuccess: (decision) => ({ _tag: 'decided' as const, decision }),
-          })),
-        Then('the missing package is refused by path')((s) => {
-          Match.value(s.outcome).pipe(
-            Match.tag('refused', (refused) => {
-              const refusal = Effect.runSync(S.decodeUnknownEffect(VersionRefusal)(refused.refusal))
-              Match.value(refusal).pipe(
-                Match.tag('VersionCargoPackageMissing', (missing) => {
-                  expect(missing.path).toEqual('Cargo.toml')
-                }),
-                Match.tag('VersionUnknownPackage', () => failUnexpected('expected a missing cargo package')),
-                Match.tag('VersionIntentMalformed', () => failUnexpected('expected a missing cargo package')),
-                Match.tag('VersionSurfaceMissing', () => failUnexpected('expected a missing cargo package')),
-                Match.tag('VersionLockStale', () => failUnexpected('expected a missing cargo package')),
-                Match.tag('RootManifestUnwritable', () => failUnexpected('expected a missing cargo package')),
-                Match.exhaustive,
-              )
-            }),
-            Match.tag('decided', () => failUnexpected('expected a refusal')),
-            Match.exhaustive,
-          )
-        }),
-      ),
-    )
-  }
-
-  {
-    const members = membersOf([{ name: '@e2e/alpha', version: '1.0.0' }])
-    const surfaces = makeFakeSurfaceStore(
-      new Map([
-        [brandPath('package.json'), brandVersion('1.0.0')],
-        [brandPath('Cargo.toml'), brandVersion('1.0.0')],
-      ]),
-    )
-    const workspace = makeFakeWorkspaceStore(members, brandRoot('/test'))
-    const changesets = makeFakeChangesetStore(
-      new Map(
-        intentsOf([{
-          path: '.changeset/alpha-patch.md',
-          name: '@e2e/alpha',
-          bump: 'patch',
-          summary: 'alpha patches',
-        }]).map((intent) => [intent.path, intent] as const),
-      ),
-    )
-    const changelogs = makeFakeChangelogStore()
-    const process = makeFakeProcessPort()
-    const live = Layer.mergeAll(
-      surfaces.layer,
-      workspace.layer,
-      changesets.layer,
-      changelogs.layer,
-      process.layer,
     )
     scenario(
       'A cargo surface naming a package outside the workspace is refused',

@@ -149,9 +149,9 @@ export const bumpInput = (
   changelogDir: RelativePath,
   versioning: ReleaseConfig['versioning'],
 ): BumpInput => {
-  if (versioning.strategy === 'pnpm') {
+  if (versioning.strategy === 'changesets') {
     return {
-      strategy: 'pnpm',
+      strategy: 'changesets',
       changelogDir,
       manifest: {
         file: RelativePath.make('package.json'),

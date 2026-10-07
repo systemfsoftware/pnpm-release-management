@@ -138,7 +138,7 @@ Then add a `release.jsonc`:
 | `branch`                        | required                    | branch the release PR is opened from                             |
 | `changesetDir`                  | `.changeset`                | where pending intents live                                       |
 | `changelogDir`                  | `<changesetDir>/changelogs` | where generated per-package changelogs are written               |
-| `versioning.strategy`           | required                    | `surfaces` or `pnpm`                                             |
+| `versioning.strategy`           | required                    | `surfaces` or `changesets`                                       |
 | `versioning.manifest`           | —                           | `surfaces`: the JSON manifest that owns the version              |
 | `versioning.changelog`          | —                           | `surfaces`: the root changelog that receives the release summary |
 | `versioning.surfaces[]`         | —                           | `surfaces`: additional files rewritten on every bump             |
@@ -158,15 +158,17 @@ A surface is one of:
 | `nix`   | `path`                                                          | `nix/version.nix` |
 
 `surfaces` versioning bumps the manifest, rewrites the version in every declared
-surface, and appends the release summary to the root changelog. `pnpm`
-versioning delegates to `pnpm version -r`.
+surface, and appends the release summary to the root changelog. `changesets`
+versioning drives the changesets libraries per package: the assembled release
+plan decides each member's bump, workspace dependents move with it, and the
+consumed intents are removed.
 
 A `cargo` surface rewrites `[workspace.package] version` in the named manifest,
 any workspace member that pins a literal `[package] version`, and every
 workspace-member entry in the sibling `Cargo.lock` (registry and git
 dependencies carry a `source` line and are left alone). Its optional `package`
 names the workspace package whose bumped version the Cargo workspace follows;
-it is required under `pnpm` versioning, where there is no single version.
+it is required under `changesets` versioning, where there is no single version.
 
 ## Change intents
 

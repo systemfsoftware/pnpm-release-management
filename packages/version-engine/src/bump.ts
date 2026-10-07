@@ -2,16 +2,14 @@ import { Cell } from '@systemfsoftware/effect-cell-types'
 import {
   type ChangelogRefusal,
   ChangelogStore,
+  ChangesetsPort,
   ChangesetStore,
-  CommandArg,
-  CommandName,
-  type CommandRefusal,
   type IntentRefusal,
   type MemberRefusal,
-  type PackageManifest,
   type PackageName,
   type PackageVersion,
-  ProcessPort,
+  type PlannedRelease,
+  RelativePath,
   SurfaceStore,
   VersionCargoPackageMissing,
   type VersionRefusal,
@@ -31,20 +29,17 @@ const read = (
 ): Effect.Effect<
   BumpCommand,
   IntentRefusal | MemberRefusal | VersionRefusal,
-  ChangesetStore | WorkspaceStore | SurfaceStore
+  ChangesetStore | WorkspaceStore | SurfaceStore | ChangesetsPort
 > =>
   Effect.gen(function*() {
-    const changesets = yield* ChangesetStore
     const workspace = yield* WorkspaceStore
     const surfaces = yield* SurfaceStore
-    const paths = yield* changesets.listIntents()
-    const intents = yield* Effect.forEach(paths, (path) => changesets.readIntent(path))
     const members = yield* workspace.listMembers()
     const known = HashSet.fromIterable(members.map((member) => member.name))
     for (const target of request.surfaces) {
       if (target.surface.kind !== 'cargo') continue
       const named = target.surface.package
-      if (request.strategy === 'pnpm' && named === undefined) {
+      if (request.strategy === 'changesets' && named === undefined) {
         return yield* Effect.fail(VersionCargoPackageMissing.make({ path: target.file }))
       }
       if (named !== undefined && !HashSet.has(known, named)) {
@@ -55,10 +50,43 @@ const read = (
       request.manifest.file,
       request.manifest.surface,
     )
+
+    if (request.strategy === 'changesets') {
+      const port = yield* ChangesetsPort
+      const planned = yield* port.plan()
+      const moved = planned.releases.map((release) => release.name)
+      const changelogPaths = planned.releases.map((release) => ({
+        name: release.name,
+        path: RelativePath.make(
+          `${request.changelogDir}/${release.name.replaceAll('/', '!')}@${release.newVersion}.md`,
+        ),
+      }))
+      return BumpCommand.make({
+        strategy: request.strategy,
+        intents: [],
+        members: [...members],
+        manifestVersion,
+        changelogDir: request.changelogDir,
+        rootChangelog: request.rootChangelog,
+        manifest: request.manifest,
+        surfaces: [...request.surfaces],
+        consolidated: 'none',
+        consolidatedNext: manifestVersion,
+        moved,
+        changelogPaths,
+        unknownPackage: undefined,
+        malformedPath: undefined,
+        intentCount: planned.changesets,
+        planned: [...planned.releases],
+      })
+    }
+
+    const changesets = yield* ChangesetStore
+    const paths = yield* changesets.listIntents()
+    const intents = yield* Effect.forEach(paths, (path) => changesets.readIntent(path))
     const derived = deriveBump({
       intents,
       members,
-      strategy: request.strategy,
       manifestVersion,
       changelogDir: request.changelogDir,
     })
@@ -73,39 +101,29 @@ const read = (
       surfaces: [...request.surfaces],
       consolidated: derived.consolidated,
       consolidatedNext: derived.consolidatedNext,
-      nexts: derived.nexts,
       moved: derived.moved,
       changelogPaths: derived.changelogPaths,
-      packageRanks: derived.packages,
       unknownPackage: derived.unknownPackage,
       malformedPath: derived.malformedPath,
       intentCount: derived.intentCount,
+      planned: [],
     })
   })
 
-const commandVersionOf = (
-  manifests: ReadonlyArray<PackageManifest>,
+const plannedSummaryOf = (
+  planned: ReadonlyArray<PlannedRelease>,
   name: PackageName,
-  fallback: PackageVersion,
-): PackageVersion => {
-  const manifest = manifests.find((candidate) => candidate.name === name)
-  if (manifest === undefined) return fallback
-  return manifest.version
-}
-
-const namedVersionOf = (
-  manifests: ReadonlyArray<PackageManifest>,
-  name: PackageName | undefined,
-  fallback: PackageVersion,
-): PackageVersion => {
-  if (name === undefined) return fallback
-  return commandVersionOf(manifests, name, fallback)
+): string => {
+  const release = planned.find((candidate) => candidate.name === name)
+  if (release === undefined) return ''
+  return release.summary
 }
 
 const writeMemberChangelogs = (
   command: BumpCommand,
   moved: ReadonlyArray<PackageName>,
   versionOf: (name: PackageName) => PackageVersion,
+  summaryOf: (name: PackageName) => string,
 ): Effect.Effect<void, ChangelogRefusal, ChangelogStore> =>
   Effect.gen(function*() {
     const changelogs = yield* ChangelogStore
@@ -116,7 +134,7 @@ const writeMemberChangelogs = (
           changelogDir: command.changelogDir,
           name,
           version: versionOf(name),
-          summary: summaryForPackage(command.intents, name),
+          summary: summaryOf(name),
         }),
       { discard: true },
     )
@@ -146,77 +164,74 @@ const writeSurfaces = (
         summary: rootBulletsOf(command.intents),
       })
     }
-    yield* writeMemberChangelogs(command, bumped.moved, () => bumped.version)
+    yield* writeMemberChangelogs(
+      command,
+      bumped.moved,
+      () => bumped.version,
+      (name) => summaryForPackage(command.intents, name),
+    )
   })
 
-const writePnpm = (
+const writeChangesets = (
   command: BumpCommand,
   bumped: VersionBumped,
-): Effect.Effect<
-  void,
-  ChangelogRefusal | MemberRefusal | CommandRefusal | VersionRefusal,
-  ChangelogStore | ProcessPort | WorkspaceStore | SurfaceStore
-> =>
+): Effect.Effect<void, VersionRefusal | ChangelogRefusal, SurfaceStore | ChangelogStore> =>
   Effect.gen(function*() {
-    const process = yield* ProcessPort
-    const workspace = yield* WorkspaceStore
     const surfaces = yield* SurfaceStore
-    yield* process.runCommand({
-      program: CommandName.make('pnpm'),
-      args: [CommandArg.make('version'), CommandArg.make('-r')],
-      cwd: workspace.root,
-    })
-    const members = yield* workspace.listMembers()
-    const manifests = yield* Effect.forEach(
-      members,
-      (member) => workspace.readManifest(member.dir),
-    )
+    const versionOf = (name: PackageName): PackageVersion => {
+      const release = command.planned.find((candidate) => candidate.name === name)
+      if (release !== undefined) return release.newVersion
+      const member = command.members.find((candidate) => candidate.name === name)
+      if (member !== undefined) return member.manifest.version
+      return bumped.version
+    }
+    const namedVersionOf = (named: PackageName | undefined): PackageVersion => {
+      if (named === undefined) return bumped.version
+      return versionOf(named)
+    }
     yield* Effect.forEach(
       command.surfaces.flatMap((target) => {
         if (target.surface.kind === 'cargo') return [{ target, named: target.surface.package }]
         return []
       }),
-      ({ target, named }) =>
-        surfaces.writeSurface(
-          target.file,
-          target.surface,
-          namedVersionOf(manifests, named, bumped.version),
-        ),
+      ({ target, named }) => surfaces.writeSurface(target.file, target.surface, namedVersionOf(named)),
       { discard: true },
     )
     yield* writeMemberChangelogs(
       command,
       bumped.moved,
-      (name) => commandVersionOf(manifests, name, bumped.version),
+      (name) => versionOf(name),
+      (name) => plannedSummaryOf(command.planned, name),
     )
   })
-
-const applyBumped = (
-  command: BumpCommand,
-  bumped: VersionBumped,
-): Effect.Effect<
-  void,
-  VersionRefusal | ChangelogRefusal | MemberRefusal | CommandRefusal,
-  ChangelogStore | SurfaceStore | ProcessPort | WorkspaceStore
-> => {
-  if (command.strategy === 'surfaces') return writeSurfaces(command, bumped)
-  return writePnpm(command, bumped)
-}
 
 const write = (
   output: Result.Result<VersionDecision, VersionRefusal>,
   command: BumpCommand,
 ): Effect.Effect<
   VersionDecision,
-  VersionRefusal | IntentRefusal | MemberRefusal | ChangelogRefusal | CommandRefusal,
-  ChangesetStore | WorkspaceStore | SurfaceStore | ChangelogStore | ProcessPort
+  VersionRefusal | IntentRefusal | MemberRefusal | ChangelogRefusal,
+  ChangesetStore | WorkspaceStore | SurfaceStore | ChangelogStore | ChangesetsPort
 > => {
   if (Result.isFailure(output)) return Effect.fail(output.failure)
   const decision = output.success
+  if (command.strategy === 'changesets') {
+    return Effect.gen(function*() {
+      const port = yield* ChangesetsPort
+      yield* port.apply()
+      yield* Match.value(decision).pipe(
+        Match.tag('VersionBumped', (bumped) => writeChangesets(command, bumped)),
+        Match.tag('VersionConsumed', () => Effect.void),
+        Match.tag('VersionIdle', () => Effect.void),
+        Match.exhaustive,
+      )
+      return decision
+    })
+  }
   return Effect.gen(function*() {
     const changesets = yield* ChangesetStore
     yield* Match.value(decision).pipe(
-      Match.tag('VersionBumped', (bumped) => applyBumped(command, bumped)),
+      Match.tag('VersionBumped', (bumped) => writeSurfaces(command, bumped)),
       Match.tag('VersionConsumed', () => Effect.void),
       Match.tag('VersionIdle', () => Effect.void),
       Match.exhaustive,
@@ -229,8 +244,8 @@ const write = (
 export const bumpCell: Cell.Cell<
   BumpInput,
   VersionDecision,
-  IntentRefusal | MemberRefusal | VersionRefusal | ChangelogRefusal | CommandRefusal,
-  ChangesetStore | WorkspaceStore | SurfaceStore | ChangelogStore | ProcessPort
+  IntentRefusal | MemberRefusal | VersionRefusal | ChangelogRefusal,
+  ChangesetStore | WorkspaceStore | SurfaceStore | ChangelogStore | ChangesetsPort
 > = Cell.layer({
   read,
   decide: bumpVersions,
