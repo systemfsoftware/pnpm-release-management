@@ -23,6 +23,11 @@ on:
         required: false
         type: boolean
         default: false
+      runs-on:
+        description: JSON-encoded runner selector for every job (default keeps hosted ubuntu-latest)
+        required: false
+        type: string
+        default: '"ubuntu-latest"'
 
 permissions: {}
 
@@ -30,7 +35,7 @@ jobs:
   require-intent:
     name: a publishable-package change needs an intent
     if: github.head_ref != 'changeset-release/main'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     permissions:
       contents: read
       pull-requests: read
@@ -45,13 +50,24 @@ jobs:
           ref: ${{ inputs.tools-ref }}
           path: .release-tools
 
+      # Hosted runners get node + pnpm from the official actions.
       - uses: pnpm/action-setup@v6
+        if: runner.environment == 'github-hosted'
       - uses: actions/setup-node@v7
+        if: runner.environment == 'github-hosted'
         with:
           node-version: ${{ inputs.node-version }}
 
+      # Self-hosted (bare-NixOS fleet) runners get node + pnpm from the image's
+      # toolchain instead: actions/setup-node downloads a glibc binary that will
+      # not run there. pnpm/setup replaces action-setup + setup-node for pnpm v11+.
+      - uses: pnpm/setup@v3
+        if: runner.environment != 'github-hosted'
+        with:
+          runtime: node@${{ inputs.node-version }}
+
       - uses: cachix/install-nix-action@v31
-        if: inputs.devshell
+        if: inputs.devshell && runner.environment == 'github-hosted'
 
       - name: Build the release tools
         run: |
@@ -63,7 +79,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Allow unprivileged user namespaces for the caller's sandbox
-        if: inputs.devshell
+        if: inputs.devshell && runner.environment == 'github-hosted'
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Install the caller's workspace through its own bootstrap script
