@@ -12,7 +12,6 @@
   nix,
   pnpm_12,
   runCommand,
-  stdenv,
   sqlite,
   zstd,
 }:
@@ -28,9 +27,7 @@ let
     pnpm = pnpm_12;
     version = "0";
     fetcherVersion = 4;
-    hash = {
-      aarch64-darwin = "sha256-Xh+Jg4NCc3KdjUa7eeM32eBflia23A8WAnlUefTpEpM=";
-    }.${stdenv.hostPlatform.system} or "sha256-y/blOFRltaSI2RwGdaA0e+JJZJApsac82L4lJ2MFrRM=";
+    hash = "sha256-y/blOFRltaSI2RwGdaA0e+JJZJApsac82L4lJ2MFrRM=";
   };
 
   tinyStore = runCommand "sandbox-proofs-tiny-store" { nativeBuildInputs = [ sqlite zstd ]; } ''
