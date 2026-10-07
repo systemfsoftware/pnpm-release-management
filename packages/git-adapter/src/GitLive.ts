@@ -41,6 +41,7 @@ const commitPath = FsPath.make('git:commit')
 const pushTagsPath = FsPath.make('git:push-tags')
 const writeTagPath = FsPath.make('git:write-tag')
 const repoSlugPath = FsPath.make('git:repo-slug')
+const tagAnnotationPath = FsPath.make('git:tag-annotation')
 const diffPath = RelativePath.make('git:diff')
 
 const headRef = GitRef.make('HEAD')
@@ -88,6 +89,12 @@ const declaredSlug = (): Option.Option<RepoSlug> => {
 
 const nonEmptyLines = (text: string): ReadonlyArray<string> =>
   text.split('\n').map((line) => line.trim()).filter((line) => line.length > 0)
+
+const annotationOf = (tagObject: string): string => {
+  const separator = tagObject.indexOf('\n\n')
+  if (separator === -1) return tagObject.trimEnd()
+  return tagObject.slice(separator + 2).trimEnd()
+}
 
 const listedTags = (text: string): ReadonlyArray<string> =>
   text.split('\n')
@@ -236,10 +243,32 @@ const makeGitPort = (
           TagCapturedMalformed.make({ path: pushTagsPath }))
         return Count.make(tags.length)
       }),
-    writeTag: (tag: ReleaseTag): Effect.Effect<ReleaseTag, TagRefusal> =>
+    writeTag: (tag: ReleaseTag, message: string): Effect.Effect<ReleaseTag, TagRefusal> =>
       Effect.gen(function*() {
-        yield* run(['tag', tag], () => TagCapturedMalformed.make({ path: writeTagPath }))
+        yield* run(['tag', '-a', tag, '-m', message], () => TagCapturedMalformed.make({ path: writeTagPath }))
         return tag
+      }),
+    tagAnnotation: (
+      remote: RemoteName,
+      tag: ReleaseTag,
+    ): Effect.Effect<Option.Option<string>, TagRefusal> =>
+      Effect.gen(function*() {
+        yield* run(
+          ['fetch', '--force', '--no-tags', remote, `+refs/tags/${tag}:refs/tags/${tag}`],
+          () => TagCapturedMalformed.make({ path: tagAnnotationPath }),
+        )
+        const kind = yield* git(['cat-file', '-t', `refs/tags/${tag}`])
+        if (Result.isFailure(kind)) {
+          return yield* Effect.fail(TagCapturedMalformed.make({ path: tagAnnotationPath }))
+        }
+        if (kind.success.trim() !== 'tag') {
+          return Option.none()
+        }
+        const body = yield* git(['cat-file', '-p', `refs/tags/${tag}`])
+        if (Result.isFailure(body)) {
+          return yield* Effect.fail(TagCapturedMalformed.make({ path: tagAnnotationPath }))
+        }
+        return Option.some(annotationOf(body.success))
       }),
     repoSlug: (): Effect.Effect<RepoSlug, TagRefusal> =>
       Effect.gen(function*() {

@@ -9,6 +9,7 @@ import {
   type ConfigRefusal,
   FsPath,
   type GithubReleaseRefusal,
+  type IntegrityRefusal,
   type IntentRefusal,
   type MemberRefusal,
   type PlanDeferredUnknown,
@@ -16,6 +17,9 @@ import {
   type PullRequestRefusal,
   type ReleaseTag,
   type TagRefusal,
+  type TarballRefusal,
+  type VersionIntentMalformed,
+  type VersionUnknownPackage,
 } from '@systemfsoftware/release-language'
 import type { VersionDecision } from '@systemfsoftware/version-engine'
 import { Effect, FileSystem } from 'effect'
@@ -36,12 +40,16 @@ export type PlanFailure =
   | MemberRefusal
   | PlanRefusal
   | TagRefusal
+  | IntegrityRefusal
+  | VersionIntentMalformed
+  | VersionUnknownPackage
 
 export type TagFailure =
   | PlatformRefusal
   | MemberRefusal
   | PlanDeferredUnknown
   | TagRefusal
+  | TarballRefusal
 
 export type ReleaseFailure =
   | PlatformRefusal
@@ -132,6 +140,19 @@ export const renderPlanRefusal = (refusal: PlanFailure): Effect.Effect<void, nev
         PlanCapturedMalformed: (malformed) => `refused: plan-captured-malformed, path: ${malformed.path}`,
         TagCapturedMalformed: (malformed) => `refused: tag-captured-malformed, path: ${malformed.path}`,
         TagExcludedMalformed: (malformed) => `refused: tag-excluded-malformed, path: ${malformed.path}`,
+        TagIntegrityMismatch: (mismatch) =>
+          `refused: tag-integrity-mismatch, package: ${mismatch.package}@${mismatch.version}, recorded: ${mismatch.recorded}, current: ${mismatch.current}, file: ${mismatch.file}`,
+        IntegrityNothingToVerify: () => 'refused: integrity-nothing-to-verify',
+        IntegrityFilesEmpty: (empty) =>
+          `refused: integrity-files-empty, package: ${empty.package}@${empty.version}, side: ${empty.side}`,
+        TagAnnotationMalformed: (malformed) =>
+          `refused: tag-annotation-malformed, tag: ${malformed.tag}, reason: ${malformed.reason}`,
+        TagAnnotationLightweight: (lightweight) => `refused: tag-annotation-lightweight, tag: ${lightweight.tag}`,
+        TarballMissing: (missing) => `refused: tarball-missing, package: ${missing.package}@${missing.version}`,
+        TarballUnreadable: (unreadable) =>
+          `refused: tarball-unreadable, path: ${unreadable.path}, reason: ${unreadable.reason}`,
+        VersionIntentMalformed: (malformed) => `refused: version-intent-malformed, path: ${malformed.path}`,
+        VersionUnknownPackage: (unknown) => `refused: version-unknown-package, package: ${unknown.package}`,
       }),
     ),
   )
@@ -153,6 +174,9 @@ export const renderTagRefusal = (refusal: TagFailure): Effect.Effect<void, never
         PlanDeferredUnknown: (unknown) => `unknown excluded package(s): ${unknown.packages.join(', ')}`,
         TagCapturedMalformed: (malformed) => `cannot read captured file: ${malformed.path}`,
         TagExcludedMalformed: (malformed) => `cannot read exclude file: ${malformed.path}`,
+        TarballMissing: (missing) => `refused: tarball-missing, package: ${missing.package}@${missing.version}`,
+        TarballUnreadable: (unreadable) =>
+          `refused: tarball-unreadable, path: ${unreadable.path}, reason: ${unreadable.reason}`,
       }),
     ),
   )

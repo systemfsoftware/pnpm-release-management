@@ -22,6 +22,7 @@ import {
   RemoteName,
   RepoRoot,
 } from '@systemfsoftware/release-language'
+import { TarballLive } from '@systemfsoftware/tarball-adapter'
 import { bumpCell } from '@systemfsoftware/version-engine'
 import {
   ChangelogStoreLive,
@@ -125,6 +126,7 @@ const plan = Command.make('plan', {
   deferred: Flag.string('deferred').pipe(Flag.optional),
   output: Flag.string('output').pipe(Flag.optional),
   remote: Flag.string('remote').pipe(Flag.optional),
+  tarballs: Flag.string('tarballs'),
   config: Flag.string('config').pipe(Flag.optional),
 }, (flags) =>
   Effect.gen(function*() {
@@ -132,8 +134,12 @@ const plan = Command.make('plan', {
     const request = yield* planRequestOf(workspace, {
       deferred: Option.getOrUndefined(flags.deferred),
       remote: Option.getOrUndefined(flags.remote),
+      tarballs: flags.tarballs,
     })
-    const report = yield* Cell.run(planCell, request)
+    const report = yield* Cell.run(planCell, request).pipe(
+      Effect.provide(TarballLive),
+      Effect.provide(ChangesetsPortLive({ root: workspace.root, base: workspace.config.base })),
+    )
     yield* renderPlan(report, Option.getOrUndefined(flags.output))
   }).pipe(Effect.catch(renderPlanRefusal)))
 
@@ -145,6 +151,7 @@ const tag = Command.make('tag', {
   exclude: Flag.string('exclude').pipe(Flag.optional),
   output: Flag.string('output').pipe(Flag.optional),
   remote: Flag.string('remote').pipe(Flag.optional),
+  tarballs: Flag.string('tarballs'),
   config: Flag.string('config').pipe(Flag.optional),
 }, (flags) =>
   Effect.gen(function*() {
@@ -156,10 +163,11 @@ const tag = Command.make('tag', {
       exclude: Option.getOrUndefined(flags.exclude),
       output,
       remote: Option.getOrUndefined(flags.remote),
+      tarballs: flags.tarballs,
       dryRun: flags.dryRun,
       json: flags.json,
     })
-    const decision = yield* Cell.run(tagCell, request)
+    const decision = yield* Cell.run(tagCell, request).pipe(Effect.provide(TarballLive))
     yield* renderTag(decision, { output, json: flags.json, dryRun: flags.dryRun })
   }).pipe(Effect.catch(renderTagRefusal)))
 

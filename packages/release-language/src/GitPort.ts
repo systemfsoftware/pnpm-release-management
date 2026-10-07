@@ -1,4 +1,4 @@
-import { Context, type Effect } from 'effect'
+import { Context, type Effect, type Option } from 'effect'
 import type { PrTitle } from './Config.schema.js'
 import type { GateRefusal } from './Gate.schema.js'
 import type { BranchDeleted, PullRequestRefusal } from './PullRequest.schema.js'
@@ -33,7 +33,12 @@ export interface GitPort {
   ) => Effect.Effect<Count, TagRefusal, never>
   readonly writeTag: (
     tag: ReleaseTag,
+    message: string,
   ) => Effect.Effect<ReleaseTag, TagRefusal, never>
+  readonly tagAnnotation: (
+    remote: RemoteName,
+    tag: ReleaseTag,
+  ) => Effect.Effect<Option.Option<string>, TagRefusal, never>
   readonly repoSlug: () => Effect.Effect<RepoSlug, TagRefusal, never>
   readonly stagedPaths: () => Effect.Effect<
     ReadonlyArray<StagedPath>,

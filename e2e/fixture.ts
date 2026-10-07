@@ -52,6 +52,14 @@ each package and its bump, body holding the one line a consumer reads.
 
 export const MEMBERS = ['@e2e/alpha', '@e2e/beta'] as const
 
+export const TARBALLS = '/tmp/prm-tarballs'
+
+export const packTarballs = async (world: World, dir: string = TARBALLS): Promise<string> => {
+  await world.must(`rm -rf ${dir} && mkdir -p ${dir}`)
+  await world.must(`pnpm -r pack --pack-destination ${dir}`, { cwd: FIXTURE })
+  return dir
+}
+
 export const setupFixture = async (world: World): Promise<void> => {
   await world.must(`rm -rf ${FIXTURE} ${ORIGIN} && mkdir -p ${FIXTURE}/packages/alpha ${FIXTURE}/packages/beta`)
   await world.must(`mkdir -p ${FIXTURE}/.changeset/changelogs`)
@@ -95,17 +103,18 @@ export const setupFixture = async (world: World): Promise<void> => {
 
   await world.must(`git init -q --bare ${ORIGIN}`)
   await world.must(
-    [
-      `git remote add origin ${ORIGIN}`,
-      'git push -q -u origin main',
-      ...MEMBERS.map((member) => `git tag "${member}@v1.0.0"`),
-      'git push -q origin --tags',
-    ].join('\n'),
+    [`git remote add origin ${ORIGIN}`, 'git push -q -u origin main'].join('\n'),
     { cwd: FIXTURE },
   )
 
   await world.must('pnpm install --silent', { cwd: FIXTURE })
   await world.must('git add -A && git commit -q -m "chore: lockfile"', { cwd: FIXTURE })
+
+  const tarballs = await packTarballs(world)
+  const seeded = await world.tool('github-release-management', 'tag', `--tarballs ${tarballs}`)
+  if (seeded.code !== 0) {
+    throw new Error(`seeding 1.0.0 tags failed\n${seeded.stdout}${seeded.stderr}`)
+  }
 }
 
 export const headSha = async (world: World): Promise<string> =>

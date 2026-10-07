@@ -47,6 +47,7 @@ const decodeFlags = <A, E extends { readonly message: string }>(
 export interface PlanFlags {
   readonly deferred: string | undefined
   readonly remote: string | undefined
+  readonly tarballs: string
 }
 
 export const planRequestOf = (workspace: Workspace, flags: PlanFlags) =>
@@ -54,6 +55,7 @@ export const planRequestOf = (workspace: Workspace, flags: PlanFlags) =>
     S.decodeUnknownEffect(PlanRequest)({
       deferred: flags.deferred,
       remote: flags.remote,
+      tarballs: flags.tarballs,
       changelogDir: workspace.config.changelogDir,
     }),
   )
@@ -64,6 +66,7 @@ export interface TagFlags {
   readonly exclude: string | undefined
   readonly output: string | undefined
   readonly remote: string | undefined
+  readonly tarballs: string
   readonly dryRun: boolean
   readonly json: boolean
 }
@@ -76,6 +79,7 @@ export const tagRequestOf = (workspace: Workspace, flags: TagFlags) =>
       exclude: flags.exclude,
       output: flags.output,
       remote: flags.remote,
+      tarballs: flags.tarballs,
       dryRun: flags.dryRun,
       json: flags.json,
       changelogDir: workspace.config.changelogDir,

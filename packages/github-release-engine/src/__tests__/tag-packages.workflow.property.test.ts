@@ -57,7 +57,7 @@ it.prop(
   [cycleArb, previewArb, capturedArb, excludedArb, remoteArb, outputArb],
   ([cycle, preview, capturedIssue, excludedIssue, remote, output]) => {
     const outcome = tagPackages(
-      TagCommand.make({ cycle, preview, capturedIssue, excludedIssue, remote, output }),
+      TagCommand.make({ cycle, annotations: [], preview, capturedIssue, excludedIssue, remote, output }),
     )
     const tags = cycle.map((entry) => entry.tag)
     if (capturedIssue !== undefined) {
