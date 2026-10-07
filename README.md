@@ -150,15 +150,23 @@ Then add a `release.jsonc`:
 
 A surface is one of:
 
-| `kind` | Fields                                                          | Example           |
-| ------ | --------------------------------------------------------------- | ----------------- |
-| `json` | `path`                                                          | `package.json`    |
-| `toml` | `path` or `glob`, `header` (`[package]`, `[workspace.package]`) | `Cargo.toml`      |
-| `nix`  | `path`                                                          | `nix/version.nix` |
+| `kind`  | Fields                                                          | Example           |
+| ------- | --------------------------------------------------------------- | ----------------- |
+| `json`  | `path`                                                          | `package.json`    |
+| `toml`  | `path` or `glob`, `header` (`[package]`, `[workspace.package]`) | `Cargo.toml`      |
+| `cargo` | `path`, optional `package`                                      | `Cargo.toml`      |
+| `nix`   | `path`                                                          | `nix/version.nix` |
 
 `surfaces` versioning bumps the manifest, rewrites the version in every declared
 surface, and appends the release summary to the root changelog. `pnpm`
 versioning delegates to `pnpm version -r`.
+
+A `cargo` surface rewrites `[workspace.package] version` in the named manifest,
+any workspace member that pins a literal `[package] version`, and every
+workspace-member entry in the sibling `Cargo.lock` (registry and git
+dependencies carry a `source` line and are left alone). Its optional `package`
+names the workspace package whose bumped version the Cargo workspace follows;
+it is required under `pnpm` versioning, where there is no single version.
 
 ## Change intents
 
@@ -222,15 +230,31 @@ agree on what this cycle owns.
 
 ## CI
 
-| Workflow              | Inputs                                       | Caller must grant                         |
-| --------------------- | -------------------------------------------- | ----------------------------------------- |
-| `release.yml`         | `tools-ref`, `artifacts-dir`, `node-version` | `contents: write`, `pull-requests: write` |
-| `changeset-check.yml` | `tools-ref`, `base-sha`, `node-version`      | `contents: read`, `pull-requests: read`   |
+| Workflow              | Inputs                                              | Caller must grant                         |
+| --------------------- | --------------------------------------------------- | ----------------------------------------- |
+| `release.yml`         | `tools-ref`, `artifacts-dir`, `node-version`        | `contents: write`, `pull-requests: write` |
+| `changeset-check.yml` | `tools-ref`, `base-sha`, `node-version`, `devshell` | `contents: read`, `pull-requests: read`   |
 
 `tools-ref` pins the revision of this repository that a release runs from;
 `@main` tracks the tip. Both workflows check this repository out into
 `.release-tools`, build it with pnpm, and run its `dist/main.js` bundles
 against the caller's workspace.
+
+`devshell: true` makes the changeset check install Nix and run the caller's
+own `bootstrap` script inside its `nix develop` shell
+(`nix develop --command pnpm run bootstrap`) instead of a plain
+`pnpm install`, then run the check in that shell. The bootstrap script is
+where the caller installs its workspace inside its own sandbox, so no
+dependency code runs outside it; a caller without a `bootstrap` script is
+refused with an error naming the missing script. The workflow takes no
+install command of its own. The job allows unprivileged user namespaces so a
+bubblewrap sandbox can start. A caller needs this mode when its lockfile points
+at tarballs its flake builds, such as `file:.sfs-deps/<name>-<version>.tgz`; a
+plain install cannot read those. With `devshell: true`, `node-version` is
+ignored for the caller's install and check: they use the dev shell's node, and
+`node-version` only selects the node that builds the release tools. The
+default, `false`, installs with plain pnpm as before. This repository's own CI
+calls the check with `devshell: true` on every pull request.
 
 ## Distribution through Nix
 
@@ -292,10 +316,7 @@ the lockfile. Each invocation gets a private copy of the store's index database
 that is discarded at exit, so the Nix store stays read-only. `$HOME` is a fresh
 tmpfs every time, so nothing a dependency plants survives. Tool caches that
 should persist (turbo, vite, `tsbuildinfo`) belong in the project's gitignored
-`.cache/`; the sandbox sets `XDG_CACHE_HOME` to it. On macOS the run also gets a
-private `0700` `XDG_RUNTIME_DIR` beneath its `$TMPDIR`, so a tool that locks
-there — pnpm's store-operation lock, for one — works without a `/tmp` write
-root.
+`.cache/`; the sandbox sets `XDG_CACHE_HOME` to it.
 
 | Boundary    | Inside the sandbox                                                                                                                                                               |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -304,21 +325,18 @@ root.
 | network     | loopback only; each `--allow-host` opens HTTPS to that host through an allow-list proxy; only `--publish` ports reach the host                                                   |
 | processes   | own PID, IPC and UTS namespaces, no capabilities, killed with its parent, no controlling terminal                                                                                |
 
-On Linux it is bubblewrap (`--unshare-all`, `--cap-drop ALL`, `--die-with-parent`,
-`--new-session`). On macOS it is `sandbox-exec` with a deny-by-default
-profile. Egress goes through a CONNECT proxy outside the sandbox that tunnels
-only to declared `host[:port]` (default 443; `*.example.com` matches
-subdomains). Inside, `HTTPS_PROXY` points at it and `NODE_USE_ENV_PROXY=1` makes
-Node's `fetch` use it. There is no unsandboxed mode.
+It is bubblewrap (`--unshare-all`, `--cap-drop ALL`, `--die-with-parent`,
+`--new-session`) and runs on Linux only. Egress goes through a CONNECT proxy
+outside the sandbox that tunnels only to declared `host[:port]` (default 443;
+`*.example.com` matches subdomains). Inside, `HTTPS_PROXY` points at it and
+`NODE_USE_ENV_PROXY=1` makes Node's `fetch` use it. There is no unsandboxed
+mode.
 
 Reads of `/nix/store` are restricted to the invocation's closure: the launcher
 resolves `nix-store --query --requisites` over the sandboxed `PATH`, the command
-and its own helpers, then exposes exactly those paths. On Linux it mounts each
-one read-only over an empty `/nix/store` that cannot be listed; on macOS it
-generates a per-invocation profile in its work directory that grants
-`file-read*` and `file-map-executable` only on those paths. A store path outside
-the closure is unreadable, so a dependency cannot enumerate or reach the rest of
-the store.
+and its own helpers, then mounts each of those paths read-only over an empty
+`/nix/store` that cannot be listed. A store path outside the closure is
+unreadable, so a dependency cannot enumerate or reach the rest of the store.
 
 `--egress-log PATH` appends one JSONL line per proxy decision, allowed or
 refused, at least `{"host","port","decision","rule"}`. The file must sit outside
@@ -334,13 +352,6 @@ host port to an inside forwarder over a Unix socket. `--listen PORT` declares a
 port the stack may bind without publishing it. Both flags take ports 1–65535;
 anything malformed exits 2 with usage.
 
-macOS has no network namespace, so a `--listen` port on macOS is reachable from
-host loopback; that is a stated platform limit, not a claim. Its profile allows
-`network-bind` and `network-inbound` only on localhost for the `--publish`
-sandbox ports and the `--listen` ports — every other port, including port 0, is
-refused: the program gets `EPERM` when it binds or listens there. Declare the
-port with `--listen` (or `--publish`).
-
 `packages.<system>.sandbox-proofs` is the gate. Each refusal proof first prints
 from inside the same sandbox, so a sandbox that fails to start fails the proof
 instead of passing it. The proofs: reading `~/.ssh` and `~/.config` fails,
@@ -351,9 +362,8 @@ closure tool still runs and an offline `pnpm` 12 install of a tiny workspace
 resolves from the `--pnpm-store` store, `--egress-log` records exactly the
 allowed and refused decisions and refuses a log inside the project, an
 undeclared connection fails, a declared host is reachable while every other host
-is refused, a loopback dev server still answers, a published port answers from
-the host while an unpublished one does not, and — on macOS — an undeclared bind
-fails with `EPERM`. CI runs them on Linux and macOS. It then
+is refused, a loopback dev server still answers, and a published port answers
+from the host while an unpublished one does not. CI runs them on Linux, then
 installs, builds and tests this repository as three separate sandbox
 invocations with no network at all.
 

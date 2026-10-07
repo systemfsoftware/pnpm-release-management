@@ -149,6 +149,8 @@ export const renderRefusal = (refusal: AppRefusal): Effect.Effect<void, never, R
       VersionIntentMalformed: (malformed) => refuse(fields('VersionIntentMalformed', [['path', malformed.path]])),
       VersionUnknownPackage: (unknown) => refuse(fields('VersionUnknownPackage', [['package', unknown.package]])),
       VersionSurfaceMissing: (missing) => refuse(fields('VersionSurfaceMissing', [['path', missing.path]])),
+      VersionLockStale: (stale) => refuse(fields('VersionLockStale', [['path', stale.path]])),
+      VersionCargoPackageMissing: (missing) => refuse(fields('VersionCargoPackageMissing', [['path', missing.path]])),
       RootManifestUnwritable: (unwritable) => refuse(fields('RootManifestUnwritable', [['path', unwritable.path]])),
       ChangelogUnreadable: (unreadable) => refuse(fields('ChangelogUnreadable', [['path', unreadable.path]])),
       ChangelogUnwritable: (unwritable) =>
@@ -192,6 +194,8 @@ export const renderSyncRefusal = (
       VersionIntentMalformed: (malformed) => refuse(fields('VersionIntentMalformed', [['path', malformed.path]])),
       VersionUnknownPackage: (unknown) => refuse(fields('VersionUnknownPackage', [['package', unknown.package]])),
       VersionSurfaceMissing: (missing) => refuse(fields('VersionSurfaceMissing', [['path', missing.path]])),
+      VersionLockStale: (stale) => refuse(fields('VersionLockStale', [['path', stale.path]])),
+      VersionCargoPackageMissing: (missing) => refuse(fields('VersionCargoPackageMissing', [['path', missing.path]])),
       RootManifestUnwritable: (unwritable) => refuse(fields('RootManifestUnwritable', [['path', unwritable.path]])),
       SchemaError: (schema) => refuse(fields('SchemaError', [['message', schema.message]])),
     }),

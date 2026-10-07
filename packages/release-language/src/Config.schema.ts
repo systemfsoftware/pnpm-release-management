@@ -1,7 +1,7 @@
 import { Effect } from 'effect'
 import * as S from 'effect/Schema'
 import * as SchemaGetter from 'effect/SchemaGetter'
-import { FsPath, GitRef, RelativePath } from './Workspace.schema.js'
+import { FsPath, GitRef, PackageName, RelativePath } from './Workspace.schema.js'
 
 export const TaskName = S.NonEmptyString.pipe(S.brand('TaskName'))
 export type TaskName = S.Schema.Type<typeof TaskName>
@@ -67,13 +67,20 @@ export const TomlSurface = S.Struct({
 })
 export type TomlSurface = S.Schema.Type<typeof TomlSurface>
 
+export const CargoSurface = S.Struct({
+  kind: S.Literal('cargo'),
+  path: RelativePath,
+  package: S.optional(PackageName),
+})
+export type CargoSurface = S.Schema.Type<typeof CargoSurface>
+
 export const NixSurface = S.Struct({
   kind: S.Literal('nix'),
   path: RelativePath,
 })
 export type NixSurface = S.Schema.Type<typeof NixSurface>
 
-export const VersionSurface = S.Union([JsonSurface, TomlSurface, NixSurface])
+export const VersionSurface = S.Union([JsonSurface, TomlSurface, CargoSurface, NixSurface])
 export type VersionSurface = S.Schema.Type<typeof VersionSurface>
 
 export const SurfacesVersioning = S.Struct({
@@ -86,6 +93,9 @@ export type SurfacesVersioning = S.Schema.Type<typeof SurfacesVersioning>
 
 export const PnpmVersioning = S.Struct({
   strategy: S.Literal('pnpm'),
+  surfaces: S.Array(VersionSurface).pipe(
+    S.withDecodingDefault(Effect.succeed([])),
+  ),
 })
 export type PnpmVersioning = S.Schema.Type<typeof PnpmVersioning>
 

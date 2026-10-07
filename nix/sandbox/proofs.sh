@@ -77,16 +77,8 @@ refused "writing outside the project is refused" \
 if [ -e "$outside/written" ]; then fail "nothing lands outside the project"; else pass "nothing lands outside the project"; fi
 
 tmp_canary="/tmp/sandbox-proof-$$-$(date +%s)"
-case "$(uname -s)" in
-  Darwin)
-    refused "writing to the real /tmp is refused" \
-      sandbox -- sh -c "echo $alive; echo escaped > '$tmp_canary'"
-    ;;
-  *)
-    allowed "a write to /tmp lands in the sandbox's private tmpfs" \
-      sandbox -- sh -c "echo escaped > '$tmp_canary' && echo $alive"
-    ;;
-esac
+allowed "a write to /tmp lands in the sandbox's private tmpfs" \
+  sandbox -- sh -c "echo escaped > '$tmp_canary' && echo $alive"
 if [ -e "$tmp_canary" ]; then fail "nothing lands in the host /tmp"; else pass "nothing lands in the host /tmp"; fi
 
 allowed "the project directory is writable" \
@@ -133,21 +125,6 @@ else
   fail "the offline install links the store's package into node_modules"
 fi
 
-if [ "$(uname -s)" = Darwin ]; then
-  bare="$project/tiny-workspace-bare"
-  mkdir -p "$bare"
-  cp -R "@tinyWorkspace@/." "$bare/"
-  chmod -R u+w "$bare"
-  lock_status=0
-  lock_out="$(cd "$bare" && sandbox --pnpm-store '@tinyStore@' -- env -u XDG_RUNTIME_DIR pnpm install 2>&1)" || lock_status=$?
-  if [ "$lock_status" -ne 0 ] && printf '%s\n' "$lock_out" | grep -q ERR_PNPM_STORE_DIR_OPEN_OPERATION_LOCK; then
-    pass "without the private XDG_RUNTIME_DIR the install fails on the /tmp store lock"
-  else
-    printf '%s\n' "$lock_out" | tail -5
-    fail "without the private XDG_RUNTIME_DIR the install fails on the /tmp store lock"
-  fi
-fi
-
 rejects "a malformed --publish is refused" \
   sandbox --publish 70000:1 -- sh -c "echo $alive"
 rejects "a malformed --listen is refused" \
@@ -187,64 +164,27 @@ refused "a declared allow-list refuses every other host" \
 allowed "loopback serves a local dev server" \
   sandbox --listen 4321 -- sh -c 'node -e "require(\"node:http\").createServer((q, s) => s.end(\"'"$alive"'\")).listen(4321, \"127.0.0.1\")" & sleep 1; curl -sS --max-time 5 http://127.0.0.1:4321; echo; kill $!'
 
-case "$(uname -s)" in
-  Linux)
-    sandbox --publish 18080:4321 -- sh -c \
-      "node -e \"require('node:http').createServer((q, s) => s.end('$alive')).listen(4321, '127.0.0.1')\" & node -e \"require('node:http').createServer((q, s) => s.end('$alive')).listen(4322, '127.0.0.1')\" & sleep 30" &
-    sandbox_pid=$!
-    i=0
-    until curl -sS --max-time 2 http://127.0.0.1:18080 2>/dev/null | grep -q "$alive" || [ "$i" -ge 100 ]; do
-      i=$((i + 1))
-      sleep 0.1
-    done
-    if curl -sS --max-time 3 http://127.0.0.1:18080 2>/dev/null | grep -q "$alive"; then
-      pass "a published port answers from the host"
-    else
-      fail "a published port answers from the host"
-    fi
-    if curl -sS --max-time 2 -o /dev/null http://127.0.0.1:4322 2>/dev/null; then
-      fail "an unpublished port does not answer from the host"
-    else
-      pass "an unpublished port does not answer from the host"
-    fi
-    kill "$sandbox_pid" 2>/dev/null || true
-    wait "$sandbox_pid" 2>/dev/null || true
-    sandbox_pid=""
-    ;;
-  Darwin)
-    status=0
-    out="$(timeout --foreground 60 sandbox -- sh -c "echo $alive; exec node -e \"const server = require('node:http').createServer(); server.on('error', (e) => process.exit(e.code === 'EPERM' ? 3 : 6)); server.on('listening', () => process.exit(4)); setTimeout(() => process.exit(5), 10000); server.listen(4322, '127.0.0.1')\"" 2>&1)" || status=$?
-    if [ "$status" -eq 3 ] && printf '%s\n' "$out" | grep -qx "$alive"; then
-      pass "an undeclared macOS bind is refused with EPERM"
-    else
-      printf 'bind proof: exit %s (3 EPERM, 4 listening, 5 no outcome in 10s, 6 other error, 124 launcher timeout)\n%s\n' "$status" "$out" >&2
-      fail "an undeclared macOS bind is refused with EPERM"
-    fi
-    allowed "a --listen port binds on macOS" \
-      timeout --foreground 60 sandbox --listen 4321 -- sh -c "node -e \"require('node:http').createServer((q, s) => s.end('$alive')).listen(4321, '127.0.0.1')\" & sleep 1; curl -sS --max-time 5 http://127.0.0.1:4321; echo; kill \$!"
-    timeout --foreground 90 sandbox --publish 18080:4321 -- sh -c \
-      "node -e \"require('node:http').createServer((q, s) => s.end('$alive')).listen(4321, '127.0.0.1')\" & sleep 30" &
-    sandbox_pid=$!
-    i=0
-    until curl -sS --max-time 2 http://127.0.0.1:18080 2>/dev/null | grep -q "$alive" || [ "$i" -ge 100 ]; do
-      i=$((i + 1))
-      sleep 0.1
-    done
-    if curl -sS --max-time 3 http://127.0.0.1:18080 2>/dev/null | grep -q "$alive"; then
-      pass "a --publish port answers from the host on macOS"
-    else
-      fail "a --publish port answers from the host on macOS"
-    fi
-    kill "$sandbox_pid" 2>/dev/null || true
-    wait "$sandbox_pid" 2>/dev/null || true
-    sandbox_pid=""
-    if curl -sS --max-time 2 -o /dev/null http://127.0.0.1:4321 2>/dev/null || curl -sS --max-time 2 -o /dev/null http://127.0.0.1:18080 2>/dev/null; then
-      fail "a killed launcher leaves no sandboxed server or forwarder running"
-    else
-      pass "a killed launcher leaves no sandboxed server or forwarder running"
-    fi
-    ;;
-esac
+sandbox --publish 18080:4321 -- sh -c \
+  "node -e \"require('node:http').createServer((q, s) => s.end('$alive')).listen(4321, '127.0.0.1')\" & node -e \"require('node:http').createServer((q, s) => s.end('$alive')).listen(4322, '127.0.0.1')\" & sleep 30" &
+sandbox_pid=$!
+i=0
+until curl -sS --max-time 2 http://127.0.0.1:18080 2>/dev/null | grep -q "$alive" || [ "$i" -ge 100 ]; do
+  i=$((i + 1))
+  sleep 0.1
+done
+if curl -sS --max-time 3 http://127.0.0.1:18080 2>/dev/null | grep -q "$alive"; then
+  pass "a published port answers from the host"
+else
+  fail "a published port answers from the host"
+fi
+if curl -sS --max-time 2 -o /dev/null http://127.0.0.1:4322 2>/dev/null; then
+  fail "an unpublished port does not answer from the host"
+else
+  pass "an unpublished port does not answer from the host"
+fi
+kill "$sandbox_pid" 2>/dev/null || true
+wait "$sandbox_pid" 2>/dev/null || true
+sandbox_pid=""
 
 if [ "$failures" -gt 0 ]; then
   echo "$failures sandbox proof(s) failed" >&2

@@ -12,6 +12,7 @@ export {
 } from './Command.schema.js'
 export { ConfigFieldInvalid, ConfigFieldMissing, ConfigMalformed, ConfigUnreadable } from './Config.schema.js'
 export {
+  CargoSurface,
   ConfigField,
   ConfigRefusal,
   Gate,
@@ -114,7 +115,9 @@ export {
   MemberChangelogEntry,
   RootChangelogAppend,
   RootManifestUnwritable,
+  VersionCargoPackageMissing,
   VersionIntentMalformed,
+  VersionLockStale,
   VersionRefusal,
   VersionSurfaceMissing,
   VersionUnknownPackage,
