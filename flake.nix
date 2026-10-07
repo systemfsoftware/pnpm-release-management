@@ -39,15 +39,20 @@
             pnpm = pkgs.pnpm_11;
             hash = "sha256-TbCTYq2ZDJD3REgfZ8P0LAdBfZ8PcuYc6w0H/C2r9+8=";
           };
+          changeset-management = cliApp "changeset-management";
+          version-management = cliApp "version-management";
+          github-release-management = cliApp "github-release-management";
         in workspace // {
           inherit dprint comment-checker-bwrap;
           comment-checker = cc;
           default = dprint;
           inherit sandbox;
           sandbox-proofs = pkgs.callPackage ./nix/sandbox/proofs.nix { inherit sandbox; };
-          changeset-management = cliApp "changeset-management";
-          version-management = cliApp "version-management";
-          github-release-management = cliApp "github-release-management";
+          inherit changeset-management version-management github-release-management;
+          release-tools = pkgs.symlinkJoin {
+            name = "release-tools";
+            paths = [ changeset-management version-management github-release-management ];
+          };
           git-hooks = cliApp "git-hooks";
         });
 
@@ -57,6 +62,7 @@
             self.packages.${pkgs.stdenv.hostPlatform.system}.dprint
             self.packages.${pkgs.stdenv.hostPlatform.system}.comment-checker-bwrap
             self.packages.${pkgs.stdenv.hostPlatform.system}.sandbox
+            self.packages.${pkgs.stdenv.hostPlatform.system}.release-tools
             pkgs.nodejs_24
             pkgs.pnpm_11
             pkgs.deno

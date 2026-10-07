@@ -26,13 +26,17 @@ apps/*/dist/main.js           the tsdown bundles the workflows and the e2e image
 e2e/                          the containerised pipeline test (vitest)
 ```
 
-Apps are Node programs built with tsdown into self-contained ESM bundles, so a
-workflow builds the tools once and runs one directly:
+Apps are Node programs built with tsdown into self-contained ESM bundles, then
+compiled with `deno compile` into one binary each. The flake exports them, and
+`packages.<system>.release-tools` joins the three release apps. A repository
+takes this flake as an input, pinned by its `flake.lock`, and puts
+`release-tools` in its dev shell, so a workflow runs the locked revision without
+installing anything:
 
 ```bash
-pnpm --dir .release-tools install --frozen-lockfile
-pnpm --dir .release-tools build
-node .release-tools/apps/github-release-management/dist/main.js plan --output "$GITHUB_OUTPUT"
+nix develop --command github-release-management plan \
+  --tarballs "$(nix build --no-link --print-out-paths .#workspace-tarballs)" \
+  --output "$GITHUB_OUTPUT"
 ```
 
 Each app is a composition root: `main.ts` declares the `Flag`/`Argument`
@@ -232,15 +236,27 @@ agree on what this cycle owns.
 
 ## CI
 
-| Workflow              | Inputs                                              | Caller must grant                         |
-| --------------------- | --------------------------------------------------- | ----------------------------------------- |
-| `release.yml`         | `tools-ref`, `artifacts-dir`, `node-version`        | `contents: write`, `pull-requests: write` |
-| `changeset-check.yml` | `tools-ref`, `base-sha`, `node-version`, `devshell` | `contents: read`, `pull-requests: read`   |
+| Workflow              | Inputs                                              | Caller must grant                                           |
+| --------------------- | --------------------------------------------------- | ----------------------------------------------------------- |
+| `release.yml`         | `ci-workflow` (required), `artifacts-dir`           | `contents: write`, `pull-requests: write`, `actions: write` |
+| `changeset-check.yml` | `tools-ref`, `base-sha`, `node-version`, `devshell` | `contents: read`, `pull-requests: read`                     |
+
+A pull request opened with the workflow token starts no workflows, so after
+opening or updating the release PR, `release.yml` dispatches the caller's CI
+workflow (`ci-workflow`, which must accept `workflow_dispatch`) on the release
+branch. That gives the release PR the checks the branch protection requires.
+
+`release.yml` runs the apps from the caller's dev shell (`nix develop`). The
+revision is the one the caller's `flake.lock` pins for its
+`pnpm-release-management` input; `nix flake update pnpm-release-management`
+moves it. The caller's `devShells.<system>.default` must provide
+`release-tools`, pnpm, the `sandbox` and `SANDBOX_PNPM_STORE` (see
+[Distribution through Nix](#distribution-through-nix)).
 
 `tools-ref` pins the revision of this repository that a release runs from;
-`@main` tracks the tip. Both workflows check this repository out into
-`.release-tools`, build it with pnpm, and run its `dist/main.js` bundles
-against the caller's workspace.
+`@main` tracks the tip. Without `devshell`, the changeset check checks this
+repository out into `.release-tools`, builds it with pnpm, and runs its
+`dist/main.js` bundles against the caller's workspace.
 
 `devshell: true` makes the changeset check install Nix and run the caller's
 own `bootstrap` script inside its `nix develop` shell
@@ -254,7 +270,8 @@ bubblewrap sandbox can start. A caller needs this mode when its lockfile points
 at tarballs its flake builds, such as `file:.sfs-deps/<name>-<version>.tgz`; a
 plain install cannot read those. With `devshell: true`, `node-version` is
 ignored for the caller's install and check: they use the dev shell's node, and
-`node-version` only selects the node that builds the release tools. The
+the check runs as `nix develop --command sandbox -- changeset-management check`
+from the `release-tools` in that dev shell, so `tools-ref` is ignored too. The
 default, `false`, installs with plain pnpm as before. This repository's own CI
 calls the check with `devshell: true` on every pull request.
 
