@@ -99,8 +99,9 @@ const readLive = (input: {
   Effect.gen(function*() {
     const members = yield* input.workspace.listMembers()
     const tags = yield* input.git.remoteTags(input.remote)
+    const storage = yield* input.workspace.changelogStorage()
     return {
-      entries: dropExcluded(cycleOf(members, tags, input.changelogDir), input.excluded),
+      entries: dropExcluded(cycleOf(members, tags, input.changelogDir, storage), input.excluded),
       issue: undefined,
     }
   })
