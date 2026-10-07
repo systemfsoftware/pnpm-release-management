@@ -30,6 +30,17 @@
           { inherit (ipl) iplConfigHook; } // args
         );
 
+      # The store a consumer's sandbox installs from: the lockfile's registry
+      # packages plus the workspace tarballs it names as `file:` dependencies,
+      # passed as `files` (directory relative to src -> derivation of *.tgz).
+      # `lockFile` is read at evaluation for the registry fetches; pass it apart
+      # from src when src is itself a derivation.
+      lib.mkPnpmConsumerStore = { pkgs, src, pname ? "consumer", pnpm ? pkgs.pnpm_12, files ? { }, lockFile ? src + "/pnpm-lock.yaml" }:
+        (import ./nix/lib/pnpm-store.nix {
+          inherit pkgs src pname pnpm files lockFile;
+          inherit (iplFor pkgs.stdenv.hostPlatform.system) iplConfigHook;
+        }).store;
+
       packages = forEachSystem (pkgs:
         let
           ipl = iplFor pkgs.stdenv.hostPlatform.system;
@@ -71,6 +82,8 @@
             sandbox-proofs-tiny-store
             sandbox-proofs-tiny-store-bumped
             sandbox-proofs-tampered-store
+            sandbox-proofs-consumer-store
+            sandbox-proofs-tiny-lib
             ;
           inherit changeset-management version-management github-release-management;
           release-tools = pkgs.symlinkJoin {

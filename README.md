@@ -322,6 +322,30 @@ request's head revision is a snapshot, and a release tag is a stable version.
 It builds the tarballs it needs and depends on them with `file:` paths, so each
 tarball's integrity lands in the consumer's `pnpm-lock.yaml`.
 
+The consumer's sandbox installs from one store holding both its registry
+packages and those tarballs. A store with only the registry packages fails the
+install: pnpm tries to add the tarball to the read-only store. Build it with
+`lib.mkPnpmConsumerStore`:
+
+```nix
+pnpm-store = pnpm-release-management.lib.mkPnpmConsumerStore {
+  inherit pkgs;
+  src = self; # holds package.json, pnpm-lock.yaml, pnpm-workspace.yaml
+  files.".deps" = producer.packages.${system}.workspace-tarballs;
+};
+```
+
+`files` maps a directory relative to `src` to a derivation holding the
+`*.tgz` the lockfile names there. Third-party tarballs come from per-tarball
+fixed-output fetches as above; the `pnpm` and `@pnpm/exe.*` entries of pnpm
+12's env document are skipped, because the sandbox never lets pnpm fetch
+itself.
+
+Resolving the lockfile is the one step that runs on the host: `pnpm install
+--lockfile-only` needs registry metadata, which no store carries. It reads
+metadata only and runs no package code. Every install, build and test after it
+runs in the sandbox.
+
 ## Release identity
 
 A released `name@version` is immutable. The tarball a consumer downloads once is
@@ -473,7 +497,10 @@ pnpm never reaches a registry from the sandbox. `--pnpm-store` (the dev shell
 sets `SANDBOX_PNPM_STORE` to `packages.<system>.pnpm-store`) points pnpm at the
 Nix-built store. The sandbox then runs pnpm with `offline`, `frozen-lockfile`,
 `ignore-scripts` and `trust-lockfile`; the per-tarball fixed-output fetches
-already checked each integrity. Each invocation gets a private copy of the store's index database
+already checked each integrity. pnpm never fetches another pnpm either
+(`manage-package-manager-versions` is off), so the launcher refuses a project
+whose `packageManager` names a different pnpm major.minor than the one on
+`PATH`; a patch-level difference runs with the pnpm provided. Each invocation gets a private copy of the store's index database
 that is discarded at exit, so the Nix store stays read-only. `$HOME` is a fresh
 tmpfs every time, so nothing a dependency plants survives. Tool caches that
 should persist (turbo, vite, `tsbuildinfo`) belong in the project's gitignored
@@ -520,7 +547,11 @@ writing outside the project fails, a write to the real `/tmp` leaves nothing on
 the host, agent sockets and secrets do not cross the cleared environment, a
 store path outside the closure and the listing of `/nix/store` both fail while a
 closure tool still runs and an offline `pnpm` 12 install of a tiny workspace
-resolves from the `--pnpm-store` store, `--egress-log` records exactly the
+resolves from the `--pnpm-store` store, a consumer installs a `file:` workspace
+tarball from its `mkPnpmConsumerStore` store while a store without that tarball
+fails, a `packageManager` pin on another pnpm minor is refused while one on
+another patch installs offline (and fails once pnpm manages its version),
+`--egress-log` records exactly the
 allowed and refused decisions and refuses a log inside the project, an
 undeclared connection fails, a declared host is reachable while every other host
 is refused, a loopback dev server still answers, and a published port answers

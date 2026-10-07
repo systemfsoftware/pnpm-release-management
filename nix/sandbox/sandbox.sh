@@ -82,6 +82,24 @@ project="$(cd "$project" && pwd -P)"
 cwd="$(pwd -P)"
 case "$cwd/" in "$project"/*) ;; *) cwd="$project" ;; esac
 
+pnpm_root=""
+dir="$cwd"
+while :; do
+  if [ -f "$dir/pnpm-workspace.yaml" ]; then pnpm_root="$dir"; break; fi
+  if [ -z "$pnpm_root" ] && [ -f "$dir/package.json" ]; then pnpm_root="$dir"; fi
+  [ "$dir" = "$project" ] || [ "$dir" = / ] && break
+  dir="$(dirname "$dir")"
+done
+if [ -n "$pnpm_root" ] && command -v pnpm >/dev/null 2>&1; then
+  pinned="$("@node@" -e 'const m = /^pnpm@(\d+\.\d+)\./.exec(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).packageManager ?? ""); process.stdout.write(m ? m[1] : "")' "$pnpm_root/package.json")"
+  provided="$(cd / && pnpm_config_manage_package_manager_versions=false pnpm --version)"
+  provided_minor="${provided%.*}"
+  if [ -n "$pinned" ] && [ "$pinned" != "$provided_minor" ]; then
+    echo "sandbox: $pnpm_root/package.json pins pnpm $pinned.x but the pnpm on PATH is $provided; pin the pnpm the sandbox provides (packageManager \"pnpm@$provided\")" >&2
+    exit 2
+  fi
+fi
+
 work="$(mktemp -d "${TMPDIR:-/tmp}/sandbox.XXXXXX")"
 work="$(cd "$work" && pwd -P)"
 proxy_pid=""
@@ -175,6 +193,7 @@ envs=(
   NODE_EXTRA_CA_CERTS="@caBundle@"
   SANDBOX=1
   XDG_CACHE_HOME="$project/.cache"
+  pnpm_config_manage_package_manager_versions=false
 )
 for name in "${pass[@]}"; do
   if [ -n "${!name+x}" ]; then envs+=("$name=${!name}"); fi
