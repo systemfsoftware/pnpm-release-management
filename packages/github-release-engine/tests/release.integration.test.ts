@@ -693,6 +693,126 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
   }
 
   {
+    const members = [member('alpha', '1.1.0')]
+    const changelog = {
+      'packages/alpha/CHANGELOG.md': '# alpha\n\n## 1.1.0\n\n- new\n\n## 1.0.0\n\n- old\n',
+    }
+    const workspace = makeFakeWorkspaceStore({ members, files: changelog, storage: 'repository' })
+    const git = makeFakeGit({ tags: [] })
+    const cycles = makeFakeCycleStore()
+    const forge = makeFakeForge()
+    const live = Layer.mergeAll(workspace, git, cycles.layer, forge.layer)
+    scenario(
+      'Under repository storage the release body is the version section of the package changelog',
+      { scenarioLayer: live },
+      Gherkin.Do.pipe(
+        Given('a package whose own CHANGELOG.md holds this version and an older one')(
+          'input',
+          () => Effect.succeed({ assert: false, dryRun: false, changelogDir }),
+        ),
+        When('creating the releases')(
+          'outcome',
+          (s) =>
+            Effect.match(Cell.run(Cell.provide(githubReleaseCell, live), s.input), {
+              onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
+              onSuccess: (value) => ({ _tag: 'decided' as const, value }),
+            }),
+        ),
+        Then('the release body is that version section alone')((s) => {
+          Match.value(s.outcome).pipe(
+            Match.tag('decided', () => {
+              expect(forge.calls.created.length).toEqual(1)
+              expect(forge.calls.created[0]?.body).toEqual('## 1.1.0\n\n- new')
+            }),
+            Match.tag('refused', () => failUnexpected('expected a release decision')),
+            Match.exhaustive,
+          )
+        }),
+      ),
+    )
+  }
+
+  {
+    const members = [member('alpha', '1.1.0')]
+    const changelog = { 'packages/alpha/CHANGELOG.md': '# alpha\n\n## 1.0.0\n\n- old\n' }
+    const workspace = makeFakeWorkspaceStore({ members, files: changelog, storage: 'repository' })
+    const git = makeFakeGit({ tags: [] })
+    const cycles = makeFakeCycleStore()
+    const forge = makeFakeForge()
+    const live = Layer.mergeAll(workspace, git, cycles.layer, forge.layer)
+    scenario(
+      'Under repository storage a changelog without the version section refuses the release',
+      { scenarioLayer: live },
+      Gherkin.Do.pipe(
+        Given('a package whose CHANGELOG.md has no section for its version')(
+          'input',
+          () => Effect.succeed({ assert: false, dryRun: false, changelogDir }),
+        ),
+        When('creating the releases')(
+          'outcome',
+          (s) =>
+            Effect.match(Cell.run(Cell.provide(githubReleaseCell, live), s.input), {
+              onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
+              onSuccess: (value) => ({ _tag: 'decided' as const, value }),
+            }),
+        ),
+        Then('the refusal names the package, version and changelog, and nothing is created')((s) => {
+          Match.value(s.outcome).pipe(
+            Match.tag('refused', (refused) => {
+              Match.value(refused.refusal).pipe(
+                Match.tag('ReleaseChangelogMissing', (missing) => {
+                  expect(missing.package).toEqual(PackageName.make('alpha'))
+                  expect(missing.version).toEqual(PackageVersion.make('1.1.0'))
+                  expect(missing.changelog).toEqual(RelativePath.make('packages/alpha/CHANGELOG.md'))
+                }),
+                Match.orElse((other) => failUnexpected(`expected ReleaseChangelogMissing, got ${other._tag}`)),
+              )
+              expect(forge.calls.created.length).toEqual(0)
+            }),
+            Match.tag('decided', () => failUnexpected('expected refused')),
+            Match.exhaustive,
+          )
+        }),
+      ),
+    )
+  }
+
+  {
+    const members = [member('alpha', '1.0.0')]
+    const workspace = makeFakeWorkspaceStore({ members, files: {}, storage: 'repository' })
+    const git = makeFakeGit({ tags: [] })
+    const cycles = makeFakeCycleStore()
+    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball())
+    scenario(
+      'Under repository storage the captured cycle points at the package changelog',
+      { scenarioLayer: live },
+      Gherkin.Do.pipe(
+        Given('an owed package with an output file requested')(
+          'input',
+          () =>
+            Effect.succeed({
+              tarballs: FsPath.make('tarballs'),
+              dryRun: false,
+              json: false,
+              changelogDir,
+              output: FsPath.make('out.json'),
+            }),
+        ),
+        When('tagging the cycle')('outcome', (s) =>
+          Effect.match(Cell.run(Cell.provide(tagCell, live), s.input), {
+            onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
+            onSuccess: (value) => ({ _tag: 'decided' as const, value }),
+          })),
+        Then('the captured entry names packages/alpha/CHANGELOG.md, not a parked file')(() => {
+          expect(cycles.written.captured[0]?.entries.map((entry) => entry.changelog)).toEqual(
+            [RelativePath.make('packages/alpha/CHANGELOG.md')],
+          )
+        }),
+      ),
+    )
+  }
+
+  {
     const members = [member('alpha', '1.0.0')]
     const changelog = { [changelogFor('alpha', '1.0.0')]: '## 1.0.0\n- fix' }
     const workspace = makeFakeWorkspaceStore({ members, files: changelog })

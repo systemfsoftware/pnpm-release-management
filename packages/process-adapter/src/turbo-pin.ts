@@ -11,32 +11,36 @@ const CONTEXT = 'change-evidence'
 
 const pinUnusable = (reason: string): TurboPinUnusable => new TurboPinUnusable({ detail: `${CONTEXT}: ${reason}` })
 
+const lockfileDocuments = (lockfileText: string): ReadonlyArray<string> =>
+  lockfileText.split(/^---[ \t]*$/m).filter((document) => document.trim() !== '')
+
+const turboPins = (document: string): ReadonlyArray<string> => {
+  const decoded = S.decodeUnknownResult(PnpmLockfile)(Yaml.parse(document))
+  if (Result.isFailure(decoded)) {
+    return []
+  }
+  const entry = decoded.success.importers['.']?.devDependencies?.['turbo']
+  if (entry === undefined) {
+    return []
+  }
+  return [entry.version]
+}
+
 const pinFromLockfile = (
   lockfileText: string,
 ): Result.Result<string, TurboPinUnusable> => {
-  const decoded = S.decodeUnknownResult(PnpmLockfile)(Yaml.parse(lockfileText))
-  if (Result.isFailure(decoded)) {
+  const [pin, ...others] = lockfileDocuments(lockfileText).flatMap(turboPins)
+  if (pin === undefined) {
     return Result.fail(
-      pinUnusable(
-        `${LOCKFILE} is not the lockfileVersion 9.0 document the turbo pin is read from`,
-      ),
+      pinUnusable(`no lockfileVersion 9.0 document in ${LOCKFILE} pins 'turbo' as a root devDependency`),
     )
   }
-  const rootImporter = decoded.success.importers['.']
-  if (rootImporter === undefined) {
+  if (others.length > 0) {
     return Result.fail(
-      pinUnusable(`${LOCKFILE} declares no root importer`),
+      pinUnusable(`${others.length + 1} documents in ${LOCKFILE} pin 'turbo' as a root devDependency`),
     )
   }
-  const entry = rootImporter.devDependencies?.['turbo']
-  if (entry === undefined) {
-    return Result.fail(
-      pinUnusable(
-        `no 'turbo' devDependency in the root importer of ${LOCKFILE}`,
-      ),
-    )
-  }
-  return Result.succeed(entry.version)
+  return Result.succeed(pin)
 }
 
 export const turboPin = (

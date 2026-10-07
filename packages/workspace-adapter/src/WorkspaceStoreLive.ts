@@ -1,4 +1,5 @@
 import {
+  type ChangelogStorage,
   FsPath,
   ManifestInvalid,
   ManifestUnreadable,
@@ -20,7 +21,9 @@ import { readTextFile } from './StoreFile.js'
 import { ManifestText, WorkspaceListing } from './Workspace.schema.js'
 
 const MANIFEST_FILE = 'package.json'
+const WORKSPACE_FILE = 'pnpm-workspace.yaml'
 const LIST_ARGS = ['ls', '-r', '--json', '--depth=-1']
+const STORAGE_ARGS = ['config', 'get', 'versioning.changelog.storage']
 
 const unreadable = (path: FsPath): MemberRefusal => ManifestUnreadable.make({ path })
 const invalid = (path: FsPath, reason: string): MemberRefusal => ManifestInvalid.make({ path, reason })
@@ -45,14 +48,24 @@ export const WorkspaceStoreLive = (
           )
         })
 
+      const runPnpm = (
+        args: ReadonlyArray<string>,
+      ): Effect.Effect<{ readonly code: number; readonly stdout: string; readonly stderr: string }, MemberRefusal> =>
+        Effect.scoped(
+          Effect.flatMap(
+            spawner.spawn(ChildProcess.make('pnpm', args, { cwd: root })),
+            (handle) =>
+              Effect.all({
+                code: handle.exitCode,
+                stdout: Stream.mkString(Stream.decodeText(handle.stdout)),
+                stderr: Stream.mkString(Stream.decodeText(handle.stderr)),
+              }, { concurrency: 'unbounded' }),
+          ),
+        ).pipe(Effect.mapError(() => unreadable(rootFs)))
+
       const listMembers = (): Effect.Effect<ReadonlyArray<Member>, MemberRefusal> =>
         Effect.gen(function*() {
-          const [code, stdout] = yield* Effect.scoped(
-            Effect.flatMap(
-              spawner.spawn(ChildProcess.make('pnpm', LIST_ARGS, { cwd: root })),
-              (handle) => Effect.all([handle.exitCode, Stream.mkString(Stream.decodeText(handle.stdout))]),
-            ),
-          ).pipe(Effect.mapError(() => unreadable(rootFs)))
+          const { code, stdout } = yield* runPnpm(LIST_ARGS)
           if (code !== 0) {
             return yield* Effect.fail(unreadable(rootFs))
           }
@@ -83,6 +96,21 @@ export const WorkspaceStoreLive = (
         )
       }
 
-      return { root, listMembers, readManifest, readFileFromRoot }
+      const changelogStorage = (): Effect.Effect<ChangelogStorage, MemberRefusal> =>
+        Effect.flatMap(runPnpm(STORAGE_ARGS), ({ code, stdout, stderr }) => {
+          const workspaceFile = FsPath.make(path.join(root, WORKSPACE_FILE))
+          const value = stdout.trim()
+          if (code !== 0) return Effect.fail(invalid(workspaceFile, `${stderr}${stdout}`.trim()))
+          if (value === 'repository') return Effect.succeed('repository' as const)
+          if (value === 'registry' || value === 'undefined') return Effect.succeed('registry' as const)
+          return Effect.fail(
+            invalid(
+              workspaceFile,
+              `versioning.changelog.storage is ${JSON.stringify(value)}; expected "registry" or "repository"`,
+            ),
+          )
+        })
+
+      return { root, listMembers, readManifest, readFileFromRoot, changelogStorage }
     }),
   )
