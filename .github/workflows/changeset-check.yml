@@ -29,6 +29,9 @@ jobs:
       - name: Install through the sandbox, offline from the Nix pnpm store
         run: nix develop --command sandbox -- pnpm install
 
+      - name: Install the caller's workspace
+        run: pnpm install --frozen-lockfile
+
       - name: Require an intent for every publishable-package change
         env:
           BASE_SHA: ${{ inputs.base-sha || github.event.pull_request.base.sha }}
