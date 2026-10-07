@@ -288,10 +288,11 @@ case "$(uname -s)" in
     ;;
   Darwin)
     status=0
-    out="$(timeout --foreground 60 sandbox -- sh -c "echo $alive; node -e \"require('node:http').createServer().on('error', (e) => { console.log(e.code); process.exit(3) }).listen(4322, '127.0.0.1')\"")" || status=$?
-    if [ "$status" -eq 3 ] && printf '%s\n' "$out" | grep -qx "$alive" && printf '%s\n' "$out" | grep -qx EPERM; then
+    out="$(timeout --foreground 60 sandbox -- sh -c "echo $alive; exec node -e \"const server = require('node:http').createServer(); server.on('error', (e) => process.exit(e.code === 'EPERM' ? 3 : 6)); server.on('listening', () => process.exit(4)); setTimeout(() => process.exit(5), 10000); server.listen(4322, '127.0.0.1')\"" 2>&1)" || status=$?
+    if [ "$status" -eq 3 ] && printf '%s\n' "$out" | grep -qx "$alive"; then
       pass "an undeclared macOS bind is refused with EPERM"
     else
+      printf 'bind proof: exit %s (3 EPERM, 4 listening, 5 no outcome in 10s, 6 other error, 124 launcher timeout)\n%s\n' "$status" "$out" >&2
       fail "an undeclared macOS bind is refused with EPERM"
     fi
     allowed "a --listen port binds on macOS" \

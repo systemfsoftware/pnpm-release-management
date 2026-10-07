@@ -291,6 +291,7 @@ const workspaceLayer = (members: ReadonlyArray<Member>) =>
       return Effect.succeed(PackageManifest.make({ name: member.name, version: member.manifest.version }))
     },
     readFileFromRoot: () => Effect.fail(ManifestUnreadable.make({ path: FsPath.make('/') })),
+    changelogStorage: () => Effect.succeed('registry' as const),
   })
 
 const changesetsLayer = Layer.succeed(ChangesetsPort, {

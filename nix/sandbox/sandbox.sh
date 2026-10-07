@@ -368,7 +368,7 @@ done
         ';;CLOSURE_READ;;') printf '(allow file-read* %s)\n' "$closure_read" ;;
         ';;CLOSURE_EXEC;;') printf '(allow file-map-executable %s)\n' "$closure_exec" ;;
         ';;BIND;;')
-          if [ -n "$bind_ports" ]; then printf '(allow network-bind %s)\n' "$bind_ports"; fi
+          if [ -n "$bind_ports" ]; then printf '(allow network-bind network-inbound %s)\n' "$bind_ports"; fi
           ;;
         ';;GIT;;')
           if [ -n "$git_read_write" ]; then printf '(allow file-read* file-write* %s)\n' "$git_read_write"; fi
