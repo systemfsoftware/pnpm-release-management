@@ -15,28 +15,45 @@ const VersionTarget = S.Struct({
   surface: VersionSurface,
 })
 
-export const BumpInput = S.Struct({
-  strategy: S.Literals(['pnpm', 'surfaces']),
+const PnpmInput = S.Struct({
+  strategy: S.Literal('pnpm'),
+  changelogDir: RelativePath,
+})
+
+const SurfacesInput = S.Struct({
+  strategy: S.Literal('surfaces'),
   changelogDir: RelativePath,
   rootChangelog: S.optional(RelativePath),
   manifest: VersionTarget,
   surfaces: S.Array(VersionTarget),
 })
+
+export const BumpInput = S.Union([PnpmInput, SurfacesInput])
 export type BumpInput = S.Schema.Type<typeof BumpInput>
+
+const PnpmVersioning = S.Struct({
+  strategy: S.Literal('pnpm'),
+})
+
+const SurfacesVersioning = S.Struct({
+  strategy: S.Literal('surfaces'),
+  manifest: VersionTarget,
+  surfaces: S.Array(VersionTarget),
+  rootChangelog: S.optional(RelativePath),
+  consolidatedNext: PackageVersion,
+})
+export type SurfacesVersioning = S.Schema.Type<typeof SurfacesVersioning>
+
+const CommandVersioning = S.Union([PnpmVersioning, SurfacesVersioning])
 
 export class BumpCommand extends S.TaggedClass<BumpCommand>()(
   'BumpCommand',
   {
-    strategy: S.Literals(['pnpm', 'surfaces']),
+    versioning: CommandVersioning,
     intents: S.Array(Intent),
     members: S.Array(Member),
-    manifestVersion: PackageVersion,
     changelogDir: RelativePath,
-    rootChangelog: S.optional(RelativePath),
-    manifest: VersionTarget,
-    surfaces: S.Array(VersionTarget),
     consolidated: Bump,
-    consolidatedNext: PackageVersion,
     nexts: S.Array(S.Struct({
       name: PackageName,
       next: PackageVersion,

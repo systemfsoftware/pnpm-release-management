@@ -1,12 +1,14 @@
 import { it } from '@effect/vitest'
-import { type Bump, Intent, Member } from '@systemfsoftware/release-language'
+import { type Bump, Intent, Member, RelativePath } from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
+import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import * as fc from 'effect/testing/FastCheck'
-import { deriveBump } from '../bump-derive.js'
+import { derivePnpmBump, deriveSurfacesBump } from '../bump-derive.js'
 import { bumpVersions } from '../bump-versions.workflow.js'
-import { BumpCommand } from '../bump.schema.js'
+import { commandOf } from '../bump.js'
+import type { BumpCommand } from '../bump.schema.js'
 
 const RANK_ORDER: Record<string, number> = { none: 0, patch: 1, minor: 2, major: 3 }
 
@@ -63,42 +65,53 @@ type PlainIntent = {
   readonly summary: string
 }
 
-const toCommand = (input: {
-  readonly strategy: 'pnpm' | 'surfaces'
+type CommandInput = {
   readonly intents: ReadonlyArray<unknown>
   readonly members: ReadonlyArray<unknown>
-  readonly manifestVersion: string
   readonly changelogDir: string
-  readonly rootChangelog?: string
-}): BumpCommand => {
+}
+
+const toCommand = (
+  input:
+    | CommandInput & { readonly strategy: 'pnpm' }
+    | CommandInput & {
+      readonly strategy: 'surfaces'
+      readonly manifestVersion: string
+      readonly rootChangelog?: string
+    },
+): BumpCommand => {
   const intents = S.decodeUnknownSync(S.Array(Intent))(input.intents)
   const members = S.decodeUnknownSync(S.Array(Member))(input.members)
-  const derived = deriveBump({
+  const changelogDir = RelativePath.make(input.changelogDir)
+  if (input.strategy === 'pnpm') {
+    const derived = derivePnpmBump({ intents, members, changelogDir: input.changelogDir })
+    return commandOf({ versioning: { strategy: 'pnpm' }, intents, members, changelogDir, derived })
+  }
+  const derived = deriveSurfacesBump({
     intents,
     members,
-    strategy: input.strategy,
-    manifestVersion: input.manifestVersion,
     changelogDir: input.changelogDir,
+    manifestVersion: input.manifestVersion,
   })
-  return S.decodeUnknownSync(BumpCommand)({
-    _tag: 'BumpCommand',
-    strategy: input.strategy,
+  const rootChangelog = Option.map(
+    Option.fromNullishOr(input.rootChangelog),
+    (path) => RelativePath.make(path),
+  )
+  return commandOf({
+    versioning: {
+      strategy: 'surfaces',
+      manifest: {
+        file: RelativePath.make('package.json'),
+        surface: { kind: 'json', path: RelativePath.make('package.json') },
+      },
+      surfaces: [],
+      rootChangelog: Option.getOrUndefined(rootChangelog),
+      consolidatedNext: derived.consolidatedNext,
+    },
     intents,
     members,
-    manifestVersion: input.manifestVersion,
-    changelogDir: input.changelogDir,
-    rootChangelog: input.rootChangelog,
-    manifest: { file: 'package.json', surface: { kind: 'json', path: 'package.json' } },
-    surfaces: [],
-    consolidated: derived.consolidated,
-    consolidatedNext: derived.consolidatedNext,
-    nexts: derived.nexts,
-    moved: derived.moved,
-    changelogPaths: derived.changelogPaths,
-    packageRanks: derived.packages,
-    unknownPackage: derived.unknownPackage,
-    malformedPath: derived.malformedPath,
-    intentCount: derived.intentCount,
+    changelogDir,
+    derived,
   })
 }
 
@@ -169,15 +182,15 @@ it.prop(
 )
 it.prop(
   '∀cmd_BumpVersions_⊥UnknownSucceeds',
-  [membersArb, versionArb, relativePathArb, summaryArb],
-  ([members, manifestVersion, changelogDir, summary]) => {
+  [membersArb, relativePathArb, summaryArb],
+  ([members, changelogDir, summary]) => {
     const foreign = `${'a'.repeat(30)}-unknown`
     const intents: ReadonlyArray<PlainIntent> = [{
       path: 'changeset/foreign.md',
       packages: [{ name: foreign, bump: 'minor' }],
       summary,
     }]
-    const command = toCommand({ strategy: 'pnpm', intents, members, manifestVersion, changelogDir })
+    const command = toCommand({ strategy: 'pnpm', intents, members, changelogDir })
     const outcome = bumpVersions(command)
     if (Result.isSuccess(outcome)) {
       return false
@@ -191,10 +204,10 @@ it.prop(
 
 it.prop(
   '∀cmd_BumpVersions_⊥EmptySucceeds',
-  [membersArb, versionArb, relativePathArb, summaryArb, relativePathArb],
-  ([members, manifestVersion, changelogDir, summary, emptyPath]) => {
+  [membersArb, relativePathArb, summaryArb, relativePathArb],
+  ([members, changelogDir, summary, emptyPath]) => {
     const intents: ReadonlyArray<PlainIntent> = [{ path: emptyPath, packages: [], summary }]
-    const command = toCommand({ strategy: 'pnpm', intents, members, manifestVersion, changelogDir })
+    const command = toCommand({ strategy: 'pnpm', intents, members, changelogDir })
     const outcome = bumpVersions(command)
     if (Result.isSuccess(outcome)) {
       return false
@@ -277,8 +290,8 @@ it.prop(
 
 it.prop(
   '∀cmd_BumpVersions_≡HighestNext',
-  [membersArb, versionArb, relativePathArb, summaryArb],
-  ([members, manifestVersion, changelogDir, summary]) => {
+  [membersArb, relativePathArb, summaryArb],
+  ([members, changelogDir, summary]) => {
     const ranks = members.map((_, index): Bump => {
       if (index % 2 === 0) {
         return 'minor'
@@ -290,7 +303,7 @@ it.prop(
       packages: [{ name: member.name, bump: ranks[index] ?? 'patch' }],
       summary,
     }))
-    const command = toCommand({ strategy: 'pnpm', intents, members, manifestVersion, changelogDir })
+    const command = toCommand({ strategy: 'pnpm', intents, members, changelogDir })
     const outcome = bumpVersions(command)
     if (Result.isFailure(outcome)) {
       return false

@@ -103,15 +103,13 @@ const targetsOf = (release: ReleaseConfig): VersionTargets => {
 
 export const bumpRequestOf = (release: ReleaseConfig): BumpInput => {
   const { versioning } = release
-  const targets = targetsOf(release)
   if (versioning.strategy === 'pnpm') {
     return {
       strategy: 'pnpm',
       changelogDir: release.changelogDir,
-      manifest: targets.manifest,
-      surfaces: targets.surfaces,
     }
   }
+  const targets = targetsOf(release)
   return {
     strategy: 'surfaces',
     changelogDir: release.changelogDir,

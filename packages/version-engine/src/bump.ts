@@ -6,12 +6,15 @@ import {
   CommandArg,
   CommandName,
   type CommandRefusal,
+  type Intent,
   type IntentRefusal,
+  type Member,
   type MemberRefusal,
   type PackageManifest,
   type PackageName,
   type PackageVersion,
   ProcessPort,
+  RelativePath,
   SurfaceStore,
   type VersionRefusal,
   WorkspaceStore,
@@ -19,10 +22,38 @@ import {
 import { Effect } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
-import { deriveBump, rootBulletsOf, summaryForPackage } from './bump-derive.js'
+import {
+  derivePnpmBump,
+  deriveSurfacesBump,
+  type PnpmBumpDerivation,
+  rootBulletsOf,
+  summaryForPackage,
+} from './bump-derive.js'
 import type { VersionBumped, VersionDecision } from './bump-versions.workflow.js'
 import { bumpVersions } from './bump-versions.workflow.js'
-import { BumpCommand, type BumpInput } from './bump.schema.js'
+import { BumpCommand, type BumpInput, type SurfacesVersioning } from './bump.schema.js'
+
+export const commandOf = (args: {
+  readonly versioning: BumpCommand['versioning']
+  readonly intents: ReadonlyArray<Intent>
+  readonly members: ReadonlyArray<Member>
+  readonly changelogDir: RelativePath
+  readonly derived: PnpmBumpDerivation
+}): BumpCommand =>
+  BumpCommand.make({
+    versioning: args.versioning,
+    intents: [...args.intents],
+    members: [...args.members],
+    changelogDir: args.changelogDir,
+    consolidated: args.derived.consolidated,
+    nexts: args.derived.nexts,
+    moved: args.derived.moved,
+    changelogPaths: args.derived.changelogPaths,
+    packageRanks: args.derived.packages,
+    unknownPackage: args.derived.unknownPackage,
+    malformedPath: args.derived.malformedPath,
+    intentCount: args.derived.intentCount,
+  })
 
 const read = (
   request: BumpInput,
@@ -38,35 +69,42 @@ const read = (
     const paths = yield* changesets.listIntents()
     const intents = yield* Effect.forEach(paths, (path) => changesets.readIntent(path))
     const members = yield* workspace.listMembers()
+    if (request.strategy === 'pnpm') {
+      const derived = derivePnpmBump({
+        intents,
+        members,
+        changelogDir: request.changelogDir,
+      })
+      return commandOf({
+        versioning: { strategy: 'pnpm' },
+        intents,
+        members,
+        changelogDir: request.changelogDir,
+        derived,
+      })
+    }
     const manifestVersion = yield* surfaces.readSurface(
       request.manifest.file,
       request.manifest.surface,
     )
-    const derived = deriveBump({
+    const derived = deriveSurfacesBump({
       intents,
       members,
-      strategy: request.strategy,
-      manifestVersion,
       changelogDir: request.changelogDir,
+      manifestVersion,
     })
-    return BumpCommand.make({
-      strategy: request.strategy,
-      intents: [...intents],
-      members: [...members],
-      manifestVersion,
+    return commandOf({
+      versioning: {
+        strategy: 'surfaces',
+        manifest: request.manifest,
+        surfaces: [...request.surfaces],
+        rootChangelog: request.rootChangelog,
+        consolidatedNext: derived.consolidatedNext,
+      },
+      intents,
+      members,
       changelogDir: request.changelogDir,
-      rootChangelog: request.rootChangelog,
-      manifest: request.manifest,
-      surfaces: [...request.surfaces],
-      consolidated: derived.consolidated,
-      consolidatedNext: derived.consolidatedNext,
-      nexts: derived.nexts,
-      moved: derived.moved,
-      changelogPaths: derived.changelogPaths,
-      packageRanks: derived.packages,
-      unknownPackage: derived.unknownPackage,
-      malformedPath: derived.malformedPath,
-      intentCount: derived.intentCount,
+      derived,
     })
   })
 
@@ -80,27 +118,29 @@ const commandVersionOf = (
   return manifest.version
 }
 
-const writeMemberChangelogs = (
-  command: BumpCommand,
-  moved: ReadonlyArray<PackageName>,
-  versionOf: (name: PackageName) => PackageVersion,
-): Effect.Effect<void, ChangelogRefusal, ChangelogStore> =>
+const writeMemberChangelogs = (args: {
+  readonly changelogDir: RelativePath
+  readonly intents: ReadonlyArray<Intent>
+  readonly moved: ReadonlyArray<PackageName>
+  readonly versionOf: (name: PackageName) => PackageVersion
+}): Effect.Effect<void, ChangelogRefusal, ChangelogStore> =>
   Effect.gen(function*() {
     const changelogs = yield* ChangelogStore
     yield* Effect.forEach(
-      moved,
+      args.moved,
       (name) =>
         changelogs.writeMemberChangelog({
-          changelogDir: command.changelogDir,
+          changelogDir: args.changelogDir,
           name,
-          version: versionOf(name),
-          summary: summaryForPackage(command.intents, name),
+          version: args.versionOf(name),
+          summary: summaryForPackage(args.intents, name),
         }),
       { discard: true },
     )
   })
 
 const writeSurfaces = (
+  versioning: SurfacesVersioning,
   command: BumpCommand,
   bumped: VersionBumped,
 ): Effect.Effect<void, VersionRefusal | ChangelogRefusal, SurfaceStore | ChangelogStore> =>
@@ -108,23 +148,28 @@ const writeSurfaces = (
     const surfaces = yield* SurfaceStore
     const changelogs = yield* ChangelogStore
     yield* surfaces.writeSurface(
-      command.manifest.file,
-      command.manifest.surface,
+      versioning.manifest.file,
+      versioning.manifest.surface,
       bumped.version,
     )
     yield* Effect.forEach(
-      command.surfaces,
+      versioning.surfaces,
       (surface) => surfaces.writeSurface(surface.file, surface.surface, bumped.version),
       { discard: true },
     )
-    if (command.rootChangelog !== undefined) {
+    if (versioning.rootChangelog !== undefined) {
       yield* changelogs.appendReleaseSummary({
-        path: command.rootChangelog,
+        path: versioning.rootChangelog,
         version: bumped.version,
         summary: rootBulletsOf(command.intents),
       })
     }
-    yield* writeMemberChangelogs(command, bumped.moved, () => bumped.version)
+    yield* writeMemberChangelogs({
+      changelogDir: command.changelogDir,
+      intents: command.intents,
+      moved: bumped.moved,
+      versionOf: () => bumped.version,
+    })
   })
 
 const writePnpm = (
@@ -148,11 +193,12 @@ const writePnpm = (
       members,
       (member) => workspace.readManifest(member.dir),
     )
-    yield* writeMemberChangelogs(
-      command,
-      bumped.moved,
-      (name) => commandVersionOf(manifests, name, bumped.version),
-    )
+    yield* writeMemberChangelogs({
+      changelogDir: command.changelogDir,
+      intents: command.intents,
+      moved: bumped.moved,
+      versionOf: (name) => commandVersionOf(manifests, name, bumped.version),
+    })
   })
 
 const applyBumped = (
@@ -163,7 +209,9 @@ const applyBumped = (
   VersionRefusal | ChangelogRefusal | MemberRefusal | CommandRefusal,
   ChangelogStore | SurfaceStore | ProcessPort | WorkspaceStore
 > => {
-  if (command.strategy === 'surfaces') return writeSurfaces(command, bumped)
+  if (command.versioning.strategy === 'surfaces') {
+    return writeSurfaces(command.versioning, command, bumped)
+  }
   return writePnpm(command, bumped)
 }
 

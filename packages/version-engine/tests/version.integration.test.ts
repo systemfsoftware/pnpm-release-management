@@ -177,9 +177,7 @@ Feature('Versioning packages').body(({ scenario }) => {
       { name: 'a', version: '1.2.3' },
       { name: 'b', version: '0.1.0' },
     ])
-    const surfaces = makeFakeSurfaceStore(
-      new Map([[brandPath('package.json'), brandVersion('1.2.3')]]),
-    )
+    const surfaces = makeFakeSurfaceStore()
     const workspace = makeFakeWorkspaceStore(members, brandRoot('/test'))
     const changesets = makeFakeChangesetStore(
       new Map(
@@ -217,7 +215,7 @@ Feature('Versioning packages').body(({ scenario }) => {
       Gherkin.Do.pipe(
         Given('two releasable packages with a manager that applies patch moves')(
           'input',
-          () => Effect.succeed(bumpInputOf({ strategy: 'pnpm', changelogDir: 'changelog', ...surfacesInput })),
+          () => Effect.succeed(bumpInputOf({ strategy: 'pnpm', changelogDir: 'changelog' })),
         ),
         When('the pending intents are versioned per package')(
           'outcome',
@@ -247,6 +245,88 @@ Feature('Versioning packages').body(({ scenario }) => {
                 Match.exhaustive,
               )),
             Match.tag('refused', () => failUnexpected('expected a version decision')),
+            Match.exhaustive,
+          )
+        }),
+      ),
+    )
+  }
+
+  {
+    const members = membersOf([{ name: 'a', version: '1.2.3' }])
+    const surfaces = makeFakeSurfaceStore(new Map(), new Set([brandPath('package.json')]))
+    const workspace = makeFakeWorkspaceStore(members, brandRoot('/test'))
+    const changesets = makeFakeChangesetStore(
+      new Map(
+        intentsOf([{ path: '.changeset/a-patch.md', name: 'a', bump: 'patch', summary: 'fix a' }])
+          .map((intent) => [intent.path, intent] as const),
+      ),
+    )
+    const changelogs = makeFakeChangelogStore()
+    const process = makeFakeProcessPort(
+      (command: WorkspaceCommand): Effect.Effect<ProcessCompleted, CommandRefusal> =>
+        Effect.sync(() => {
+          workspace.state.members.forEach((member, index) => {
+            const [major, minor, patch] = bumpCore(member.manifest.version)
+            const next = brandVersion(`${major}.${minor}.${patch + 1}`)
+            workspace.state.members[index] = {
+              ...member,
+              manifest: { ...member.manifest, version: next },
+            }
+          })
+          return { _tag: 'ProcessCompleted' as const, command }
+        }),
+    )
+    const live = Layer.mergeAll(
+      surfaces.layer,
+      workspace.layer,
+      changesets.layer,
+      changelogs.layer,
+      process.layer,
+    )
+    scenario(
+      'A versionless root manifest does not block a pnpm bump',
+      { scenarioLayer: live },
+      Gherkin.Do.pipe(
+        Given('a pnpm workspace whose private root manifest declares no version')(
+          'input',
+          () => Effect.succeed(bumpInputOf({ strategy: 'pnpm', changelogDir: 'changelog' })),
+        ),
+        When('the pending intents are versioned per package')(
+          'outcome',
+          (s) =>
+            Effect.match(Cell.run(Cell.provide(bumpCell, live), s.input), {
+              onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
+              onSuccess: (decision) => ({ _tag: 'decided' as const, decision }),
+            }),
+        ),
+        Then('the member moves and the root manifest is left unread')((s) => {
+          Match.value(s.outcome).pipe(
+            Match.tag('decided', (decided) =>
+              Match.value(decided.decision).pipe(
+                Match.tag('VersionBumped', (bumped) => {
+                  expect(bumped.version).toEqual('1.2.4')
+                  expect([...bumped.moved]).toEqual(['a'])
+                  expect(changesets.state.intents.size).toEqual(0)
+                  expect(changelogs.state.memberChangelogs.get(brandPath('changelog/a@1.2.4.md'))).toEqual(
+                    '# a@1.2.4\n\nfix a\n',
+                  )
+                  expect(surfaces.state.reads).toEqual([])
+                }),
+                Match.tag('VersionConsumed', () => failUnexpected('expected a delegated bump')),
+                Match.tag('VersionIdle', () => failUnexpected('expected a delegated bump')),
+                Match.exhaustive,
+              )),
+            Match.tag('refused', (refused) => {
+              Match.value(refused.refusal).pipe(
+                Match.tag(
+                  'VersionIntentMalformed',
+                  (malformed) =>
+                    failUnexpected(`expected a delegated bump, got VersionIntentMalformed: path=${malformed.path}`),
+                ),
+                Match.orElse(() => failUnexpected(`expected a delegated bump, got ${refused.refusal._tag}`)),
+              )
+            }),
             Match.exhaustive,
           )
         }),

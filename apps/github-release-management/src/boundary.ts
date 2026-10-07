@@ -137,9 +137,14 @@ export const pullRequestRequestOf = (workspace: Workspace, flags: PullRequestFla
     )
   })
 
+type VersionTarget = {
+  readonly file: RelativePath
+  readonly surface: VersionSurface
+}
+
 const surfaceEntryOf = (
   surface: VersionSurface,
-): ReadonlyArray<BumpInput['surfaces'][number]> => {
+): ReadonlyArray<VersionTarget> => {
   if (surface.kind !== 'toml') return [{ file: surface.path, surface }]
   if (surface.path === undefined) return []
   return [{ file: surface.path, surface }]
@@ -153,11 +158,6 @@ export const bumpInput = (
     return {
       strategy: 'pnpm',
       changelogDir,
-      manifest: {
-        file: RelativePath.make('package.json'),
-        surface: { kind: 'json', path: RelativePath.make('package.json') },
-      },
-      surfaces: [],
     }
   }
   return {
