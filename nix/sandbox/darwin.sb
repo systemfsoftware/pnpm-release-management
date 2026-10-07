@@ -70,6 +70,8 @@
   (subpath (param "HOME"))
   (subpath (param "TMP")))
 
+;;GIT;;
+
 ;;BIND;;
 
 (allow network-inbound (local ip "localhost:*"))

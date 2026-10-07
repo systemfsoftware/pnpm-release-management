@@ -102,6 +102,27 @@ if [ -n "$pnpm_root" ] && command -v pnpm >/dev/null 2>&1; then
   fi
 fi
 
+git_rw=()
+git_ro=()
+git_dir="$(git -C "$project" rev-parse --path-format=absolute --git-dir 2>/dev/null || true)"
+if [ -n "$git_dir" ]; then
+  git_dir="$(cd "$git_dir" && pwd -P)"
+  case "$git_dir/" in
+    "$project"/*) ;;
+    *)
+      git_common="$(git -C "$project" rev-parse --path-format=absolute --git-common-dir)"
+      git_common="$(cd "$git_common" && pwd -P)"
+      git_rw+=("$git_dir")
+      for entry in objects refs logs modules; do
+        if [ -e "$git_common/$entry" ]; then git_rw+=("$git_common/$entry"); fi
+      done
+      for entry in config packed-refs info shallow; do
+        if [ -e "$git_common/$entry" ]; then git_ro+=("$git_common/$entry"); fi
+      done
+      ;;
+  esac
+fi
+
 work="$(mktemp -d "${TMPDIR:-/tmp}/sandbox.XXXXXX")"
 work="$(cd "$work" && pwd -P)"
 proxy_pid=""
@@ -250,6 +271,8 @@ case "$system" in
       args+=(--ro-bind-try "$path" "$path")
     done
     args+=(--bind "$project" "$project" --chdir "$cwd")
+    for entry in "${git_rw[@]}"; do args+=(--bind "$entry" "$entry"); done
+    for entry in "${git_ro[@]}"; do args+=(--ro-bind "$entry" "$entry"); done
     if [ -n "${store_view:-}" ]; then args+=(--bind "$store_view" "$store_view"); fi
 
     pubdir=""
@@ -322,6 +345,17 @@ done
     bind_ports=""
     for spec in "${publishes[@]}"; do bind_ports+="(local ip \"localhost:${spec##*:}\") "; done
     for port in "${listens[@]}"; do bind_ports+="(local ip \"localhost:$port\") "; done
+    git_read_write=""
+    git_read=""
+    git_ancestors=""
+    for entry in "${git_rw[@]}"; do
+      git_read_write+="(subpath \"$entry\") "
+      git_ancestors+="(path-ancestors \"$entry\") "
+    done
+    for entry in "${git_ro[@]}"; do
+      git_read+="(subpath \"$entry\") "
+      git_ancestors+="(path-ancestors \"$entry\") "
+    done
 
     profile="$work/profile.sb"
     while IFS= read -r line; do
@@ -330,6 +364,11 @@ done
         ';;CLOSURE_EXEC;;') printf '(allow file-map-executable %s)\n' "$closure_exec" ;;
         ';;BIND;;')
           if [ -n "$bind_ports" ]; then printf '(allow network-bind %s)\n' "$bind_ports"; fi
+          ;;
+        ';;GIT;;')
+          if [ -n "$git_read_write" ]; then printf '(allow file-read* file-write* %s)\n' "$git_read_write"; fi
+          if [ -n "$git_read" ]; then printf '(allow file-read* %s)\n' "$git_read"; fi
+          if [ -n "$git_ancestors" ]; then printf '(allow file-read-metadata %s)\n' "$git_ancestors"; fi
           ;;
         *) printf '%s\n' "$line" ;;
       esac

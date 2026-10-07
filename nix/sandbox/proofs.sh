@@ -232,6 +232,36 @@ refused "a declared allow-list refuses every other host" \
 allowed "loopback serves a local dev server" \
   sandbox --listen 4321 -- sh -c 'node -e "require(\"node:http\").createServer((q, s) => s.end(\"'"$alive"'\")).listen(4321, \"127.0.0.1\")" & sleep 1; curl -sS --max-time 5 http://127.0.0.1:4321; echo; kill $!'
 
+gitid=(-c user.name=proof -c user.email=proof@example.invalid -c commit.gpgsign=false)
+main="$scratch/main"
+linked="$scratch/linked"
+git init -q "$main"
+git "${gitid[@]}" -C "$main" commit -q --allow-empty -m base
+git -C "$main" worktree add -q -b linked "$linked"
+
+allowed "a linked worktree commits through the main checkout's git directory" \
+  sh -c "cd '$linked' && sandbox -- sh -c 'git ${gitid[*]} commit -q --allow-empty -m inside && echo $alive'"
+if [ "$(git -C "$main" log -1 --format=%s linked)" = inside ]; then
+  pass "the linked worktree's commit lands in the shared objects and refs"
+else
+  fail "the linked worktree's commit lands in the shared objects and refs"
+fi
+refused "a linked worktree cannot rewrite the shared git config" \
+  sh -c "cd '$linked' && sandbox -- sh -c 'echo $alive; git config --local sandbox.escaped yes'"
+(cd "$linked" && sandbox -- sh -c "echo escaped > '$main/written'") >/dev/null 2>&1 || true
+if [ -e "$main/written" ]; then
+  fail "a linked worktree cannot write the main checkout's files"
+else
+  pass "a linked worktree cannot write the main checkout's files"
+fi
+
+super="$scratch/super"
+git init -q "$super"
+git "${gitid[@]}" -C "$super" -c protocol.file.allow=always submodule add -q "$main" sub
+git "${gitid[@]}" -C "$super" commit -q -m "add sub"
+allowed "a submodule commits through its .git/modules directory" \
+  sh -c "cd '$super/sub' && sandbox -- sh -c 'git ${gitid[*]} commit -q --allow-empty -m inside-sub && echo $alive'"
+
 case "$(uname -s)" in
   Linux)
     sandbox --publish 18080:4321 -- sh -c \
