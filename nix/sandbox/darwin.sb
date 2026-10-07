@@ -72,6 +72,5 @@
 
 ;;BIND;;
 
-(allow network-inbound (local ip "localhost:*"))
 (allow network-outbound (remote ip "localhost:*"))
 (allow network-outbound (literal "/private/var/run/syslog"))
