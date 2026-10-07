@@ -15,17 +15,9 @@
 
   outputs = { self, nixpkgs, comment-checker, importPnpmLock }:
     let
-      systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
+      systems = [ "x86_64-linux" "aarch64-linux" ];
       forEachSystem = fn: nixpkgs.lib.genAttrs systems (system: fn nixpkgs.legacyPackages.${system});
-      iplFor = system:
-        let
-          pkgs = nixpkgs.legacyPackages.${system};
-        in
-        {
-          iplConfigHook = pkgs.callPackage "${importPnpmLock}/iplConfigHook.nix" {
-            mitm-cache = pkgs.callPackage ./nix/mitm-cache.nix { };
-          };
-        };
+      iplFor = system: importPnpmLock.legacyPackages.${system};
     in
     {
       # Every tarball is its own fixed-output fetch keyed by the lockfile's own
@@ -171,9 +163,7 @@
         default = pkgs.mkShell {
           packages = [
             self.packages.${pkgs.stdenv.hostPlatform.system}.dprint
-            (if pkgs.stdenv.hostPlatform.isLinux
-              then self.packages.${pkgs.stdenv.hostPlatform.system}.comment-checker-bwrap
-              else self.packages.${pkgs.stdenv.hostPlatform.system}.comment-checker)
+            self.packages.${pkgs.stdenv.hostPlatform.system}.comment-checker-bwrap
             self.packages.${pkgs.stdenv.hostPlatform.system}.sandbox
             pkgs.nodejs_24
             pkgs.pnpm_11
