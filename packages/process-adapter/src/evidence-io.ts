@@ -3,6 +3,7 @@ import {
   EvidenceFileUnreadable,
   type Member,
   PackageManifest,
+  type PackageName,
   RelativePath,
   type RepoRoot,
 } from '@systemfsoftware/release-language'
@@ -99,4 +100,27 @@ export const membersAt = (
       members.push(member.value)
     }
     return members
+  })
+
+export const deletedAt = (
+  root: RepoRoot,
+  base: string,
+  changed: ReadonlyArray<string>,
+): Effect.Effect<
+  ReadonlyArray<PackageName>,
+  EvidenceCommandFailed | ProcessFault,
+  FileSystem.FileSystem | ChildProcessSpawner
+> =>
+  Effect.gen(function*() {
+    const fs = yield* FileSystem.FileSystem
+    const deleted: Array<PackageName> = []
+    for (const manifestPath of changed) {
+      const dir = dirOf(manifestPath)
+      if (Option.isNone(dir)) continue
+      if (yield* fs.exists(`${root}/${manifestPath}`).pipe(Effect.orElseSucceed(() => false))) continue
+      const shown = yield* gitLines(root, ['show', `${base}:${manifestPath}`])
+      const member = memberOf(dir.value, shown.join('\n'))
+      if (Option.isSome(member)) deleted.push(member.value.name)
+    }
+    return deleted.sort()
   })

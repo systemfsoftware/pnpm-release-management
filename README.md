@@ -170,13 +170,6 @@ dependencies carry a `source` line and are left alone). Its optional `package`
 names the workspace package whose bumped version the Cargo workspace follows;
 it is required under `changesets` versioning, where there is no single version.
 
-A `cargo` surface rewrites `[workspace.package] version` in the named manifest,
-any workspace member that pins a literal `[package] version`, and every
-workspace-member entry in the sibling `Cargo.lock` (registry and git
-dependencies carry a `source` line and are left alone). Its optional `package`
-names the workspace package whose bumped version the Cargo workspace follows;
-it is required under `pnpm` versioning, where there is no single version.
-
 ## Change intents
 
 An intent is a Markdown file in `.changeset/` whose frontmatter names the
@@ -204,19 +197,19 @@ so the release PR diff _is_ the set of notes that shipped.
 
 ## Capabilities
 
-| App subcommand      | What it does                                                             |
-| ------------------- | ------------------------------------------------------------------------ |
-| `changeset check`   | Fails when a publishable package changed without an intent naming it     |
-| `changeset new`     | Writes an intent file                                                    |
-| `version bump`      | Consumes intents, bumps every surface, writes per-package changelogs     |
-| `version sync`      | `check` or `bump <version>` across every declared surface                |
-| `version sync-root` | Stamps the launcher manifest with the released version                   |
-| `release pr`        | Commits the release branch, opens, refreshes, or closes the release PR   |
-| `release plan`      | Derives the release phase from repository state                          |
-| `release tag`       | Captures the cycle, then pushes one tag per released package             |
-| `release release`   | Creates GitHub Releases from the generated changelogs                    |
-| `hooks pre-commit`  | Formats and checks the staged set before a commit lands                  |
-| `hooks commit-msg`  | Enforces the conventional-commit header and strips AI co-author trailers |
+| App subcommand      | What it does                                                                                                  |
+| ------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `changeset check`   | Fails when a publishable package changed without an intent naming it; lists deleted packages, which need none |
+| `changeset new`     | Writes an intent file                                                                                         |
+| `version bump`      | Consumes intents, bumps every surface, writes per-package changelogs                                          |
+| `version sync`      | `check` or `bump <version>` across every declared surface                                                     |
+| `version sync-root` | Stamps the launcher manifest with the released version                                                        |
+| `release pr`        | Commits the release branch, opens, refreshes, or closes the release PR                                        |
+| `release plan`      | Derives the release phase from repository state                                                               |
+| `release tag`       | Captures the cycle, then pushes one tag per released package                                                  |
+| `release release`   | Creates GitHub Releases from the generated changelogs                                                         |
+| `hooks pre-commit`  | Formats and checks the staged set before a commit lands                                                       |
+| `hooks commit-msg`  | Enforces the conventional-commit header and strips AI co-author trailers                                      |
 
 Every subcommand takes `--config <path>` and otherwise loads `release.jsonc` from
 the directory it is run in. The flag may name either the workspace root or a file
