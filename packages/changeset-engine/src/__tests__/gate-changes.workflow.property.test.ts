@@ -69,7 +69,10 @@ const touchedArbFrom = (members: ReadonlyArray<Member>): fc.Arbitrary<ReadonlyAr
 const scenarioArb = membersArb.chain((members) =>
   fc.tuple(
     touchedArbFrom(members),
-    fc.array(intentArbFrom(members.map((m) => m.name)), { maxLength: 3 }),
+    fc.uniqueArray(intentArbFrom(members.map((m) => m.name)), {
+      selector: (intent) => intent.path,
+      maxLength: 3,
+    }),
     fc.boolean(),
   ).map(([touched, intents, skipLiveness]) => ({ members, touched, intents, skipLiveness }))
 )
@@ -113,6 +116,7 @@ const gateEffect = (scenario: {
     fakeChangeEvidencePort({
       members: scenario.members,
       touched: scenario.touched,
+      deleted: [],
       raw: null,
     }),
     fakeChangesetStore({ intents: scenario.intents }).layer,
