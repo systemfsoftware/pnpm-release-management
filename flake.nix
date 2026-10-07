@@ -158,6 +158,32 @@
                 || throw "pnpm-lock.nix: a well-formed lockfile did not produce the expected tarball cache";
               "touch $out\n"
             );
+
+          # pnpm accepts a `dir/*` glob whose directory does not exist yet, so
+          # the builder must too, and still find the public members elsewhere.
+          # A workspace with no public member packs nothing and installs
+          # nothing: its pnpm pin (never installable here) is not consulted.
+          workspace-globs =
+            let
+              members = (self.lib.mkPnpmWorkspacePackages {
+                inherit pkgs;
+                src = ./nix/lib/fixtures/missing-glob-parent;
+                pname = "missing-glob-parent";
+              }).workspace-tarballs.passthru.members;
+              privateOnly = (self.lib.mkPnpmWorkspacePackages {
+                inherit pkgs;
+                src = ./nix/lib/fixtures/private-only;
+                pname = "private-only";
+              }).workspace-tarballs;
+            in
+            pkgs.runCommand "workspace-globs" { nativeBuildInputs = [ pkgs.jq ]; } (
+              assert map (e: e.name) members == [ "@fixture/web" ]
+                || throw "pnpm-workspace-packages.nix: expected only @fixture/web from apps/* with packages/ absent";
+              ''
+                jq -e '. == []' ${privateOnly}/index.json
+                touch $out
+              ''
+            );
         });
 
       devShells = forEachSystem (pkgs: {

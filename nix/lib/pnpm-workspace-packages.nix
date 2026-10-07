@@ -31,7 +31,8 @@ let
     if lib.hasPrefix "!" glob then [ ]
     else if lib.hasSuffix "/*" glob then
       let parent = lib.removeSuffix "/*" glob;
-      in lib.mapAttrsToList (name: _: "${parent}/${name}")
+      in if !builtins.pathExists (src + "/${parent}") then [ ]
+      else lib.mapAttrsToList (name: _: "${parent}/${name}")
         (lib.filterAttrs (name: type: type == "directory" && builtins.pathExists (src + "/${parent}/${name}/package.json"))
           (builtins.readDir (src + "/${parent}")))
     else if lib.hasInfix "*" glob then
@@ -79,6 +80,14 @@ let
   workspace-tarballs =
     assert duplicateAttrs == [ ]
       || throw "mkPnpmWorkspacePackages: packages share the attribute name(s) ${lib.concatStringsSep ", " (lib.unique duplicateAttrs)}";
+    # With no public member there is nothing to pack, and a build with no
+    # `--filter` would run every private package's build instead.
+    if entries == [ ] then
+      pkgs.runCommand "${pname}-tarballs" { passthru.members = entries; } ''
+        mkdir -p "$out"
+        echo '[]' > "$out/index.json"
+      ''
+    else
     pkgs.stdenvNoCC.mkDerivation {
       pname = "${pname}-tarballs";
       version = "0";
