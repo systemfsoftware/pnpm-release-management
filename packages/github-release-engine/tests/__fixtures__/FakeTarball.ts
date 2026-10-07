@@ -2,7 +2,7 @@ import { PackageName, PackageVersion, type TarballDigest, TarballPort } from '@s
 import { Effect, Layer } from 'effect'
 
 export const FAKE_INTEGRITY = 'sha512-fake'
-export const FAKE_FILES: Record<string, string> = {}
+export const FAKE_FILES: Record<string, string> = { 'package/package.json': 'sha512-fake-package-json' }
 
 export const fakeDigest = (name: string, version: string): TarballDigest => ({
   name: PackageName.make(name),
