@@ -17,15 +17,7 @@
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forEachSystem = fn: nixpkgs.lib.genAttrs systems (system: fn nixpkgs.legacyPackages.${system});
-      iplFor = system:
-        let
-          pkgs = nixpkgs.legacyPackages.${system};
-        in
-        {
-          iplConfigHook = pkgs.callPackage "${importPnpmLock}/iplConfigHook.nix" {
-            mitm-cache = pkgs.callPackage ./nix/mitm-cache.nix { };
-          };
-        };
+      iplFor = system: importPnpmLock.legacyPackages.${system};
     in
     {
       # Every tarball is its own fixed-output fetch keyed by the lockfile's own
