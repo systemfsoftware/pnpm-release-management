@@ -5,6 +5,9 @@ allowBuilds:
   protobufjs: false
   sharp: false
   ssh2: false
+minimumReleaseAgeExclude:
+  - effect
+  - "@effect/*"
 packages:
   - packages/*
   - apps/*
