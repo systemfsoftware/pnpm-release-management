@@ -346,9 +346,10 @@ anything malformed exits 2 with usage.
 
 macOS has no network namespace, so a `--listen` port on macOS is reachable from
 host loopback; that is a stated platform limit, not a claim. Its profile allows
-`network-bind` only on localhost for the `--publish` sandbox ports and the
-`--listen` ports — every other bind, including port 0, is refused: the program
-gets `EPERM` from `bind`. Declare the port with `--listen` (or `--publish`).
+`network-bind` and `network-inbound` only on localhost for the `--publish`
+sandbox ports and the `--listen` ports — every other port, including port 0, is
+refused: the program gets `EPERM` when it binds or listens there. Declare the
+port with `--listen` (or `--publish`).
 
 `packages.<system>.sandbox-proofs` is the gate. Each refusal proof first prints
 from inside the same sandbox, so a sandbox that fails to start fails the proof
