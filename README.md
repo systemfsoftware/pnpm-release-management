@@ -174,13 +174,6 @@ dependencies carry a `source` line and are left alone). Its optional `package`
 names the workspace package whose bumped version the Cargo workspace follows;
 it is required under `changesets` versioning, where there is no single version.
 
-A `cargo` surface rewrites `[workspace.package] version` in the named manifest,
-any workspace member that pins a literal `[package] version`, and every
-workspace-member entry in the sibling `Cargo.lock` (registry and git
-dependencies carry a `source` line and are left alone). Its optional `package`
-names the workspace package whose bumped version the Cargo workspace follows;
-it is required under `pnpm` versioning, where there is no single version.
-
 ## Change intents
 
 An intent is a Markdown file in `.changeset/` whose frontmatter names the
@@ -208,20 +201,20 @@ so the release PR diff _is_ the set of notes that shipped.
 
 ## Capabilities
 
-| App subcommand      | What it does                                                             |
-| ------------------- | ------------------------------------------------------------------------ |
-| `changeset check`   | Fails when a publishable package changed without an intent naming it     |
-| `changeset new`     | Writes an intent file                                                    |
-| `version bump`      | Consumes intents, bumps every surface, writes per-package changelogs     |
-| `version sync`      | `check` or `bump <version>` across every declared surface                |
-| `version sync-root` | Stamps the launcher manifest with the released version                   |
-| `release pr`        | Commits the release branch, opens, refreshes, or closes the release PR   |
-| `release adopt`     | Records every pre-adoption release tag's bytes in the adoption ledger    |
-| `release plan`      | Derives the release phase from repository state                          |
-| `release tag`       | Captures the cycle, then pushes one tag per released package             |
-| `release release`   | Creates GitHub Releases from the generated changelogs                    |
-| `hooks pre-commit`  | Formats and checks the staged set before a commit lands                  |
-| `hooks commit-msg`  | Enforces the conventional-commit header and strips AI co-author trailers |
+| App subcommand      | What it does                                                                                                  |
+| ------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `changeset check`   | Fails when a publishable package changed without an intent naming it; lists deleted packages, which need none |
+| `changeset new`     | Writes an intent file                                                                                         |
+| `version bump`      | Consumes intents, bumps every surface, writes per-package changelogs                                          |
+| `version sync`      | `check` or `bump <version>` across every declared surface                                                     |
+| `version sync-root` | Stamps the launcher manifest with the released version                                                        |
+| `release pr`        | Commits the release branch, opens, refreshes, or closes the release PR                                        |
+| `release adopt`     | Records every pre-adoption release tag's bytes in the adoption ledger                                         |
+| `release plan`      | Derives the release phase from repository state                                                               |
+| `release tag`       | Captures the cycle, then pushes one tag per released package                                                  |
+| `release release`   | Creates GitHub Releases from the generated changelogs                                                         |
+| `hooks pre-commit`  | Formats and checks the staged set before a commit lands                                                       |
+| `hooks commit-msg`  | Enforces the conventional-commit header and strips AI co-author trailers                                      |
 
 Every subcommand takes `--config <path>` and otherwise loads `release.jsonc` from
 the directory it is run in. The flag may name either the workspace root or a file
@@ -245,25 +238,44 @@ agree on what this cycle owns.
 
 ## CI
 
-| Workflow              | Inputs                                    | Caller must grant                                           |
-| --------------------- | ----------------------------------------- | ----------------------------------------------------------- |
-| `release.yml`         | `ci-workflow` (required), `artifacts-dir` | `contents: write`, `pull-requests: write`, `actions: write` |
-| `changeset-check.yml` | `base-sha`                                | `contents: read`                                            |
+| Workflow              | Inputs                                              | Caller must grant                                           |
+| --------------------- | --------------------------------------------------- | ----------------------------------------------------------- |
+| `release.yml`         | `ci-workflow` (required), `artifacts-dir`           | `contents: write`, `pull-requests: write`, `actions: write` |
+| `changeset-check.yml` | `tools-ref`, `base-sha`, `node-version`, `devshell` | `contents: read`, `pull-requests: read`                     |
 
 A pull request opened with the workflow token starts no workflows, so after
 opening or updating the release PR, `release.yml` dispatches the caller's CI
 workflow (`ci-workflow`, which must accept `workflow_dispatch`) on the release
 branch. That gives the release PR the checks the branch protection requires.
 
-Both workflows run the apps from the caller's dev shell (`nix develop`). The
+`release.yml` runs the apps from the caller's dev shell (`nix develop`). The
 revision is the one the caller's `flake.lock` pins for its
 `pnpm-release-management` input; `nix flake update pnpm-release-management`
 moves it. The caller's `devShells.<system>.default` must provide
 `release-tools`, pnpm, the `sandbox` and `SANDBOX_PNPM_STORE` (see
-[Distribution through Nix](#distribution-through-nix)). `changeset-check.yml`
-runs turbo, which is the caller's dependency code, so its install and the gate
-both run inside `sandbox`, offline from the Nix-built pnpm store. Neither
-workflow installs packages from a registry.
+[Distribution through Nix](#distribution-through-nix)).
+
+`tools-ref` pins the revision of this repository that a release runs from;
+`@main` tracks the tip. Without `devshell`, the changeset check checks this
+repository out into `.release-tools`, builds it with pnpm, and runs its
+`dist/main.js` bundles against the caller's workspace.
+
+`devshell: true` makes the changeset check install Nix and run the caller's
+own `bootstrap` script inside its `nix develop` shell
+(`nix develop --command pnpm run bootstrap`) instead of a plain
+`pnpm install`, then run the check in that shell. The bootstrap script is
+where the caller installs its workspace inside its own sandbox, so no
+dependency code runs outside it; a caller without a `bootstrap` script is
+refused with an error naming the missing script. The workflow takes no
+install command of its own. The job allows unprivileged user namespaces so a
+bubblewrap sandbox can start. A caller needs this mode when its lockfile points
+at tarballs its flake builds, such as `file:.sfs-deps/<name>-<version>.tgz`; a
+plain install cannot read those. With `devshell: true`, `node-version` is
+ignored for the caller's install and check: they use the dev shell's node, and
+the check runs as `nix develop --command sandbox -- changeset-management check`
+from the `release-tools` in that dev shell, so `tools-ref` is ignored too. The
+default, `false`, installs with plain pnpm as before. This repository's own CI
+calls the check with `devshell: true` on every pull request.
 
 ## Distribution through Nix
 

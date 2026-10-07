@@ -11,3 +11,6 @@ permissions:
 jobs:
   check:
     uses: ./.github/workflows/changeset-check.yml
+    with:
+      tools-ref: ${{ github.event.pull_request.head.sha }}
+      devshell: true

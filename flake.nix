@@ -37,7 +37,7 @@
             src = self;
             pname = "pnpm-release-management";
             pnpm = pkgs.pnpm_11;
-            hash = "sha256-bRX0BNl10ha0qF8IrpGXwrjHc8Z6JxaBkiWYsnOF+CU=";
+            hash = "sha256-TbCTYq2ZDJD3REgfZ8P0LAdBfZ8PcuYc6w0H/C2r9+8=";
           };
           changeset-management = cliApp "changeset-management";
           version-management = cliApp "version-management";
@@ -62,6 +62,7 @@
             self.packages.${pkgs.stdenv.hostPlatform.system}.dprint
             self.packages.${pkgs.stdenv.hostPlatform.system}.comment-checker-bwrap
             self.packages.${pkgs.stdenv.hostPlatform.system}.sandbox
+            self.packages.${pkgs.stdenv.hostPlatform.system}.release-tools
             pkgs.nodejs_24
             pkgs.pnpm_11
             pkgs.deno
