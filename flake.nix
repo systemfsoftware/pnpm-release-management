@@ -54,6 +54,7 @@
             src = self;
             pname = "pnpm-release-management";
             pnpm = pkgs.pnpm_11;
+
           };
           cliApp = appName:
             pkgs.callPackage ./nix/cli-app.nix {
@@ -165,6 +166,7 @@
             self.packages.${pkgs.stdenv.hostPlatform.system}.dprint
             self.packages.${pkgs.stdenv.hostPlatform.system}.comment-checker-bwrap
             self.packages.${pkgs.stdenv.hostPlatform.system}.sandbox
+            self.packages.${pkgs.stdenv.hostPlatform.system}.release-tools
             pkgs.nodejs_24
             pkgs.pnpm_11
             pkgs.deno
