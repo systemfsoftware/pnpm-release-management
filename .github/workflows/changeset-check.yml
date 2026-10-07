@@ -50,6 +50,9 @@ jobs:
           pnpm --dir .release-tools install --frozen-lockfile
           pnpm --dir .release-tools build
 
+      - name: Install the caller's workspace
+        run: pnpm install --frozen-lockfile
+
       - name: Require an intent for every publishable-package change
         run: |
           node .release-tools/apps/changeset-management/dist/main.js check \
