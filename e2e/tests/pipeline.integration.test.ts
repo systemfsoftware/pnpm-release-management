@@ -3,7 +3,7 @@ import { Effect } from 'effect'
 import * as S from 'effect/Schema'
 import { expect } from 'vitest'
 import { headSha, MEMBERS, setupFixture } from '../fixture.js'
-import { FIXTURE, parseJson, type World } from '../harness.js'
+import { FIXTURE, parseJson, REGISTRY, REGISTRY_LOG, REGISTRY_STORAGE, type World } from '../harness.js'
 import { Session } from '../session.js'
 import { CapturedEntry, Manifest, Pulls, Release, Releases } from './__fixtures__/pipeline.schema.js'
 
@@ -34,6 +34,12 @@ const fetchReleases = (world: World) => {
 const fetchOpenPulls = (world: World) => {
   return world.github('/repos/admin/fixture/pulls?state=open', S.decodeUnknownSync(Pulls))
 }
+
+const registryPings = (log: string): number =>
+  log.split('\n').filter((line) => line.includes("req: 'GET /-/ping'")).length
+
+const registryPublishes = (log: string): ReadonlyArray<string> =>
+  log.split('\n').filter((line) => line.includes("req: 'PUT "))
 
 const runPhases = async (session: Session): Promise<void> => {
   let base = ''
@@ -209,6 +215,21 @@ const runPhases = async (session: Session): Promise<void> => {
 
     const pulls = await fetchOpenPulls(world)
     expect(pulls.body?.length).toBe(0)
+  })
+
+  await session.phase('the release never publishes to npm', async (world) => {
+    const before = registryPings(await world.read(REGISTRY_LOG))
+
+    await world.must(`curl -fsS ${REGISTRY}/-/ping > /dev/null`)
+
+    await expect
+      .poll(async () => registryPings(await world.read(REGISTRY_LOG)), { interval: 200, timeout: 10_000 })
+      .toBeGreaterThan(before)
+
+    expect(registryPublishes(await world.read(REGISTRY_LOG))).toEqual([])
+
+    const stored = await world.must(`find ${REGISTRY_STORAGE} -mindepth 1 -maxdepth 3 -name package.json`)
+    expect(stored.stdout.trim()).toBe('')
   })
 }
 

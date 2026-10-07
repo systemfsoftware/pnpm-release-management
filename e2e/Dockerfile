@@ -23,15 +23,16 @@ RUN curl -fsSL -O \
   && tar -xzf process-compose_linux_amd64.tar.gz -C /usr/local/bin process-compose \
   && rm -f process-compose_linux_amd64.tar.gz process-compose_checksums.txt
 
+ARG VERDACCIO_VERSION=6.10.3
 ARG EMULATE_VERSION=0.11.1
-RUN npm install -g --no-fund --no-audit "emulate@${EMULATE_VERSION}" \
+RUN npm install -g --no-fund --no-audit "verdaccio@${VERDACCIO_VERSION}" "emulate@${EMULATE_VERSION}" \
   && npm cache clean --force
 
-ARG PNPM_VERSION=11.21.0
+ARG PNPM_VERSION=11.27.0
 RUN corepack enable && corepack prepare "pnpm@${PNPM_VERSION}" --activate
 
-RUN mkdir -p /e2e \
-  && printf 'subjectAltName=DNS:api.github.com\n' > /e2e/san.cnf \
+RUN mkdir -p /e2e /tmp/verdaccio \
+  && printf 'subjectAltName=DNS:api.github.com,DNS:registry.npmjs.org\n' > /e2e/san.cnf \
   && openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
       -keyout /e2e/ca.key -out /e2e/ca.crt -subj '/CN=prm-e2e-ca' \
   && openssl req -newkey rsa:2048 -sha256 -nodes \
@@ -45,6 +46,7 @@ RUN mkdir -p /e2e \
 ENV DENO_TLS_CA_STORE=system \
     NODE_EXTRA_CA_CERTS=/e2e/ca.crt
 
+COPY e2e/verdaccio.yaml /e2e/verdaccio.yaml
 COPY e2e/process-compose.yaml /e2e/process-compose.yaml
 COPY e2e/nginx.conf /e2e/nginx.conf
 
