@@ -26,7 +26,6 @@ valid_port() {
 
 hosts=()
 publishes=()
-listens=()
 egress_log=""
 pnpm_store="${SANDBOX_PNPM_STORE:-}"
 pass=(PATH TERM LANG LC_ALL TZ CI NO_COLOR FORCE_COLOR COLORTERM)
@@ -55,7 +54,6 @@ while [ $# -gt 0 ]; do
     --listen)
       [ $# -ge 2 ] || usage
       valid_port "$2" || usage
-      listens+=("$2")
       shift 2
       ;;
     --pass-env)
@@ -88,10 +86,8 @@ work="$(mktemp -d "${TMPDIR:-/tmp}/sandbox.XXXXXX")"
 work="$(cd "$work" && pwd -P)"
 proxy_pid=""
 forwards=()
-group=""
 # shellcheck disable=SC2329 # invoked by the EXIT trap
 cleanup() {
-  [ -z "$group" ] || kill -KILL -- "-$group" 2>/dev/null || true
   [ -z "$proxy_pid" ] || kill "$proxy_pid" 2>/dev/null || true
   if [ "${#forwards[@]}" -gt 0 ]; then
     for pid in "${forwards[@]}"; do kill "$pid" 2>/dev/null || true; done
@@ -103,14 +99,8 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-system="$(uname -s)"
-if [ "$system" = Darwin ]; then
-  sandbox_home="$work/home"
-  sandbox_tmp="$work/tmp"
-else
-  sandbox_home="/home/sandbox"
-  sandbox_tmp="/tmp"
-fi
+sandbox_home="/home/sandbox"
+sandbox_tmp="/tmp"
 
 if [ -n "$egress_log" ]; then
   egress_log="$(realpath -m "$egress_log")"
@@ -222,152 +212,70 @@ if [ "${#hosts[@]}" -gt 0 ] || [ -n "$egress_log" ]; then
   )
 fi
 
-case "$system" in
-  Linux)
-    args=(
-      --unshare-all --die-with-parent --new-session --cap-drop ALL --clearenv
-      --proc /proc --dev /dev --tmpfs /tmp
-      --tmpfs /home --dir /home/sandbox
-      --perms 0111 --tmpfs /nix/store
-    )
-    for entry in "${closure[@]}"; do args+=(--ro-bind "$entry" "$entry"); done
-    for path in /usr /bin /lib /lib64 /sbin /run/current-system/sw \
-      /etc/passwd /etc/group /etc/hosts /etc/nsswitch.conf /etc/localtime; do
-      args+=(--ro-bind-try "$path" "$path")
-    done
-    args+=(--bind "$project" "$project" --chdir "$cwd")
-    if [ -n "${store_view:-}" ]; then args+=(--bind "$store_view" "$store_view"); fi
+args=(
+  --unshare-all --die-with-parent --new-session --cap-drop ALL --clearenv
+  --proc /proc --dev /dev --tmpfs /tmp
+  --tmpfs /home --dir /home/sandbox
+  --perms 0111 --tmpfs /nix/store
+)
+for entry in "${closure[@]}"; do args+=(--ro-bind "$entry" "$entry"); done
+for path in /usr /bin /lib /lib64 /sbin /run/current-system/sw \
+  /etc/passwd /etc/group /etc/hosts /etc/nsswitch.conf /etc/localtime; do
+  args+=(--ro-bind-try "$path" "$path")
+done
+args+=(--bind "$project" "$project" --chdir "$cwd")
+if [ -n "${store_view:-}" ]; then args+=(--bind "$store_view" "$store_view"); fi
 
-    pubdir=""
-    if [ "${#publishes[@]}" -gt 0 ]; then
-      pubdir="$work/pub"
-      mkdir -p "$pubdir"
-      args+=(--bind "$pubdir" "$pubdir")
-    fi
+pubdir=""
+if [ "${#publishes[@]}" -gt 0 ]; then
+  pubdir="$work/pub"
+  mkdir -p "$pubdir"
+  args+=(--bind "$pubdir" "$pubdir")
+fi
 
-    wrapper=""
-    if [ "${#hosts[@]}" -gt 0 ] || [ -n "$egress_log" ]; then
-      start_proxy "$work/egress.sock"
-      args+=(--ro-bind "$work/egress.sock" /run/egress.sock)
-      wrapper+="@socat@ TCP-LISTEN:3128,bind=127.0.0.1,fork,reuseaddr UNIX-CONNECT:/run/egress.sock 2>/dev/null &"$'\n'
-      # shellcheck disable=SC2016
-      wrapper+='i=0
+wrapper=""
+if [ "${#hosts[@]}" -gt 0 ] || [ -n "$egress_log" ]; then
+  start_proxy "$work/egress.sock"
+  args+=(--ro-bind "$work/egress.sock" /run/egress.sock)
+  wrapper+="@socat@ TCP-LISTEN:3128,bind=127.0.0.1,fork,reuseaddr UNIX-CONNECT:/run/egress.sock 2>/dev/null &"$'\n'
+  # shellcheck disable=SC2016
+  wrapper+='i=0
 until "@socat@" -u /dev/null TCP:127.0.0.1:3128 2>/dev/null || [ "$i" -ge 100 ]; do
   i=$((i + 1))
   "@sleep@" 0.05
 done
 '
-    fi
-    if [ -n "$pubdir" ]; then
-      for spec in "${publishes[@]}"; do
-        wrapper+="@socat@ UNIX-LISTEN:$pubdir/pub-${spec##*:}.sock,fork,reuseaddr TCP:127.0.0.1:${spec##*:} 2>/dev/null &"$'\n'
+fi
+if [ -n "$pubdir" ]; then
+  for spec in "${publishes[@]}"; do
+    wrapper+="@socat@ UNIX-LISTEN:$pubdir/pub-${spec##*:}.sock,fork,reuseaddr TCP:127.0.0.1:${spec##*:} 2>/dev/null &"$'\n'
+  done
+fi
+
+for entry in "${envs[@]}"; do args+=(--setenv "${entry%%=*}" "${entry#*=}"); done
+
+status=0
+if [ -n "$wrapper" ]; then
+  wrapper+='exec "$@"'
+  if [ -n "$pubdir" ]; then
+    "@bwrap@" "${args[@]}" -- "@sh@" -c "$wrapper" sandbox "$@" &
+    bwrap_pid=$!
+    for spec in "${publishes[@]}"; do
+      i=0
+      while [ ! -S "$pubdir/pub-${spec##*:}.sock" ] && [ "$i" -lt 200 ]; do
+        i=$((i + 1))
+        "@sleep@" 0.05
       done
-    fi
-
-    for entry in "${envs[@]}"; do args+=(--setenv "${entry%%=*}" "${entry#*=}"); done
-
-    status=0
-    if [ -n "$wrapper" ]; then
-      wrapper+='exec "$@"'
-      if [ -n "$pubdir" ]; then
-        "@bwrap@" "${args[@]}" -- "@sh@" -c "$wrapper" sandbox "$@" &
-        bwrap_pid=$!
-        for spec in "${publishes[@]}"; do
-          i=0
-          while [ ! -S "$pubdir/pub-${spec##*:}.sock" ] && [ "$i" -lt 200 ]; do
-            i=$((i + 1))
-            "@sleep@" 0.05
-          done
-        done
-        for spec in "${publishes[@]}"; do
-          "@socat@" TCP-LISTEN:"${spec%%:*}",bind=127.0.0.1,fork,reuseaddr UNIX-CONNECT:"$pubdir/pub-${spec##*:}.sock" 2>/dev/null &
-          forwards+=("$!")
-        done
-        wait "$bwrap_pid" || status=$?
-      else
-        "@bwrap@" "${args[@]}" -- "@sh@" -c "$wrapper" sandbox "$@" || status=$?
-      fi
-    else
-      "@bwrap@" "${args[@]}" -- "$@" || status=$?
-    fi
-    exit "$status"
-    ;;
-  Darwin)
-    home="$work/home"
-    tmp="$work/tmp"
-    runtime="$tmp/runtime"
-    mkdir -p "$home" "$tmp" "$runtime"
-    chmod 0700 "$runtime"
-
-    closure_read=""
-    closure_exec=""
-    for entry in "${closure[@]}"; do
-      closure_read+="(subpath \"$entry\") "
-      closure_exec+="(subpath \"$entry\") "
     done
-    bind_ports=""
-    for spec in "${publishes[@]}"; do bind_ports+="(local ip \"localhost:${spec##*:}\") "; done
-    for port in "${listens[@]}"; do bind_ports+="(local ip \"localhost:$port\") "; done
-
-    profile="$work/profile.sb"
-    while IFS= read -r line; do
-      case "$line" in
-        ';;CLOSURE_READ;;') printf '(allow file-read* %s)\n' "$closure_read" ;;
-        ';;CLOSURE_EXEC;;') printf '(allow file-map-executable %s)\n' "$closure_exec" ;;
-        ';;BIND;;')
-          if [ -n "$bind_ports" ]; then printf '(allow network-bind network-inbound %s)\n' "$bind_ports"; fi
-          ;;
-        *) printf '%s\n' "$line" ;;
-      esac
-    done <"@darwinProfile@" >"$profile"
-
-    darwin_envs=()
-    runtime_env=0
-    for entry in "${envs[@]}"; do
-      case "$entry" in
-        HOME=*) darwin_envs+=("HOME=$home") ;;
-        TMPDIR=*) darwin_envs+=("TMPDIR=$tmp") ;;
-        XDG_RUNTIME_DIR=*)
-          darwin_envs+=("XDG_RUNTIME_DIR=$runtime")
-          runtime_env=1
-          ;;
-        *) darwin_envs+=("$entry") ;;
-      esac
+    for spec in "${publishes[@]}"; do
+      "@socat@" TCP-LISTEN:"${spec%%:*}",bind=127.0.0.1,fork,reuseaddr UNIX-CONNECT:"$pubdir/pub-${spec##*:}.sock" 2>/dev/null &
+      forwards+=("$!")
     done
-    if [ "$runtime_env" -eq 0 ]; then darwin_envs+=("XDG_RUNTIME_DIR=$runtime"); fi
-    if [ "${#hosts[@]}" -gt 0 ] || [ -n "$egress_log" ]; then
-      start_proxy tcp
-      url="http://$(cat "$work/proxy.addr")"
-      for index in "${!darwin_envs[@]}"; do
-        darwin_envs[index]="${darwin_envs[index]//$proxy_url/$url}"
-      done
-    fi
-
-    cd "$cwd"
-    set -m
-    (
-      for spec in "${publishes[@]}"; do
-        h="${spec%%:*}"
-        p="${spec##*:}"
-        if [ "$h" != "$p" ]; then
-          "@socat@" TCP-LISTEN:"$h",bind=127.0.0.1,fork,reuseaddr TCP:127.0.0.1:"$p" 2>/dev/null &
-        fi
-      done
-      /usr/bin/sandbox-exec -f "$profile" \
-        -D PROJECT="$project" -D HOME="$home" -D TMP="$tmp" \
-        /usr/bin/env -i "${darwin_envs[@]}" "$@"
-    ) &
-    group=$!
-    status=0
-    if [ -t 0 ]; then
-      fg %% >/dev/null || status=$?
-    else
-      wait "$group" || status=$?
-    fi
-    exit "$status"
-    ;;
-  *)
-    echo "sandbox: unsupported system $system" >&2
-    exit 1
-    ;;
-esac
+    wait "$bwrap_pid" || status=$?
+  else
+    "@bwrap@" "${args[@]}" -- "@sh@" -c "$wrapper" sandbox "$@" || status=$?
+  fi
+else
+  "@bwrap@" "${args[@]}" -- "$@" || status=$?
+fi
+exit "$status"
