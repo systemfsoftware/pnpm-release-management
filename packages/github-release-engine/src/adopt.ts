@@ -1,5 +1,5 @@
 import { Cell, Wire } from '@systemfsoftware/effect-cell-types'
-import type { AdoptionFailure, TagRefusal } from '@systemfsoftware/release-language'
+import type { AdoptionFailure, LedgerMalformed, LedgerUnreadable, TagRefusal } from '@systemfsoftware/release-language'
 import {
   AdoptionExcluded,
   AdoptionTagUnresolved,
@@ -19,6 +19,7 @@ import {
   RegistryPort,
   type RegistryRefusal,
   RelativePath,
+  ReleaseLedger,
   type ReleaseLedgerEntry,
   type ReleaseTag,
   RemoteName,
@@ -27,7 +28,7 @@ import {
   UnpublishedState,
   type VersionState,
 } from '@systemfsoftware/release-language'
-import { Effect, Option, Schedule } from 'effect'
+import { Effect, HashSet, Option, Schedule } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
@@ -40,7 +41,7 @@ export const AdoptionRequest = Wire.wire({
   output: Wire.mint(RelativePath),
 })
 
-export type AdoptionReadRefusal = TagRefusal
+export type AdoptionReadRefusal = TagRefusal | LedgerUnreadable | LedgerMalformed
 
 type AdoptionRequestInput = S.Schema.Type<typeof AdoptionRequest>
 
@@ -283,15 +284,27 @@ const fetchEntry = (
 
 const gather = (
   request: AdoptionRequestInput,
-): Effect.Effect<AdoptionCommand, AdoptionReadRefusal, GitPort | RegistryPort | TarballPort> =>
+): Effect.Effect<
+  AdoptionCommand,
+  AdoptionReadRefusal,
+  GitPort | RegistryPort | TarballPort | LedgerPort
+> =>
   Effect.gen(function*() {
+    const ledger = yield* LedgerPort
     const remote = request.remote ?? RemoteName.make('origin')
     const git = yield* GitPort
     const registry = yield* RegistryPort
     const tarballs = yield* TarballPort
+    const existing = yield* ledger.read(request.output)
+    const prior = Option.getOrElse(existing, () => ReleaseLedger.make({ entries: [] }))
+    const entries: Array<ReleaseLedgerEntry> = [...prior.entries]
+    const ledgered = HashSet.fromIterable(entries.map((entry) => entry.tag))
     const tags = yield* git.remoteTags(remote)
     const candidates: Array<Candidate> = []
     for (const tag of tags) {
+      if (HashSet.has(ledgered, tag)) {
+        continue
+      }
       const parsed = parseTag(tag)
       if (Option.isSome(parsed)) {
         candidates.push({ tag, name: parsed.value.name, version: parsed.value.version })
@@ -302,7 +315,6 @@ const gather = (
       (candidate) => Effect.result(fetchEntry(request, git, registry, tarballs, remote, candidate)),
       { concurrency: 4 },
     )
-    const entries: Array<ReleaseLedgerEntry> = []
     const excluded: Array<AdoptionExcluded> = []
     const failures: Array<AdoptionFailure> = []
     for (const outcome of outcomes) {
@@ -311,7 +323,7 @@ const gather = (
         continue
       }
       Match.value(outcome.success).pipe(
-        Match.tag('Ledgered', (ledgered) => entries.push(ledgered.entry)),
+        Match.tag('Ledgered', (adopted) => entries.push(adopted.entry)),
         Match.tag('Excluded', (skipped) => excluded.push(skipped.excluded)),
         Match.exhaustive,
       )
