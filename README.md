@@ -170,13 +170,6 @@ dependencies carry a `source` line and are left alone). Its optional `package`
 names the workspace package whose bumped version the Cargo workspace follows;
 it is required under `changesets` versioning, where there is no single version.
 
-A `cargo` surface rewrites `[workspace.package] version` in the named manifest,
-any workspace member that pins a literal `[package] version`, and every
-workspace-member entry in the sibling `Cargo.lock` (registry and git
-dependencies carry a `source` line and are left alone). Its optional `package`
-names the workspace package whose bumped version the Cargo workspace follows;
-it is required under `pnpm` versioning, where there is no single version.
-
 ## Change intents
 
 An intent is a Markdown file in `.changeset/` whose frontmatter names the
