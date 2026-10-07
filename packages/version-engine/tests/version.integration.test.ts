@@ -750,6 +750,53 @@ Feature('Versioning packages').body(({ scenario }) => {
   }
 
   {
+    const original = `${JSON.stringify({ name: 'a', version: '0.0.0' }, null, 2)}\n`
+    const workspace = makeFakeWorkspaceStore(
+      [],
+      brandRoot('/test'),
+      new Map([[brandPath('package.json'), original]]),
+    )
+    const surfaces = makeFakeSurfaceStore()
+    const live = Layer.mergeAll(workspace.layer, surfaces.layer)
+    scenario(
+      'Two targets sharing the suffix "0" are refused before any pin is written',
+      { scenarioLayer: live },
+      Gherkin.Do.pipe(
+        Given('a repin naming the suffix "0" twice')(
+          'input',
+          () =>
+            Effect.succeed(
+              pinInputOf({ manifest: 'package.json', requestedVersion: '0.0.0', suffixes: ['0', '0'] }),
+            ),
+        ),
+        When('the root manifest is pinned')(
+          'outcome',
+          (s) =>
+            Effect.match(Cell.run(Cell.provide(pinRootManifestCell, live), s.input), {
+              onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
+              onSuccess: (decision) => ({ _tag: 'decided' as const, decision }),
+            }),
+        ),
+        Then('the duplicate suffix is named and nothing is written')((s) => {
+          Match.value(s.outcome).pipe(
+            Match.tag('refused', (refused) => {
+              Match.value(refused.refusal).pipe(
+                Match.tag('SchemaError', (error) => {
+                  expect(error.message).toContain('target suffix "0" is declared more than once')
+                }),
+                Match.orElse((other) => failUnexpected(`expected a schema refusal, got ${other._tag}`)),
+              )
+              expect(surfaces.state.rootManifests.size).toEqual(0)
+            }),
+            Match.tag('decided', () => failUnexpected('expected a refusal')),
+            Match.exhaustive,
+          )
+        }),
+      ),
+    )
+  }
+
+  {
     const original = `${JSON.stringify({ name: 'app', version: '1.0.0' }, null, 2)}\n`
     const workspace = makeFakeWorkspaceStore(
       [],

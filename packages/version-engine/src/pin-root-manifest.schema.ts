@@ -1,4 +1,4 @@
-import { PackageVersion, RelativePath, RepoRoot, TargetSuffix } from '@systemfsoftware/release-language'
+import { PackageVersion, RelativePath, RepoRoot, TargetSuffix, uniqueSuffixes } from '@systemfsoftware/release-language'
 import * as S from 'effect/Schema'
 
 export const PinName = S.NonEmptyString.pipe(S.brand('PinName'))
@@ -30,8 +30,8 @@ export class PinRootManifestCommand extends S.TaggedClass<PinRootManifestCommand
     requestedUsable: S.optional(PackageVersion),
     declaredVersion: S.optional(S.String),
     declaredUsable: S.optional(PackageVersion),
-    suffixes: S.optional(S.Array(TargetSuffix)),
-    pinNames: S.Array(PinName),
+    suffixes: S.optional(S.Array(TargetSuffix).pipe(S.check(uniqueSuffixes))),
+    pinNames: S.Array(PinName).pipe(S.check(S.isUnique())),
     repoRoot: RepoRoot,
     dryRun: S.optional(S.Boolean),
   },

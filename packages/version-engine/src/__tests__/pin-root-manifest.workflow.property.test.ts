@@ -24,7 +24,7 @@ const copiedSuffixes = (
   return [...suffixes]
 }
 
-const toCommand = (input: {
+interface CommandInput {
   readonly manifestText: string
   readonly manifest: Record<string, unknown>
   readonly packageName: string
@@ -37,8 +37,10 @@ const toCommand = (input: {
   readonly suffixes?: ReadonlyArray<string> | undefined
   readonly pinNames: ReadonlyArray<string>
   readonly repoRoot: string
-}): PinRootManifestCommand =>
-  S.decodeUnknownSync(PinRootManifestCommand)({
+}
+
+const decodeCommand = (input: CommandInput) =>
+  S.decodeUnknownResult(PinRootManifestCommand)({
     _tag: 'PinRootManifestCommand',
     manifestText: input.manifestText,
     manifest: input.manifest,
@@ -54,6 +56,10 @@ const toCommand = (input: {
     pinNames: input.pinNames,
     repoRoot: input.repoRoot,
   })
+
+const toCommand = (input: CommandInput): PinRootManifestCommand => Result.getOrThrow(decodeCommand(input))
+
+const repeats = (suffixes: ReadonlyArray<string>): boolean => new Set(suffixes).size !== suffixes.length
 
 const recordOf = (value: unknown): Record<string, unknown> => S.decodeUnknownSync(S.Record(S.String, S.Unknown))(value)
 
@@ -159,7 +165,7 @@ it.prop(
   [nameArb, coreArb, fc.array(suffixArb, { minLength: 1, maxLength: 3 }), fc.boolean()],
   ([packageName, version, suffixes, trailingNewline]) => {
     const manifestText = manifestTextOf(packageName, trailingNewline)
-    const command = toCommand({
+    const decoded = decodeCommand({
       manifestText,
       manifest: { name: packageName, version: '0.0.0' },
       packageName,
@@ -173,7 +179,13 @@ it.prop(
       pinNames: suffixes.map((suffix) => `${packageName}-${suffix}`),
       repoRoot: '/test',
     })
-    const outcome = pinRootManifest(command)
+    if (Result.isFailure(decoded)) {
+      return repeats(suffixes)
+    }
+    if (repeats(suffixes)) {
+      return false
+    }
+    const outcome = pinRootManifest(decoded.success)
     if (Result.isFailure(outcome)) {
       return false
     }
@@ -197,7 +209,7 @@ it.prop(
   '∀cmd_PinRootManifest_≡RepinIdempotent',
   [nameArb, coreArb, fc.array(suffixArb, { minLength: 1, maxLength: 3 })],
   ([packageName, version, suffixes]) => {
-    const first = toCommand({
+    const first = decodeCommand({
       manifestText: JSON.stringify({ name: packageName, version: '0.0.0' }),
       manifest: { name: packageName, version: '0.0.0' },
       packageName,
@@ -211,7 +223,13 @@ it.prop(
       pinNames: suffixes.map((suffix) => `${packageName}-${suffix}`),
       repoRoot: '/test',
     })
-    const repinned = pinRootManifest(first)
+    if (Result.isFailure(first)) {
+      return repeats(suffixes)
+    }
+    if (repeats(suffixes)) {
+      return false
+    }
+    const repinned = pinRootManifest(first.success)
     if (Result.isFailure(repinned)) {
       return false
     }

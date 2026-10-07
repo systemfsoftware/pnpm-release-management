@@ -20,6 +20,7 @@ export {
   TargetSuffix,
   TaskName,
   TomlHeader,
+  uniqueSuffixes,
   VersionSurface,
 } from './Config.schema.js'
 export { CycleStore } from './CycleStore.js'
