@@ -35,6 +35,7 @@ import { makeFakeChangesetStore } from './__fixtures__/FakeChangesetStore.js'
 import { makeFakeCycleStore } from './__fixtures__/FakeCycleStore.js'
 import { makeFakeForge } from './__fixtures__/FakeForge.js'
 import { makeFakeGit } from './__fixtures__/FakeGit.js'
+import { makeFakeLedger } from './__fixtures__/FakeLedger.js'
 import { FAKE_INTEGRITY, makeFakeTarball } from './__fixtures__/FakeTarball.js'
 import { makeFakeWorkspaceStore } from './__fixtures__/FakeWorkspaceStore.js'
 
@@ -79,7 +80,15 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
     const git = makeFakeGit({ tags: [tagOf('alpha', '1.0.0')] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer, makeFakeTarball(), makeFakeChangesetsPort())
+    const live = Layer.mergeAll(
+      changesets,
+      workspace,
+      git,
+      cycles.layer,
+      makeFakeTarball(),
+      makeFakeChangesetsPort(),
+      makeFakeLedger(),
+    )
     scenario(
       'Pending work with nothing owed starts versioning',
       { scenarioLayer: live },
@@ -122,7 +131,15 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
     const git = makeFakeGit({ tags: [] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer, makeFakeTarball(), makeFakeChangesetsPort())
+    const live = Layer.mergeAll(
+      changesets,
+      workspace,
+      git,
+      cycles.layer,
+      makeFakeTarball(),
+      makeFakeChangesetsPort(),
+      makeFakeLedger(),
+    )
     scenario(
       'Owed tags drain before pending work',
       { scenarioLayer: live },
@@ -164,7 +181,15 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
     const git = makeFakeGit({ tags: [tagOf('alpha', '1.0.0')] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer, makeFakeTarball(), makeFakeChangesetsPort())
+    const live = Layer.mergeAll(
+      changesets,
+      workspace,
+      git,
+      cycles.layer,
+      makeFakeTarball(),
+      makeFakeChangesetsPort(),
+      makeFakeLedger(),
+    )
     scenario(
       'A quiet repository settles with no work',
       { scenarioLayer: live },
@@ -203,7 +228,15 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members, files: {} })
     const git = makeFakeGit({ tags: [tagOf('gritlint', '0.1.0')] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer, makeFakeTarball(), makeFakeChangesetsPort())
+    const live = Layer.mergeAll(
+      changesets,
+      workspace,
+      git,
+      cycles.layer,
+      makeFakeTarball(),
+      makeFakeChangesetsPort(),
+      makeFakeLedger(),
+    )
     scenario(
       'A tagged private member with no tarball does not refuse the plan',
       { scenarioLayer: live },
@@ -239,7 +272,15 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
     const git = makeFakeGit({ tags: [tagOf('alpha', '1.0.0')] })
     const cycles = makeFakeCycleStore({ deferredFiles: { 'deferred.txt': 'ghost\n' } })
-    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer, makeFakeTarball(), makeFakeChangesetsPort())
+    const live = Layer.mergeAll(
+      changesets,
+      workspace,
+      git,
+      cycles.layer,
+      makeFakeTarball(),
+      makeFakeChangesetsPort(),
+      makeFakeLedger(),
+    )
     scenario(
       'Unknown deferred names warn without failing the plan',
       { scenarioLayer: live },
@@ -289,7 +330,15 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
     const git = makeFakeGit({ tags: [tagOf('alpha', '1.0.0')] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer, makeFakeTarball(), makeFakeChangesetsPort())
+    const live = Layer.mergeAll(
+      changesets,
+      workspace,
+      git,
+      cycles.layer,
+      makeFakeTarball(),
+      makeFakeChangesetsPort(),
+      makeFakeLedger(),
+    )
     scenario(
       'A missing deferred file refuses the plan at the read',
       { scenarioLayer: live },
@@ -328,7 +377,7 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members, files: {} })
     const git = makeFakeGit({ tags: [] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball())
+    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball(), makeFakeLedger())
     scenario(
       'Owed packages are tagged and pushed',
       { scenarioLayer: live },
@@ -369,7 +418,7 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members, files: {} })
     const git = makeFakeGit({ tags: [] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball())
+    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball(), makeFakeLedger())
     scenario(
       'A dry run previews tags without touching the remote',
       { scenarioLayer: live },
@@ -409,7 +458,7 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members, files: {} })
     const git = makeFakeGit({ tags: [tagOf('alpha', '1.0.0'), tagOf('beta', '2.0.0')] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball())
+    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball(), makeFakeLedger())
     scenario(
       'A fully tagged workspace reports up to date',
       { scenarioLayer: live },
@@ -447,7 +496,7 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members, files: {} })
     const git = makeFakeGit({ tags: [] })
     const cycles = makeFakeCycleStore({ capturedFiles: { 'cap.json': ['alpha@v9.9.9'] } })
-    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball())
+    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball(), makeFakeLedger())
     scenario(
       'A captured file reuses the prior cycle',
       { scenarioLayer: live },
@@ -497,7 +546,7 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const cycles = makeFakeCycleStore({
       capturedFiles: { 'cap.json': ['alpha@v1.0.0', 'beta@v2.0.0'] },
     })
-    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball())
+    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball(), makeFakeLedger())
     scenario(
       'Re-tagging a captured cycle over pushed tags stays idempotent',
       { scenarioLayer: live },
@@ -546,7 +595,7 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members, files: {} })
     const git = makeFakeGit({ tags: [] })
     const cycles = makeFakeCycleStore({ capturedFiles: { 'cap.json': 'nope' } })
-    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball())
+    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball(), makeFakeLedger())
     scenario(
       'A malformed captured file refuses tagging',
       { scenarioLayer: live },
@@ -596,7 +645,7 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members, files: {} })
     const git = makeFakeGit({ tags: [] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball())
+    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball(), makeFakeLedger())
     scenario(
       'A preview with an output file captures the full entries',
       { scenarioLayer: live },
@@ -782,7 +831,7 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members, files: {}, storage: 'repository' })
     const git = makeFakeGit({ tags: [] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball())
+    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball(), makeFakeLedger())
     scenario(
       'Under repository storage the captured cycle points at the package changelog',
       { scenarioLayer: live },
@@ -1373,7 +1422,15 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
     const git = makeFakeGit({ tags: [tagOf('alpha', '1.0.0')] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer, makeFakeTarball(), makeFakeChangesetsPort())
+    const live = Layer.mergeAll(
+      changesets,
+      workspace,
+      git,
+      cycles.layer,
+      makeFakeTarball(),
+      makeFakeChangesetsPort(),
+      makeFakeLedger(),
+    )
     scenario(
       'A recorded annotation that matches the packed tarball verifies',
       { scenarioLayer: live },
@@ -1411,7 +1468,15 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
       annotation: JSON.stringify({ integrity: FAKE_INTEGRITY, files: { 'package/package.json': 'sha512-changed' } }),
     })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer, makeFakeTarball(), makeFakeChangesetsPort())
+    const live = Layer.mergeAll(
+      changesets,
+      workspace,
+      git,
+      cycles.layer,
+      makeFakeTarball(),
+      makeFakeChangesetsPort(),
+      makeFakeLedger(),
+    )
     scenario(
       'A recorded annotation whose tarball changed refuses the plan',
       { scenarioLayer: live },
@@ -1465,6 +1530,7 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
         files: {},
       }]),
       makeFakeChangesetsPort(),
+      makeFakeLedger(),
     )
     scenario(
       'A recorded annotation with empty files refuses the plan',

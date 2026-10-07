@@ -8,8 +8,16 @@ import {
   FsPath,
   GitPort,
   type IntegrityRefusal,
+  LEDGER_PATH,
+  LedgerEntryMismatch,
+  LedgerIdentityRefusal,
+  LedgerPort,
+  type LedgerRefusal,
+  LedgerTagMissing,
+  LedgerTagMoved,
   type PlanRefusal,
   RelativePath,
+  ReleaseLedger,
   RemoteName,
   TagAnnotationLightweight,
   TagAnnotationMalformed,
@@ -17,6 +25,7 @@ import {
   TarballIntegrity,
   TarballMissing,
   TarballPort,
+  type VersionBurned,
   type VersionIntentMalformed,
   type VersionUnknownPackage,
   WorkspaceStore,
@@ -26,8 +35,15 @@ import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import { cycleOf, dropExcluded, tagOf } from './cycle.js'
-import { exemptNames, identityCandidates } from './integrity.js'
-import { verifyIntegrity } from './integrity.js'
+import {
+  burnedOf,
+  exemptNames,
+  identityCandidates,
+  publishedRecorded,
+  stateForVersion,
+  tagEntryOf,
+  verifyIntegrity,
+} from './integrity.js'
 import { type IntegrityCheck } from './integrity.schema.js'
 import { PlanCommand, type PlanDeferredUnknown, planRelease } from './plan-release.workflow.js'
 import { type PlanDecision, PlanReport } from './plan.schema.js'
@@ -42,6 +58,9 @@ export const PlanRequest = Wire.wire({
 export type PlanReadRefusal =
   | PlanRefusal
   | IntegrityRefusal
+  | LedgerRefusal
+  | LedgerIdentityRefusal
+  | VersionBurned
   | VersionIntentMalformed
   | VersionUnknownPackage
   | IntentRefusal
@@ -78,7 +97,7 @@ const read = (
 ): Effect.Effect<
   PlanCommand,
   PlanReadRefusal,
-  ChangesetStore | WorkspaceStore | GitPort | CycleStore | ChangesetsPort | TarballPort
+  ChangesetStore | WorkspaceStore | GitPort | CycleStore | ChangesetsPort | TarballPort | LedgerPort
 > =>
   Effect.gen(function*() {
     const remote = request.remote ?? RemoteName.make('origin')
@@ -88,6 +107,7 @@ const read = (
     const cycles = yield* CycleStore
     const port = yield* ChangesetsPort
     const tarballs = yield* TarballPort
+    const ledgerPort = yield* LedgerPort
     const intents = yield* changesets.listIntents()
     const members = yield* workspace.listMembers()
     const tags = yield* git.remoteTags(remote)
@@ -108,25 +128,68 @@ const read = (
     const toCheck = candidates.filter((member) => exempt.includes(member.name) === false)
     const digests = yield* digestsWhen(toCheck.length > 0, () => tarballs.read(request.tarballs))
     const checks: Array<IntegrityCheck> = []
+    const ledger = yield* ledgerPort.read(LEDGER_PATH)
+    const ledgerEntries = Option.getOrElse(ledger, () => ReleaseLedger.make({ entries: [] })).entries
     for (const member of toCheck) {
       const version = member.version
-      const digest = digests.find((entry) => entry.name === member.name && entry.version === version)
+      const tag = tagOf(member.name, version)
+      const state = stateForVersion(ledgerEntries, member.name, version)
+      if (state !== undefined) {
+        const burned = burnedOf(member.name, version, state)
+        if (burned !== undefined) {
+          return yield* Effect.fail(burned)
+        }
+      }
+      const entry = tagEntryOf(ledgerEntries, tag)
+      if (entry !== undefined) {
+        const commit = yield* git.tagCommit(remote, tag)
+        if (Option.isNone(commit)) {
+          return yield* Effect.fail(LedgerTagMissing.make({ tag }))
+        }
+        if (commit.value !== entry.commit) {
+          return yield* Effect.fail(
+            LedgerTagMoved.make({ tag, recorded: entry.commit, current: commit.value }),
+          )
+        }
+      }
+      const digest = digests.find((candidate) => candidate.name === member.name && candidate.version === version)
       if (digest === undefined) {
         return yield* Effect.fail(TarballMissing.make({ package: member.name, version }))
       }
-      const tag = tagOf(member.name, version)
+      if (state !== undefined) {
+        const recorded = publishedRecorded(state)
+        if (recorded === undefined) {
+          return yield* Effect.fail(burnedOf(member.name, version, state) ?? LedgerTagMissing.make({ tag }))
+        }
+        checks.push({
+          package: member.name,
+          version,
+          recorded,
+          current: { integrity: digest.integrity, files: digest.files },
+        })
+        continue
+      }
+      if (entry !== undefined) {
+        return yield* Effect.fail(
+          LedgerEntryMismatch.make({
+            tag,
+            recorded: entry.tag,
+            current: `${member.name}@${version}`,
+          }),
+        )
+      }
       const annotation = yield* git.tagAnnotation(remote, tag)
       if (Option.isNone(annotation)) {
         return yield* Effect.fail(TagAnnotationLightweight.make({ tag }))
       }
-      const recorded = parseAnnotation(annotation.value)
-      if (Result.isFailure(recorded)) {
-        return yield* Effect.fail(TagAnnotationMalformed.make({ tag, reason: recorded.failure }))
+      const parsed = parseAnnotation(annotation.value)
+      if (Result.isFailure(parsed)) {
+        return yield* Effect.fail(TagAnnotationMalformed.make({ tag, reason: parsed.failure }))
       }
       checks.push({
         package: member.name,
         version,
-        recorded: recorded.success,
+        recorded: parsed.success,
         current: { integrity: digest.integrity, files: digest.files },
       })
     }
@@ -185,7 +248,7 @@ export const planCell: Cell.Cell<
   S.Schema.Type<typeof PlanRequest>,
   PlanReport,
   PlanReadRefusal,
-  ChangesetStore | WorkspaceStore | GitPort | CycleStore | ChangesetsPort | TarballPort
+  ChangesetStore | WorkspaceStore | GitPort | CycleStore | ChangesetsPort | TarballPort | LedgerPort
 > = Cell.layer({
   read,
   decide: planRelease,

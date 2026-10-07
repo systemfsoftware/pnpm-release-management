@@ -68,6 +68,8 @@ export const makeFakeGit = (state: FakeGitState = {}) => {
     },
     tagAnnotation: () =>
       Effect.succeed(Option.some(state.annotation ?? JSON.stringify({ integrity: FAKE_INTEGRITY, files: FAKE_FILES }))),
+    tagCommit: () => Effect.succeed(Option.some(CommitSha.make('deadbeef'))),
+    tagTree: () => Effect.succeed(Option.none()),
     repoSlug: () =>
       Effect.succeed({
         owner: OwnerName.make(state.owner ?? 'acme'),

@@ -9,6 +9,7 @@ import {
   GitPort,
   GitRef,
   OwnerName,
+  PackageManifest,
   PackageName,
   PullRequestBodyUnreadable,
   PullRequestHeadInvalid,
@@ -27,6 +28,8 @@ import type {
   RemoteName,
   RepoSlug,
   StagedChecksRefusal,
+  TaggedManifest,
+  TaggedTree,
   TagRefusal,
 } from '@systemfsoftware/release-language'
 import { Effect, Layer, Option, Result } from 'effect'
@@ -42,6 +45,8 @@ const pushTagsPath = FsPath.make('git:push-tags')
 const writeTagPath = FsPath.make('git:write-tag')
 const repoSlugPath = FsPath.make('git:repo-slug')
 const tagAnnotationPath = FsPath.make('git:tag-annotation')
+const tagCommitPath = FsPath.make('git:tag-commit')
+const tagTreePath = FsPath.make('git:tag-tree')
 const diffPath = RelativePath.make('git:diff')
 
 const headRef = GitRef.make('HEAD')
@@ -269,6 +274,58 @@ const makeGitPort = (
           return yield* Effect.fail(TagCapturedMalformed.make({ path: tagAnnotationPath }))
         }
         return Option.some(annotationOf(body.success))
+      }),
+    tagCommit: (
+      remote: RemoteName,
+      tag: ReleaseTag,
+    ): Effect.Effect<Option.Option<CommitSha>, TagRefusal> =>
+      Effect.gen(function*() {
+        yield* run(
+          ['fetch', '--force', '--no-tags', remote, `+refs/tags/${tag}:refs/tags/${tag}`],
+          () => TagCapturedMalformed.make({ path: tagCommitPath }),
+        )
+        const peeled = yield* git(['rev-parse', '--verify', `refs/tags/${tag}^{commit}`])
+        if (Result.isFailure(peeled)) {
+          return Option.none()
+        }
+        return S.decodeUnknownOption(CommitSha)(peeled.success.trim())
+      }),
+    tagTree: (
+      remote: RemoteName,
+      tag: ReleaseTag,
+    ): Effect.Effect<Option.Option<TaggedTree>, TagRefusal> =>
+      Effect.gen(function*() {
+        yield* run(
+          ['fetch', '--force', '--no-tags', remote, `+refs/tags/${tag}:refs/tags/${tag}`],
+          () => TagCapturedMalformed.make({ path: tagTreePath }),
+        )
+        const peeled = yield* git(['rev-parse', '--verify', `refs/tags/${tag}^{commit}`])
+        if (Result.isFailure(peeled)) {
+          return Option.none()
+        }
+        const decoded = S.decodeUnknownOption(CommitSha)(peeled.success.trim())
+        if (Option.isNone(decoded)) {
+          return Option.none()
+        }
+        const commit = decoded.value
+        const listed = yield* git(['ls-tree', '-r', '--name-only', commit])
+        if (Result.isFailure(listed)) {
+          return yield* Effect.fail(TagCapturedMalformed.make({ path: tagTreePath }))
+        }
+        const paths = listed.success
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line.endsWith('package.json') && !line.includes('node_modules/'))
+        const manifests: Array<TaggedManifest> = []
+        for (const file of paths) {
+          const shown = yield* git(['show', `${commit}:${file}`])
+          if (Result.isFailure(shown)) continue
+          const manifest = S.decodeUnknownOption(S.fromJsonString(PackageManifest))(shown.success)
+          const relative = S.decodeUnknownOption(RelativePath)(file)
+          if (Option.isNone(manifest) || Option.isNone(relative)) continue
+          manifests.push({ path: relative.value, manifest: manifest.value })
+        }
+        return Option.some({ commit, manifests })
       }),
     repoSlug: (): Effect.Effect<RepoSlug, TagRefusal> =>
       Effect.gen(function*() {

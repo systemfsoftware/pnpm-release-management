@@ -31,6 +31,8 @@ export const makeFakeGitPort = (state: FakeGitState): Layer.Layer<GitPort> =>
     pushTags: () => unimplemented('pushTags'),
     writeTag: () => unimplemented('writeTag'),
     tagAnnotation: () => unimplemented('tagAnnotation'),
+    tagCommit: () => unimplemented('tagCommit'),
+    tagTree: () => unimplemented('tagTree'),
     repoSlug: () => unimplemented('repoSlug'),
     stagedPaths: () => {
       if (state.stagedError !== undefined) {

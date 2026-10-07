@@ -22,4 +22,6 @@ export const makeFakeTarball = (
 ) =>
   Layer.succeed(TarballPort, {
     read: () => Effect.succeed([...digests]),
+    digest: (_source, _bytes) => Effect.succeed(fakeDigest('fake', '0.0.0')),
+    sha256: () => 'sha256-fake',
   })

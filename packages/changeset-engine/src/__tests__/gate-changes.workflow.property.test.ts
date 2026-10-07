@@ -15,6 +15,7 @@ import { Effect, Layer } from 'effect'
 import * as fc from 'effect/testing/FastCheck'
 import { fakeChangeEvidencePort } from '../../tests/__fixtures__/FakeChangeEvidencePort.js'
 import { fakeChangesetStore } from '../../tests/__fixtures__/FakeChangesetStore.js'
+import { fakeLedgerPort } from '../../tests/__fixtures__/FakeLedgerPort.js'
 import { fakeWorkspaceStore } from '../../tests/__fixtures__/FakeWorkspaceStore.js'
 
 const nameArb = fc.stringMatching(/^[a-z][a-z0-9-]{0,9}$/)
@@ -120,6 +121,7 @@ const gateEffect = (scenario: {
       raw: null,
     }),
     fakeChangesetStore({ intents: scenario.intents }).layer,
+    fakeLedgerPort(),
   ))(gateChangesCell)
   return Effect.map(
     Cell.run(program, {

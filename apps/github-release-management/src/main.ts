@@ -1,10 +1,12 @@
 import { NodeRuntime, NodeServices } from '@effect/platform-node'
+import { LedgerLive, RegistryLive } from '@systemfsoftware/adoption-adapter'
 import { ChangesetsPortLive } from '@systemfsoftware/changesets-adapter'
 import { program, ReporterLive } from '@systemfsoftware/cli-adapter'
 import { Cell } from '@systemfsoftware/effect-cell-types'
 import { GitLive } from '@systemfsoftware/git-adapter'
 import { ForgeConfig, ForgeLive } from '@systemfsoftware/github-adapter'
 import {
+  adoptCell,
   githubReleaseCell,
   planCell,
   pullRequestCell,
@@ -36,7 +38,9 @@ import { Effect, Layer, Option } from 'effect'
 import * as Match from 'effect/Match'
 import * as S from 'effect/Schema'
 import { Command, Flag } from 'effect/unstable/cli'
+import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 import {
+  adoptRequestOf,
   bumpInput,
   CHANGESET_FALLBACK,
   planRequestOf,
@@ -47,6 +51,8 @@ import {
 } from './boundary.js'
 import { VersionStageRefused } from './boundary.schema.js'
 import {
+  renderAdoption,
+  renderAdoptRefusal,
   renderPlan,
   renderPlanRefusal,
   renderPullRequest,
@@ -95,6 +101,7 @@ const MainLive = Layer.unwrap(
         ChangelogStoreLive(root),
         ChangesetStoreLive({ root, changesetDir }),
         CycleStoreLive,
+        LedgerLive(root),
         ReleaseConfigStoreLive,
         SurfaceStoreLive(root),
         WorkspaceStoreLive(root),
@@ -121,6 +128,25 @@ const landVersion = (
     }),
   )
 }
+
+const adopt = Command.make('adopt', {
+  registry: Flag.string('registry'),
+  output: Flag.string('output'),
+  remote: Flag.string('remote').pipe(Flag.optional),
+  config: Flag.string('config').pipe(Flag.optional),
+}, (flags) =>
+  Effect.gen(function*() {
+    const request = yield* adoptRequestOf({
+      registry: flags.registry,
+      output: flags.output,
+      remote: Option.getOrUndefined(flags.remote),
+    })
+    const report = yield* Cell.run(adoptCell, request).pipe(
+      Effect.provide(TarballLive),
+      Effect.provide(RegistryLive.pipe(Layer.provide(FetchHttpClient.layer))),
+    )
+    yield* renderAdoption(report)
+  }).pipe(Effect.catch(renderAdoptRefusal)))
 
 const plan = Command.make('plan', {
   deferred: Flag.string('deferred').pipe(Flag.optional),
@@ -220,7 +246,7 @@ const pr = Command.make('pr', {
 
 const release = Command.make('release').pipe(
   Command.withDescription('Plan release phases, open release PRs, tag and publish GitHub releases'),
-  Command.withSubcommands([plan, pr, tag, releaseCommand]),
+  Command.withSubcommands([adopt, plan, pr, tag, releaseCommand]),
 )
 
 NodeRuntime.runMain(

@@ -15,6 +15,8 @@ const onMain = (changed: ReadonlyArray<RelativePath>) => ({
   pushTags: () => unimplemented('pushTags'),
   writeTag: () => unimplemented('writeTag'),
   tagAnnotation: () => unimplemented('tagAnnotation'),
+  tagCommit: () => unimplemented('tagCommit'),
+  tagTree: () => unimplemented('tagTree'),
   repoSlug: () => unimplemented('repoSlug'),
   stagedPaths: () => unimplemented('stagedPaths'),
   mergeInProgress: () => unimplemented('mergeInProgress'),
