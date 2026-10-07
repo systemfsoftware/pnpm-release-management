@@ -1,7 +1,7 @@
 ---
 "@systemfsoftware/changesets-adapter": minor
-"@systemfsoftware/release-language": minor
-"@systemfsoftware/version-engine": minor
+"@systemfsoftware/release-language": major
+"@systemfsoftware/version-engine": major
 "@systemfsoftware/changeset-engine": none
 "@systemfsoftware/cli-adapter": none
 "@systemfsoftware/git-adapter": none
@@ -12,4 +12,4 @@
 "@systemfsoftware/workspace-adapter": none
 ---
 
-`versioning.strategy` is now `"changesets"` in place of `"pnpm"`: `version bump` versions each package from its intents, bumps dependents, writes per-package changelogs and keeps exact inner pins. Configs that set `"pnpm"` must change it to `"changesets"`.
+`versioning.strategy` is now `"changesets"` in place of `"pnpm"`, and a config that still sets `"pnpm"` no longer decodes. Change it to `"changesets"`. `version bump` versions each package from its intents, bumps dependents, writes per-package changelogs and keeps exact inner pins.
