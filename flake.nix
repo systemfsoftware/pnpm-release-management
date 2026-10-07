@@ -143,14 +143,8 @@
               accepted = builtins.tryEval (builtins.deepSeq (parser.tarballCacheData unresolvedFixture) true);
               expectedCache = {
                 "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz" = { hash = "sha512-wells-formed-ms-integrity"; };
-                "http://registry.npmjs.org/ms/-/ms-2.1.3.tgz" = {
-                  redirect = "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz";
-                };
                 "https://registry.npmjs.org/@scope/thing/-/thing-2.0.0.tgz" = {
                   hash = "sha512-wells-formed-thing-integrity";
-                };
-                "http://registry.npmjs.org/@scope/thing/-/thing-2.0.0.tgz" = {
-                  redirect = "https://registry.npmjs.org/@scope/thing/-/thing-2.0.0.tgz";
                 };
               };
             in
