@@ -16,7 +16,6 @@ import {
   type IntentRefusal,
   type LedgerIdentityRefusal,
   type LedgerRefusal,
-  type LedgerUnwritable,
   type MemberRefusal,
   type PlanDeferredUnknown,
   type PlanRefusal,
@@ -156,6 +155,9 @@ export const renderPlanRefusal = (refusal: PlanFailure): Effect.Effect<void, nev
         TagExcludedMalformed: (malformed) => `refused: tag-excluded-malformed, path: ${malformed.path}`,
         TagIntegrityMismatch: (mismatch) =>
           `refused: tag-integrity-mismatch, package: ${mismatch.package}@${mismatch.version}, recorded: ${mismatch.recorded}, current: ${mismatch.current}, file: ${mismatch.file}`,
+        IntegrityNothingToVerify: () => 'refused: integrity-nothing-to-verify',
+        IntegrityFilesEmpty: (empty) =>
+          `refused: integrity-files-empty, package: ${empty.package}@${empty.version}, side: ${empty.side}`,
         TagAnnotationMalformed: (malformed) =>
           `refused: tag-annotation-malformed, tag: ${malformed.tag}, reason: ${malformed.reason}`,
         TagAnnotationLightweight: (lightweight) => `refused: tag-annotation-lightweight, tag: ${lightweight.tag}`,
@@ -352,7 +354,7 @@ export const renderPlan = (
     yield* appendFile(output, block)
   })
 
-export type AdoptFailure = PlatformRefusal | MemberRefusal | TagRefusal | LedgerUnwritable | AdoptionRefused
+export type AdoptFailure = PlatformRefusal | MemberRefusal | TagRefusal | LedgerRefusal | AdoptionRefused
 
 export const renderAdoptRefusal = (refusal: AdoptFailure): Effect.Effect<void, never, Reporter> =>
   refuse(
@@ -377,6 +379,8 @@ export const renderAdoptRefusal = (refusal: AdoptFailure): Effect.Effect<void, n
         ManifestInvalid: (invalid) => `refused: manifest-invalid, path: ${invalid.path}`,
         TagCapturedMalformed: (malformed) => `refused: tag-captured-malformed, path: ${malformed.path}`,
         TagExcludedMalformed: (malformed) => `refused: tag-excluded-malformed, path: ${malformed.path}`,
+        LedgerUnreadable: (unreadable) => `cannot read release ledger ${unreadable.path}: ${unreadable.reason}`,
+        LedgerMalformed: (malformed) => `cannot parse release ledger ${malformed.path}: ${malformed.reason}`,
         LedgerUnwritable: (unwritable) => `cannot write release ledger ${unwritable.path}: ${unwritable.reason}`,
       }),
     ),

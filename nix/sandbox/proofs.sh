@@ -258,15 +258,15 @@ case "$(uname -s)" in
     ;;
   Darwin)
     status=0
-    out="$(sandbox -- sh -c "echo $alive; node -e \"require('node:http').createServer().on('error', (e) => { console.log(e.code); process.exit(3) }).listen(4322, '127.0.0.1')\"")" || status=$?
+    out="$(timeout --foreground 60 sandbox -- sh -c "echo $alive; node -e \"require('node:http').createServer().on('error', (e) => { console.log(e.code); process.exit(3) }).listen(4322, '127.0.0.1')\"")" || status=$?
     if [ "$status" -eq 3 ] && printf '%s\n' "$out" | grep -qx "$alive" && printf '%s\n' "$out" | grep -qx EPERM; then
       pass "an undeclared macOS bind is refused with EPERM"
     else
       fail "an undeclared macOS bind is refused with EPERM"
     fi
     allowed "a --listen port binds on macOS" \
-      sandbox --listen 4321 -- sh -c "node -e \"require('node:http').createServer((q, s) => s.end('$alive')).listen(4321, '127.0.0.1')\" & sleep 1; curl -sS --max-time 5 http://127.0.0.1:4321; echo; kill \$!"
-    sandbox --publish 18080:4321 -- sh -c \
+      timeout --foreground 60 sandbox --listen 4321 -- sh -c "node -e \"require('node:http').createServer((q, s) => s.end('$alive')).listen(4321, '127.0.0.1')\" & sleep 1; curl -sS --max-time 5 http://127.0.0.1:4321; echo; kill \$!"
+    timeout --foreground 90 sandbox --publish 18080:4321 -- sh -c \
       "node -e \"require('node:http').createServer((q, s) => s.end('$alive')).listen(4321, '127.0.0.1')\" & sleep 30" &
     sandbox_pid=$!
     i=0
@@ -282,6 +282,11 @@ case "$(uname -s)" in
     kill "$sandbox_pid" 2>/dev/null || true
     wait "$sandbox_pid" 2>/dev/null || true
     sandbox_pid=""
+    if curl -sS --max-time 2 -o /dev/null http://127.0.0.1:4321 2>/dev/null || curl -sS --max-time 2 -o /dev/null http://127.0.0.1:18080 2>/dev/null; then
+      fail "a killed launcher leaves no sandboxed server or forwarder running"
+    else
+      pass "a killed launcher leaves no sandboxed server or forwarder running"
+    fi
     ;;
 esac
 

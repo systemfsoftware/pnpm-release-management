@@ -444,7 +444,11 @@ is `name@version: <reason>`.
 The ledger is one JSON file at the repository root, written by the command and
 never hand-edited: keys in a stable order, entries sorted by tag. It lands in its
 own commit in the adopting repository, separate from any release commit, so the
-adoption itself is a reviewable one-file change.
+adoption itself is a reviewable one-file change. Running `adopt` again keeps
+every existing entry, including one whose tag has since left the remote, and
+adds only tags the ledger does not hold. A ledger that cannot be read or parsed,
+here or at a revision the append-only check reads, stops the command instead of
+counting as empty.
 
 After adoption, `release plan` accepts a lightweight tag only when the ledger has
 that tag with the same peeled commit and the same `name@version`. A moved tag or

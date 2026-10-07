@@ -35,51 +35,73 @@ let
       map parseItem (builtins.filter (item: builtins.match "[[:space:]]*" item == null) items)
     );
 
-  packagesOf =
+  # Every entry key under `packages:` is recorded, with `null` standing in until
+  # its `resolution:` line arrives. An entry that never gets one would otherwise
+  # vanish here and only surface later as an offline-install fetch error.
+  entriesOf =
     lockFile:
-    let
-      state = builtins.foldl'
-        (
-          state: line:
+    (builtins.foldl'
+      (
+        state: line:
+        let
+          entryKey = builtins.match "  ([^ ].*):[[:space:]]*" line;
+          resolution = builtins.match "    resolution:[[:space:]]*(.+)" line;
+        in
+        if builtins.match "---[[:space:]]*" line != null then
+          state // { inPackages = false; current = null; documents = state.documents + 1; }
+        else if builtins.match "packages:[[:space:]]*" line != null then
+          state // { inPackages = true; current = null; }
+        else if builtins.match "[^[:space:]#-][^:]*:.*" line != null then
+          state // { inPackages = false; }
+        else if !state.inPackages then
+          state
+        else if entryKey != null then
           let
-            entryKey = builtins.match "  ([^ ].*):[[:space:]]*" line;
-            resolution = builtins.match "    resolution:[[:space:]]*(.+)" line;
+            name = unquote (trim (builtins.head entryKey));
           in
-          if builtins.match "---[[:space:]]*" line != null then
-            state // { inPackages = false; current = null; documents = state.documents + 1; }
-          else if builtins.match "packages:[[:space:]]*" line != null then
-            state // { inPackages = true; current = null; }
-          else if builtins.match "[^[:space:]#-][^:]*:.*" line != null then
-            state // { inPackages = false; }
-          else if !state.inPackages then
-            state
-          else if entryKey != null then
-            state // { current = unquote (trim (builtins.head entryKey)); }
           # pnpm 12 opens a lockfile stream with the env document: its
           # packageManagerDependencies are pnpm's own binaries for every
           # platform, which run only when pnpm manages its version, and the
           # sandbox and store builds turn that off.
-          else if state.documents == 1 && state.current != null && builtins.match "(pnpm|@pnpm/exe\\.[^@]+)@.*" state.current != null then
-            state
-          else if state.current != null && resolution != null then
-            state
-            // {
-              entries = state.entries // {
-                ${state.current} = flowMap (builtins.head resolution);
-              };
-            }
+          if state.documents == 1 && builtins.match "(pnpm|@pnpm/exe\\.[^@]+)@.*" name != null then
+            state // { current = null; }
           else
-            state
-        )
-        {
-          inPackages = false;
-          current = null;
-          documents = 0;
-          entries = { };
-        }
-        (lib.splitString "\n" (builtins.readFile lockFile));
+            state // { current = name; entries = state.entries // { ${name} = null; }; }
+        else if state.current != null && resolution != null then
+          state
+          // {
+            entries = state.entries // {
+              ${state.current} = flowMap (builtins.head resolution);
+            };
+          }
+        else
+          state
+      )
+      {
+        inPackages = false;
+        current = null;
+        documents = 0;
+        entries = { };
+      }
+      (lib.splitString "\n" (builtins.readFile lockFile))).entries;
+
+  unresolvedPackages =
+    lockFile:
+    builtins.attrNames (lib.filterAttrs (_: resolution: resolution == null) (entriesOf lockFile));
+
+  packagesOf =
+    lockFile:
+    let
+      unresolved = unresolvedPackages lockFile;
     in
-    state.entries;
+    if unresolved == [ ] then
+      entriesOf lockFile
+    else
+      throw (
+        lib.concatMapStringsSep "\n" (
+          name: "pnpm-lock.nix: package ${name} has no resolution in the lockfile"
+        ) unresolved
+      );
 
   # A `file:` tarball and a `directory` link are workspace-local: pnpm resolves
   # them from the source tree and nothing is fetched for them.
@@ -115,6 +137,10 @@ let
   fetched = lockFile: lib.filterAttrs (name: resolution: !(isLocal name resolution)) (packagesOf lockFile);
 in
 {
+  # Names of `packages:` entries that carry no `resolution:` line, for callers
+  # and checks that want the list without triggering the throw in `packagesOf`.
+  inherit unresolvedPackages;
+
   # The shape `mitm-cache.fetch` consumes: tarball URL -> { hash = integrity; }.
   # Each https URL also answers on http as a redirect to the same fetch, so pnpm
   # can replay through mitm-cache's plain-HTTP proxy without TLS.

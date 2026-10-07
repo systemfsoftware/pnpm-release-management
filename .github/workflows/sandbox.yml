@@ -46,6 +46,9 @@ jobs:
             exit 1
           fi
 
+      - name: A lockfile package with no resolution is refused
+        run: nix build ".#checks.$(nix eval --impure --raw --expr builtins.currentSystem).pnpm-lock-parser"
+
       - name: Install through the sandbox, offline from the Nix pnpm store
         run: nix develop --command sandbox -- pnpm install
 

@@ -106,15 +106,20 @@ work="$(mktemp -d "${TMPDIR:-/tmp}/sandbox.XXXXXX")"
 work="$(cd "$work" && pwd -P)"
 proxy_pid=""
 forwards=()
-# shellcheck disable=SC2329 # invoked by `trap cleanup EXIT INT TERM`
+group=""
+# shellcheck disable=SC2329 # invoked by the EXIT trap
 cleanup() {
+  [ -z "$group" ] || kill -KILL -- "-$group" 2>/dev/null || true
   [ -z "$proxy_pid" ] || kill "$proxy_pid" 2>/dev/null || true
   if [ "${#forwards[@]}" -gt 0 ]; then
     for pid in "${forwards[@]}"; do kill "$pid" 2>/dev/null || true; done
   fi
   rm -rf "$work"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 system="$(uname -s)"
 if [ "$system" = Darwin ]; then
@@ -357,20 +362,27 @@ done
       done
     fi
 
-    for spec in "${publishes[@]}"; do
-      h="${spec%%:*}"
-      p="${spec##*:}"
-      if [ "$h" != "$p" ]; then
-        "@socat@" TCP-LISTEN:"$h",bind=127.0.0.1,fork,reuseaddr TCP:127.0.0.1:"$p" 2>/dev/null &
-        forwards+=("$!")
-      fi
-    done
-
     cd "$cwd"
+    set -m
+    (
+      for spec in "${publishes[@]}"; do
+        h="${spec%%:*}"
+        p="${spec##*:}"
+        if [ "$h" != "$p" ]; then
+          "@socat@" TCP-LISTEN:"$h",bind=127.0.0.1,fork,reuseaddr TCP:127.0.0.1:"$p" 2>/dev/null &
+        fi
+      done
+      /usr/bin/sandbox-exec -f "$profile" \
+        -D PROJECT="$project" -D HOME="$home" -D TMP="$tmp" \
+        /usr/bin/env -i "${darwin_envs[@]}" "$@"
+    ) &
+    group=$!
     status=0
-    /usr/bin/sandbox-exec -f "$profile" \
-      -D PROJECT="$project" -D HOME="$home" -D TMP="$tmp" \
-      /usr/bin/env -i "${darwin_envs[@]}" "$@" || status=$?
+    if [ -t 0 ]; then
+      fg %% >/dev/null || status=$?
+    else
+      wait "$group" || status=$?
+    fi
     exit "$status"
     ;;
   *)

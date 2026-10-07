@@ -15,6 +15,7 @@ export interface FakeGitState {
   readonly tags?: Array<ReleaseTag>
   readonly owner?: string
   readonly repo?: string
+  readonly annotation?: string
 }
 
 export interface FakeGitCalls {
@@ -65,7 +66,8 @@ export const makeFakeGit = (state: FakeGitState = {}) => {
       }
       return Effect.succeed(tag)
     },
-    tagAnnotation: () => Effect.succeed(Option.some(JSON.stringify({ integrity: FAKE_INTEGRITY, files: FAKE_FILES }))),
+    tagAnnotation: () =>
+      Effect.succeed(Option.some(state.annotation ?? JSON.stringify({ integrity: FAKE_INTEGRITY, files: FAKE_FILES }))),
     tagCommit: () => Effect.succeed(Option.some(CommitSha.make('deadbeef'))),
     tagTree: () => Effect.succeed(Option.none()),
     repoSlug: () =>
