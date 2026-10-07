@@ -236,25 +236,49 @@ agree on what this cycle owns.
 
 ## CI
 
-| Workflow              | Inputs                                    | Caller must grant                                           |
-| --------------------- | ----------------------------------------- | ----------------------------------------------------------- |
-| `release.yml`         | `ci-workflow` (required), `artifacts-dir` | `contents: write`, `pull-requests: write`, `actions: write` |
-| `changeset-check.yml` | `base-sha`                                | `contents: read`                                            |
+| Workflow              | Inputs                                                         | Caller must grant                                           |
+| --------------------- | -------------------------------------------------------------- | ----------------------------------------------------------- |
+| `release.yml`         | `ci-workflow` (required), `artifacts-dir`, `runs-on`           | `contents: write`, `pull-requests: write`, `actions: write` |
+| `changeset-check.yml` | `tools-ref`, `base-sha`, `node-version`, `devshell`, `runs-on` | `contents: read`, `pull-requests: read`                     |
 
 A pull request opened with the workflow token starts no workflows, so after
 opening or updating the release PR, `release.yml` dispatches the caller's CI
 workflow (`ci-workflow`, which must accept `workflow_dispatch`) on the release
 branch. That gives the release PR the checks the branch protection requires.
 
-Both workflows run the apps from the caller's dev shell (`nix develop`). The
+`release.yml` runs the apps from the caller's dev shell (`nix develop`). The
 revision is the one the caller's `flake.lock` pins for its
 `pnpm-release-management` input; `nix flake update pnpm-release-management`
 moves it. The caller's `devShells.<system>.default` must provide
 `release-tools`, pnpm, the `sandbox` and `SANDBOX_PNPM_STORE` (see
-[Distribution through Nix](#distribution-through-nix)). `changeset-check.yml`
-runs turbo, which is the caller's dependency code, so its install and the gate
-both run inside `sandbox`, offline from the Nix-built pnpm store. Neither
-workflow installs packages from a registry.
+[Distribution through Nix](#distribution-through-nix)). Neither workflow
+installs packages from a registry in that mode.
+
+`changeset-check.yml` without `devshell` checks this repository out at
+`tools-ref` into `.release-tools`, builds it with pnpm, installs the caller's
+workspace with a plain `pnpm install --frozen-lockfile`, and runs the check
+from that build.
+
+`devshell: true` makes the changeset check install Nix and run the caller's
+own `bootstrap` script inside its `nix develop` shell
+(`nix develop --command pnpm run bootstrap`) instead of a plain
+`pnpm install`. The bootstrap script is where the caller installs its workspace
+inside its own sandbox, so no dependency code runs outside it; a caller without
+a `bootstrap` script is refused with an error naming the missing script. The
+workflow takes no install command of its own. The job allows unprivileged user
+namespaces so a bubblewrap sandbox can start. The check then runs as
+`nix develop --command sandbox -- changeset-management check`: the release
+tools come from the `release-tools` in the caller's dev shell, at the revision
+its `flake.lock` pins, and `tools-ref` is ignored. A caller needs this mode
+when its lockfile points at tarballs its flake builds, such as
+`file:.sfs-deps/<name>-<version>.tgz`; a plain install cannot read those. With
+`devshell: true`, `node-version` is ignored: the dev shell's node is used. The
+default, `false`, installs with plain pnpm as before. This repository's own CI
+calls the check with `devshell: true` on every pull request, and its own dev
+shell provides `release-tools` like any caller's.
+
+`runs-on` takes a JSON-encoded runner selector for every job; the default keeps
+hosted `ubuntu-latest`.
 
 ## Distribution through Nix
 

@@ -45,6 +45,7 @@ jobs:
           fetch-depth: 0
 
       - uses: actions/checkout@v7
+        if: ${{ !inputs.devshell }}
         with:
           repository: systemfsoftware/pnpm-release-management
           ref: ${{ inputs.tools-ref }}
@@ -70,6 +71,7 @@ jobs:
         if: inputs.devshell && runner.environment == 'github-hosted'
 
       - name: Build the release tools
+        if: ${{ !inputs.devshell }}
         run: |
           pnpm --dir .release-tools install --frozen-lockfile
           pnpm --dir .release-tools build
@@ -97,7 +99,7 @@ jobs:
           DEVSHELL: ${{ inputs.devshell }}
         run: |
           if [ "$DEVSHELL" = true ]; then
-            nix develop --command node .release-tools/apps/changeset-management/dist/main.js check "$BASE_SHA"
+            nix develop --command sandbox -- changeset-management check "$BASE_SHA"
           else
             node .release-tools/apps/changeset-management/dist/main.js check "$BASE_SHA"
           fi

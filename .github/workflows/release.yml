@@ -40,6 +40,7 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
       - uses: cachix/install-nix-action@v31
+        if: runner.environment == 'github-hosted'
 
       - name: Pack the workspace through the caller's flake
         run: echo "TARBALLS=$(nix build --no-link --print-out-paths .#workspace-tarballs)" >> "$GITHUB_ENV"
@@ -65,6 +66,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
       - uses: cachix/install-nix-action@v31
+        if: runner.environment == 'github-hosted'
 
       - name: Bump every package and version surface, consuming the intents
         run: nix develop --command version-management bump
@@ -96,6 +98,7 @@ jobs:
           fetch-tags: true
           persist-credentials: true
       - uses: cachix/install-nix-action@v31
+        if: runner.environment == 'github-hosted'
 
       - name: Pack the workspace through the caller's flake
         run: echo "TARBALLS=$(nix build --no-link --print-out-paths .#workspace-tarballs)" >> "$GITHUB_ENV"
