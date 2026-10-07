@@ -831,7 +831,7 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members, files: {}, storage: 'repository' })
     const git = makeFakeGit({ tags: [] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball())
+    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball(), makeFakeLedger())
     scenario(
       'Under repository storage the captured cycle points at the package changelog',
       { scenarioLayer: live },
