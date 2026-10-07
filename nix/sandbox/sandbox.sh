@@ -104,13 +104,8 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 system="$(uname -s)"
-if [ "$system" = Darwin ]; then
-  sandbox_home="$work/home"
-  sandbox_tmp="$work/tmp"
-else
-  sandbox_home="/home/sandbox"
-  sandbox_tmp="/tmp"
-fi
+sandbox_home="/home/sandbox"
+sandbox_tmp="/tmp"
 
 if [ -n "$egress_log" ]; then
   egress_log="$(realpath -m "$egress_log")"
@@ -289,80 +284,6 @@ done
       fi
     else
       "@bwrap@" "${args[@]}" -- "$@" || status=$?
-    fi
-    exit "$status"
-    ;;
-  Darwin)
-    home="$work/home"
-    tmp="$work/tmp"
-    runtime="$tmp/runtime"
-    mkdir -p "$home" "$tmp" "$runtime"
-    chmod 0700 "$runtime"
-
-    closure_read=""
-    closure_exec=""
-    for entry in "${closure[@]}"; do
-      closure_read+="(subpath \"$entry\") "
-      closure_exec+="(subpath \"$entry\") "
-    done
-    bind_ports=""
-    for spec in "${publishes[@]}"; do bind_ports+="(local ip \"localhost:${spec##*:}\") "; done
-    for port in "${listens[@]}"; do bind_ports+="(local ip \"localhost:$port\") "; done
-
-    profile="$work/profile.sb"
-    while IFS= read -r line; do
-      case "$line" in
-        ';;CLOSURE_READ;;') printf '(allow file-read* %s)\n' "$closure_read" ;;
-        ';;CLOSURE_EXEC;;') printf '(allow file-map-executable %s)\n' "$closure_exec" ;;
-        ';;BIND;;')
-          if [ -n "$bind_ports" ]; then printf '(allow network-bind network-inbound %s)\n' "$bind_ports"; fi
-          ;;
-        *) printf '%s\n' "$line" ;;
-      esac
-    done <"@darwinProfile@" >"$profile"
-
-    darwin_envs=()
-    runtime_env=0
-    for entry in "${envs[@]}"; do
-      case "$entry" in
-        HOME=*) darwin_envs+=("HOME=$home") ;;
-        TMPDIR=*) darwin_envs+=("TMPDIR=$tmp") ;;
-        XDG_RUNTIME_DIR=*)
-          darwin_envs+=("XDG_RUNTIME_DIR=$runtime")
-          runtime_env=1
-          ;;
-        *) darwin_envs+=("$entry") ;;
-      esac
-    done
-    if [ "$runtime_env" -eq 0 ]; then darwin_envs+=("XDG_RUNTIME_DIR=$runtime"); fi
-    if [ "${#hosts[@]}" -gt 0 ] || [ -n "$egress_log" ]; then
-      start_proxy tcp
-      url="http://$(cat "$work/proxy.addr")"
-      for index in "${!darwin_envs[@]}"; do
-        darwin_envs[index]="${darwin_envs[index]//$proxy_url/$url}"
-      done
-    fi
-
-    cd "$cwd"
-    set -m
-    (
-      for spec in "${publishes[@]}"; do
-        h="${spec%%:*}"
-        p="${spec##*:}"
-        if [ "$h" != "$p" ]; then
-          "@socat@" TCP-LISTEN:"$h",bind=127.0.0.1,fork,reuseaddr TCP:127.0.0.1:"$p" 2>/dev/null &
-        fi
-      done
-      /usr/bin/sandbox-exec -f "$profile" \
-        -D PROJECT="$project" -D HOME="$home" -D TMP="$tmp" \
-        /usr/bin/env -i "${darwin_envs[@]}" "$@"
-    ) &
-    group=$!
-    status=0
-    if [ -t 0 ]; then
-      fg %% >/dev/null || status=$?
-    else
-      wait "$group" || status=$?
     fi
     exit "$status"
     ;;
