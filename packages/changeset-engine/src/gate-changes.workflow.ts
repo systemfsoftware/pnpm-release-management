@@ -15,6 +15,7 @@ import * as S from 'effect/Schema'
 export class GateCommand extends S.TaggedClass<GateCommand>()('GateCommand', {
   members: S.Array(Member),
   touched: S.Array(PackageName),
+  deleted: S.Array(PackageName),
   intents: S.Array(Intent),
   skipLiveness: S.optional(S.Boolean),
 }) {}
@@ -23,6 +24,7 @@ export class ChangesVacant extends S.TaggedClass<ChangesVacant>()(
   'ChangesVacant',
   {
     members: S.Array(PackageName),
+    deleted: S.Array(PackageName),
   },
 ) {
   readonly [DecisionTypeId] = DecisionTypeId
@@ -32,6 +34,7 @@ export class ChangesGated extends S.TaggedClass<ChangesGated>()(
   'ChangesGated',
   {
     touched: S.Array(PackageName),
+    deleted: S.Array(PackageName),
   },
 ) {
   readonly [DecisionTypeId] = DecisionTypeId
@@ -45,6 +48,7 @@ type ForeignCase = S.Schema.Type<typeof ForeignCase>
 
 const VacantCase = S.TaggedStruct('Vacant', {
   members: S.Array(PackageName),
+  deleted: S.Array(PackageName),
 })
 type VacantCase = S.Schema.Type<typeof VacantCase>
 
@@ -55,6 +59,7 @@ type UnnamedCase = S.Schema.Type<typeof UnnamedCase>
 
 const GatedCase = S.TaggedStruct('Gated', {
   touched: S.Array(PackageName),
+  deleted: S.Array(PackageName),
 })
 type GatedCase = S.Schema.Type<typeof GatedCase>
 
@@ -94,10 +99,10 @@ const gateCaseOf = (command: GateCommand): GateCase => {
   const foreign = foreignCaseOf(command, memberNames)
   if (foreign !== undefined) return foreign
   const moved = movedSoFar(command)
-  if (moved.length === 0) return { _tag: 'Vacant', members: memberNames }
+  if (moved.length === 0) return { _tag: 'Vacant', members: memberNames, deleted: command.deleted }
   const unnamed = unnamedCaseOf(command, moved)
   if (unnamed !== undefined) return unnamed
-  return { _tag: 'Gated', touched: moved }
+  return { _tag: 'Gated', touched: moved, deleted: command.deleted }
 }
 
 export const gateChanges = Workflow.make(
@@ -118,13 +123,19 @@ export const gateChanges = Workflow.make(
             package: foreign.package,
           }),
       ),
-      Match.tag('Vacant', (vacant) => Result.succeed(ChangesVacant.make({ members: vacant.members }))),
+      Match.tag(
+        'Vacant',
+        (vacant) => Result.succeed(ChangesVacant.make({ members: vacant.members, deleted: vacant.deleted })),
+      ),
       Match.tag(
         'Unnamed',
         (unnamed): Result.Result<ChangesGated, GateIntentMissing> =>
           Result.fail({ _tag: 'GateIntentMissing', packages: unnamed.packages }),
       ),
-      Match.tag('Gated', (gated) => Result.succeed(ChangesGated.make({ touched: gated.touched }))),
+      Match.tag(
+        'Gated',
+        (gated) => Result.succeed(ChangesGated.make({ touched: gated.touched, deleted: gated.deleted })),
+      ),
       Match.exhaustive,
     ),
 )

@@ -3,6 +3,7 @@ import {
   EvidenceCommandFailed,
   type EvidenceRefusal,
   type Member,
+  type PackageName,
   type RelativePath,
   type RepoRoot,
   type TaskName,
@@ -145,41 +146,57 @@ const dryRunAt = (
     return run
   })
 
+interface TurboMembers {
+  readonly members: ReadonlyArray<Member>
+  readonly deleted: ReadonlyArray<PackageName>
+}
+
+const headMembersWhen = (
+  root: RepoRoot,
+  needed: boolean,
+): Effect.Effect<ReadonlyArray<Member>, EvidenceRefusal, Requirements> => {
+  if (!needed) return Effect.succeed([])
+  return Effect.flatMap(gitLines(root, MANIFEST_GLOB), (paths) => membersAt(root, paths))
+}
+
+const manifestAt = (present: boolean, atHead: string, atBase: string): string => {
+  if (present) return atHead
+  return atBase
+}
+
 const turboMembers = (
   root: RepoRoot,
+  baseDir: string,
   runs: ReadonlyArray<DryRun>,
-): Effect.Effect<ReadonlyArray<Member>, EvidenceRefusal, Requirements> =>
+): Effect.Effect<TurboMembers, EvidenceRefusal, Requirements> =>
   Effect.gen(function*() {
-    let dirs = HashMap.empty<string, RelativePath>()
-    for (const run of runs) {
-      for (const [name, dir] of HashMap.toEntries(run.dirs)) {
-        dirs = HashMap.set(dirs, name, dir)
-      }
-    }
+    const fs = yield* FileSystem.FileSystem
+    const fromRuns = HashMap.fromIterable(runs.flatMap((run) => [...HashMap.toEntries(run.dirs)]))
     const turboNames = HashSet.fromIterable(
       runs.flatMap((run) => run.document.packages),
     )
-    if ([...turboNames].some((name) => !HashMap.has(dirs, name))) {
-      const found = yield* membersAt(
-        root,
-        yield* gitLines(root, MANIFEST_GLOB),
-      )
-      for (const member of found) {
-        if (!HashSet.has(turboNames, member.name)) continue
-        if (HashMap.has(dirs, member.name)) continue
-        dirs = HashMap.set(dirs, member.name, member.dir)
-      }
-    }
+    const unplaced = [...turboNames].some((name) => !HashMap.has(fromRuns, name))
+    const found = yield* headMembersWhen(root, unplaced)
+    const placed = found.filter((member, index) =>
+      HashSet.has(turboNames, member.name) &&
+      !HashMap.has(fromRuns, member.name) &&
+      found.findIndex((other) => other.name === member.name) === index
+    )
+    const dirs = HashMap.union(
+      HashMap.fromIterable(placed.map((member): readonly [string, RelativePath] => [member.name, member.dir])),
+      fromRuns,
+    )
     const members: Array<Member> = []
+    const deleted: Array<PackageName> = []
     for (const [, dir] of HashMap.toEntries(dirs)) {
-      const member = memberOf(
-        dir,
-        yield* readText(`${root}/${dir}${MANIFEST_SUFFIX}`),
-      )
+      const atHead = `${root}/${dir}${MANIFEST_SUFFIX}`
+      const present = yield* fs.exists(atHead).pipe(Effect.orElseSucceed(() => false))
+      const member = memberOf(dir, yield* readText(manifestAt(present, atHead, `${baseDir}/${dir}${MANIFEST_SUFFIX}`)))
       if (Option.isNone(member)) continue
-      members.push(member.value)
+      if (present) members.push(member.value)
+      else deleted.push(member.value.name)
     }
-    return members
+    return { members, deleted: deleted.sort() }
   })
 
 const dryRunEvidence = (
@@ -197,9 +214,10 @@ const dryRunEvidence = (
       ],
       { concurrency: 2 },
     )
-    const members = yield* turboMembers(root, [baseRun, headRun])
+    const { members, deleted } = yield* turboMembers(root, baseDir, [baseRun, headRun])
     const evidence: ChangeEvidence = {
       members: [...members],
+      deleted: [...deleted],
       touched: verdictTouched(
         baseRun.matrix,
         headRun.matrix,
