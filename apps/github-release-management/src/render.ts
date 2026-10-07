@@ -155,6 +155,9 @@ export const renderPlanRefusal = (refusal: PlanFailure): Effect.Effect<void, nev
         TagExcludedMalformed: (malformed) => `refused: tag-excluded-malformed, path: ${malformed.path}`,
         TagIntegrityMismatch: (mismatch) =>
           `refused: tag-integrity-mismatch, package: ${mismatch.package}@${mismatch.version}, recorded: ${mismatch.recorded}, current: ${mismatch.current}, file: ${mismatch.file}`,
+        IntegrityNothingToVerify: () => 'refused: integrity-nothing-to-verify',
+        IntegrityFilesEmpty: (empty) =>
+          `refused: integrity-files-empty, package: ${empty.package}@${empty.version}, side: ${empty.side}`,
         TagAnnotationMalformed: (malformed) =>
           `refused: tag-annotation-malformed, tag: ${malformed.tag}, reason: ${malformed.reason}`,
         TagAnnotationLightweight: (lightweight) => `refused: tag-annotation-lightweight, tag: ${lightweight.tag}`,

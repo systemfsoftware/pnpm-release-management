@@ -1,11 +1,18 @@
 import { Cell } from '@systemfsoftware/effect-cell-types'
 import { Gherkin, Given, it, layer, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
-import { githubReleaseCell, planCell, pullRequestCell, tagCell } from '@systemfsoftware/github-release-engine'
+import {
+  githubReleaseCell,
+  planCell,
+  pullRequestCell,
+  tagCell,
+  verifyIntegrity,
+} from '@systemfsoftware/github-release-engine'
 import {
   Count,
   FsPath,
   GithubReleaseRefusal,
   GitRef,
+  IntegrityFilesEmpty,
   type Member,
   PackageName,
   PackageVersion,
@@ -17,6 +24,7 @@ import {
   ReleaseLabel,
   ReleaseTag,
   RemoteName,
+  TagIntegrityMismatch,
   TagRefusal,
 } from '@systemfsoftware/release-language'
 import { Effect, Layer, Result, Schema as S } from 'effect'
@@ -28,7 +36,7 @@ import { makeFakeCycleStore } from './__fixtures__/FakeCycleStore.js'
 import { makeFakeForge } from './__fixtures__/FakeForge.js'
 import { makeFakeGit } from './__fixtures__/FakeGit.js'
 import { makeFakeLedger } from './__fixtures__/FakeLedger.js'
-import { makeFakeTarball } from './__fixtures__/FakeTarball.js'
+import { FAKE_INTEGRITY, makeFakeTarball } from './__fixtures__/FakeTarball.js'
 import { makeFakeWorkspaceStore } from './__fixtures__/FakeWorkspaceStore.js'
 
 const Feature = makeFeature({ it, layer })
@@ -1282,6 +1290,185 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
               )
             }),
             Match.tag('decided', () => failUnexpected('expected refused')),
+            Match.exhaustive,
+          )
+        }),
+      ),
+    )
+  }
+
+  {
+    const changesets = makeFakeChangesetStore([])
+    const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
+    const git = makeFakeGit({ tags: [tagOf('alpha', '1.0.0')] })
+    const cycles = makeFakeCycleStore()
+    const live = Layer.mergeAll(
+      changesets,
+      workspace,
+      git,
+      cycles.layer,
+      makeFakeTarball(),
+      makeFakeChangesetsPort(),
+      makeFakeLedger(),
+    )
+    scenario(
+      'A recorded annotation that matches the packed tarball verifies',
+      { scenarioLayer: live },
+      Gherkin.Do.pipe(
+        Given('a tagged member whose annotation records the packed files')(
+          'input',
+          () => Effect.succeed({ tarballs: FsPath.make('tarballs'), changelogDir }),
+        ),
+        When('planning the release')('outcome', (s) =>
+          Effect.match(Cell.run(Cell.provide(planCell, live), s.input), {
+            onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
+            onSuccess: (value) => ({ _tag: 'decided' as const, value }),
+          })),
+        Then('the plan proceeds with no integrity refusal')((s) => {
+          Match.value(s.outcome).pipe(
+            Match.tag('decided', (decided) => {
+              expect(decided.value.phase).toEqual('none')
+            }),
+            Match.tag(
+              'refused',
+              (refused) => failUnexpected(`expected verified, got ${JSON.stringify(refused.refusal)}`),
+            ),
+            Match.exhaustive,
+          )
+        }),
+      ),
+    )
+  }
+
+  {
+    const changesets = makeFakeChangesetStore([])
+    const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
+    const git = makeFakeGit({
+      tags: [tagOf('alpha', '1.0.0')],
+      annotation: JSON.stringify({ integrity: FAKE_INTEGRITY, files: { 'package/package.json': 'sha512-changed' } }),
+    })
+    const cycles = makeFakeCycleStore()
+    const live = Layer.mergeAll(
+      changesets,
+      workspace,
+      git,
+      cycles.layer,
+      makeFakeTarball(),
+      makeFakeChangesetsPort(),
+      makeFakeLedger(),
+    )
+    scenario(
+      'A recorded annotation whose tarball changed refuses the plan',
+      { scenarioLayer: live },
+      Gherkin.Do.pipe(
+        Given('a tagged member whose annotation records a different file hash')(
+          'input',
+          () => Effect.succeed({ tarballs: FsPath.make('tarballs'), changelogDir }),
+        ),
+        When('planning the release')('outcome', (s) =>
+          Effect.match(Cell.run(Cell.provide(planCell, live), s.input), {
+            onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
+            onSuccess: (value) => ({ _tag: 'decided' as const, value }),
+          })),
+        Then('the plan refuses naming the package, version and file')((s) => {
+          Match.value(s.outcome).pipe(
+            Match.tag('refused', (refused) => {
+              const mismatch = S.decodeUnknownResult(TagIntegrityMismatch)(refused.refusal)
+              if (Result.isFailure(mismatch)) {
+                failUnexpected('expected a tag-integrity-mismatch refusal')
+                return
+              }
+              expect(mismatch.success.package).toEqual(PackageName.make('alpha'))
+              expect(mismatch.success.version).toEqual(PackageVersion.make('1.0.0'))
+              expect(mismatch.success.file).toEqual('package/package.json')
+            }),
+            Match.tag('decided', () => failUnexpected('expected a tag-integrity-mismatch refusal')),
+            Match.exhaustive,
+          )
+        }),
+      ),
+    )
+  }
+
+  {
+    const changesets = makeFakeChangesetStore([])
+    const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
+    const git = makeFakeGit({
+      tags: [tagOf('alpha', '1.0.0')],
+      annotation: JSON.stringify({ integrity: FAKE_INTEGRITY, files: {} }),
+    })
+    const cycles = makeFakeCycleStore()
+    const live = Layer.mergeAll(
+      changesets,
+      workspace,
+      git,
+      cycles.layer,
+      makeFakeTarball([{
+        name: PackageName.make('alpha'),
+        version: PackageVersion.make('1.0.0'),
+        integrity: FAKE_INTEGRITY,
+        files: {},
+      }]),
+      makeFakeChangesetsPort(),
+      makeFakeLedger(),
+    )
+    scenario(
+      'A recorded annotation with empty files refuses the plan',
+      { scenarioLayer: live },
+      Gherkin.Do.pipe(
+        Given('a tagged member whose annotation records no files')(
+          'input',
+          () => Effect.succeed({ tarballs: FsPath.make('tarballs'), changelogDir }),
+        ),
+        When('planning the release')('outcome', (s) =>
+          Effect.match(Cell.run(Cell.provide(planCell, live), s.input), {
+            onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
+            onSuccess: (value) => ({ _tag: 'decided' as const, value }),
+          })),
+        Then('the plan refuses naming the package, version and empty side')((s) => {
+          Match.value(s.outcome).pipe(
+            Match.tag('refused', (refused) => {
+              const empty = S.decodeUnknownResult(IntegrityFilesEmpty)(refused.refusal)
+              if (Result.isFailure(empty)) {
+                failUnexpected('expected an integrity-files-empty refusal')
+                return
+              }
+              expect(empty.success.package).toEqual(PackageName.make('alpha'))
+              expect(empty.success.version).toEqual(PackageVersion.make('1.0.0'))
+              expect(empty.success.side).toEqual('recorded')
+            }),
+            Match.tag('decided', () => failUnexpected('expected an integrity-files-empty refusal')),
+            Match.exhaustive,
+          )
+        }),
+      ),
+    )
+  }
+
+  {
+    const live = Layer.mergeAll(
+      makeFakeChangesetStore([]),
+      makeFakeWorkspaceStore({ members: [], files: {} }),
+      makeFakeGit({}),
+      makeFakeCycleStore().layer,
+      makeFakeTarball(),
+      makeFakeChangesetsPort(),
+    )
+    scenario(
+      'Verifying zero integrity checks refuses',
+      { scenarioLayer: live },
+      Gherkin.Do.pipe(
+        Given('an integrity verification with no checks')('input', () => Effect.succeed(undefined)),
+        When('verifying integrity')('outcome', () => Effect.succeed(verifyIntegrity([]))),
+        Then('the verification refuses as nothing to verify')((s) => {
+          if (Result.isSuccess(s.outcome)) {
+            failUnexpected('expected an integrity-nothing-to-verify refusal')
+            return
+          }
+          Match.value(s.outcome.failure).pipe(
+            Match.tag('IntegrityNothingToVerify', () => undefined),
+            Match.tag('IntegrityFilesEmpty', () => failUnexpected('expected IntegrityNothingToVerify')),
+            Match.tag('TagIntegrityMismatch', () => failUnexpected('expected IntegrityNothingToVerify')),
             Match.exhaustive,
           )
         }),

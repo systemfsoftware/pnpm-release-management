@@ -19,6 +19,8 @@ export {
   ReleaseChangelogEmpty,
   ReleaseChangelogMissing,
 } from './github-release.workflow.js'
+export { verifyIntegrity } from './integrity.js'
+export { IntegrityCheck } from './integrity.schema.js'
 export { PlanDeferredUnknown, PlanRelease, PlanSettled, PlanVersion } from './plan-release.workflow.js'
 export { planCell, PlanRequest } from './plan.js'
 export { PlanDecision, PlanReport } from './plan.schema.js'
@@ -42,10 +44,3 @@ export {
 } from './tag-packages.workflow.js'
 export { TagAnnotation } from './tag-packages.workflow.js'
 export { tagCell, TagRequest } from './tag.js'
-export {
-  IntegrityCommand,
-  type IntegrityDecision,
-  IntegrityVacant,
-  IntegrityVerified,
-  verifyIntegrity,
-} from './verify-integrity.workflow.js'
