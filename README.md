@@ -158,7 +158,8 @@ A surface is one of:
 
 `surfaces` versioning bumps the manifest, rewrites the version in every declared
 surface, and appends the release summary to the root changelog. `pnpm`
-versioning delegates to `pnpm version -r`.
+versioning delegates to `pnpm version -r`, so the workspace root's
+`package.json` needs no `version` field.
 
 ## Change intents
 

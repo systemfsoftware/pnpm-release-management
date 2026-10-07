@@ -1,10 +1,11 @@
 import { it } from '@effect/vitest'
-import { type Bump, Intent, Member } from '@systemfsoftware/release-language'
+import { type Bump, Intent, Member, PackageVersion, RelativePath } from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
+import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import * as fc from 'effect/testing/FastCheck'
-import { deriveBump } from '../bump-derive.js'
+import { derivePnpmBump, deriveSurfacesBump } from '../bump-derive.js'
 import { bumpVersions } from '../bump-versions.workflow.js'
 import { BumpCommand } from '../bump.schema.js'
 
@@ -73,29 +74,54 @@ const toCommand = (input: {
 }): BumpCommand => {
   const intents = S.decodeUnknownSync(S.Array(Intent))(input.intents)
   const members = S.decodeUnknownSync(S.Array(Member))(input.members)
-  const derived = deriveBump({
+  const changelogDir = RelativePath.make(input.changelogDir)
+  if (input.strategy === 'pnpm') {
+    const derived = derivePnpmBump({ intents, members, changelogDir: input.changelogDir })
+    return BumpCommand.make({
+      versioning: { strategy: 'pnpm' },
+      intents: [...intents],
+      members: [...members],
+      changelogDir,
+      consolidated: derived.consolidated,
+      nexts: [...derived.nexts],
+      moved: [...derived.moved],
+      changelogPaths: [...derived.changelogPaths],
+      packageRanks: [...derived.packages],
+      unknownPackage: derived.unknownPackage,
+      malformedPath: derived.malformedPath,
+      intentCount: derived.intentCount,
+    })
+  }
+  const derived = deriveSurfacesBump({
     intents,
     members,
-    strategy: input.strategy,
-    manifestVersion: input.manifestVersion,
     changelogDir: input.changelogDir,
+    manifestVersion: input.manifestVersion,
   })
-  return S.decodeUnknownSync(BumpCommand)({
-    _tag: 'BumpCommand',
-    strategy: input.strategy,
-    intents,
-    members,
-    manifestVersion: input.manifestVersion,
-    changelogDir: input.changelogDir,
-    rootChangelog: input.rootChangelog,
-    manifest: { file: 'package.json', surface: { kind: 'json', path: 'package.json' } },
-    surfaces: [],
+  const rootChangelog = Option.map(
+    Option.fromNullishOr(input.rootChangelog),
+    (path) => RelativePath.make(path),
+  )
+  return BumpCommand.make({
+    versioning: {
+      strategy: 'surfaces',
+      manifest: {
+        file: RelativePath.make('package.json'),
+        surface: { kind: 'json', path: RelativePath.make('package.json') },
+      },
+      surfaces: [],
+      rootChangelog: Option.getOrUndefined(rootChangelog),
+      manifestVersion: PackageVersion.make(input.manifestVersion),
+      consolidatedNext: derived.consolidatedNext,
+    },
+    intents: [...intents],
+    members: [...members],
+    changelogDir,
     consolidated: derived.consolidated,
-    consolidatedNext: derived.consolidatedNext,
-    nexts: derived.nexts,
-    moved: derived.moved,
-    changelogPaths: derived.changelogPaths,
-    packageRanks: derived.packages,
+    nexts: [...derived.nexts],
+    moved: [...derived.moved],
+    changelogPaths: [...derived.changelogPaths],
+    packageRanks: [...derived.packages],
     unknownPackage: derived.unknownPackage,
     malformedPath: derived.malformedPath,
     intentCount: derived.intentCount,

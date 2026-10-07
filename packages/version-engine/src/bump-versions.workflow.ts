@@ -80,11 +80,9 @@ const highestCoreOf = (
   versions: ReadonlyArray<PackageVersion>,
 ): PackageVersion | undefined => [...versions].sort((left, right) => coreKeyOf(right).localeCompare(coreKeyOf(left)))[0]
 
-const bumpedVersionOf = (command: BumpCommand): PackageVersion => {
-  if (command.strategy === 'surfaces') return command.consolidatedNext
-  const highest = highestCoreOf(command.nexts.map((entry) => entry.next))
-  if (highest === undefined) return command.consolidatedNext
-  return highest
+const bumpedVersionOf = (command: BumpCommand): PackageVersion | undefined => {
+  if (command.versioning.strategy === 'surfaces') return command.versioning.consolidatedNext
+  return highestCoreOf(command.nexts.map((entry) => entry.next))
 }
 
 const bumpCaseOf = (command: BumpCommand): BumpCase => {
@@ -96,8 +94,10 @@ const bumpCaseOf = (command: BumpCommand): BumpCase => {
     return IntentMalformedCase.make({ path: command.malformedPath })
   }
   if (command.consolidated === 'none') return OnlyNoneCase.make({ count: command.intentCount })
+  const version = bumpedVersionOf(command)
+  if (version === undefined) return OnlyNoneCase.make({ count: command.intentCount })
   return BumpedCase.make({
-    version: bumpedVersionOf(command),
+    version,
     moved: [...command.moved],
     changelogs: command.changelogPaths.map((entry) => entry.path),
   })
