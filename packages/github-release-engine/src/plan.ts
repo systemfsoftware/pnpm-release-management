@@ -65,6 +65,14 @@ const parseAnnotation = (text: string): Result.Result<TarballIntegrity, string> 
   )
 }
 
+const digestsWhen = <E, R>(
+  needed: boolean,
+  read: () => Effect.Effect<ReadonlyArray<TarballDigest>, E, R>,
+): Effect.Effect<ReadonlyArray<TarballDigest>, E, R> => {
+  if (!needed) return Effect.succeed([])
+  return read()
+}
+
 const read = (
   request: S.Schema.Type<typeof PlanRequest>,
 ): Effect.Effect<
@@ -98,10 +106,7 @@ const read = (
       planned.releases,
     )
     const toCheck = candidates.filter((member) => exempt.includes(member.name) === false)
-    const digests: ReadonlyArray<TarballDigest> = yield* Effect.if(toCheck.length > 0, {
-      onTrue: () => tarballs.read(request.tarballs),
-      onFalse: () => Effect.succeed([]),
-    })
+    const digests = yield* digestsWhen(toCheck.length > 0, () => tarballs.read(request.tarballs))
     const checks: Array<IntegrityCheck> = []
     for (const member of toCheck) {
       const version = member.version
