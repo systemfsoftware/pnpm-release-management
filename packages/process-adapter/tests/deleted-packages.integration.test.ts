@@ -116,6 +116,15 @@ const expectDeletedOnly = (evidence: ChangeEvidence) => {
   expect(evidence.members.map((member) => member.name)).toEqual(['@t/keep'])
 }
 
+const repositoryDeletingOnBothSides = Effect.gen(function*() {
+  const root = yield* repositoryDeleting(GONE[1].manifest)
+  yield* git(root, 'checkout', '-q', '-b', 'upstream', 'base')
+  yield* git(root, 'rm', '-q', '-r', 'packages/gone')
+  yield* git(root, 'commit', '-q', '-m', 'upstream deletes gone too')
+  yield* git(root, 'checkout', '-q', 'main')
+  return root
+})
+
 Feature('Change evidence counts a package deleted on the head').body(({ scenario }) => {
   for (const { kind, manifest } of GONE) {
     scenario(
@@ -139,4 +148,26 @@ Feature('Change evidence counts a package deleted on the head').body(({ scenario
       ),
     )
   }
+  scenario(
+    'A base branch that also deleted the package after the head branched still lists it as deleted',
+    { scenarioLayer: live },
+    Gherkin.Do.pipe(
+      Given('a stacked head deleting a package that its base branch deleted after the fork')(
+        'root',
+        () => repositoryDeletingOnBothSides,
+      ),
+      When('paths evidence is collected against the base branch')('evidence', (s) =>
+        Effect.gen(function*() {
+          const port = yield* ChangeEvidencePort
+          return yield* port.pathsEvidence(RepoRoot.make(s.root), GitRef.make('upstream'))
+        })),
+      Then('the manifest is read at the merge-base and the package is listed as deleted')((s) =>
+        Effect.gen(function*() {
+          const fs = yield* FileSystem
+          expectDeletedOnly(s.evidence)
+          yield* fs.remove(s.root, { recursive: true, force: true })
+        })
+      ),
+    ),
+  )
 })
