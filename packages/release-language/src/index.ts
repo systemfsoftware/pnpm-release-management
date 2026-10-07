@@ -58,6 +58,8 @@ export {
 } from './GithubRelease.schema.js'
 export { GitPort } from './GitPort.js'
 export {
+  IntegrityFilesEmpty,
+  IntegrityNothingToVerify,
   IntegrityRefusal,
   TagAnnotationLightweight,
   TagAnnotationMalformed,
