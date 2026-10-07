@@ -46,7 +46,6 @@ import * as Stream from 'effect/Stream'
 import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 import { createHash } from 'node:crypto'
-import { createServer, type Server } from 'node:http'
 import { expect } from 'vitest'
 import { buildTarball } from './__fixtures__/build-tarball.js'
 
@@ -129,69 +128,39 @@ interface Served {
   readonly integrity: string
 }
 
-const closeServer = (server: Server): Promise<void> => {
-  const { promise, resolve } = Promise.withResolvers<void>()
-  server.close(() => resolve())
-  return promise
-}
+const REGISTRY = 'http://registry.test'
 
-const portOf = (server: Server): number => {
-  const address = server.address()
-  if (address === null || typeof address === 'string') {
-    return 0
+const respond = (served: ReadonlyArray<Served>, path: string): Response => {
+  if (path.startsWith('/tarballs/')) {
+    const file = path.slice('/tarballs/'.length)
+    const tarball = served.find((entry) => entry.file === file)
+    if (tarball === undefined) {
+      return new Response(null, { status: 404 })
+    }
+    return new Response(tarball.bytes.slice(), { headers: { 'content-type': 'application/octet-stream' } })
   }
-  return address.port
+  const segments = path.replace(/^\//, '').split('/')
+  const version = segments.pop()
+  const name = segments.join('/')
+  const entry = served.find((candidate) => candidate.key === `${name}@${version}`)
+  if (entry === undefined) {
+    return new Response(null, { status: 404 })
+  }
+  return Response.json({ dist: { tarball: `${REGISTRY}/tarballs/${entry.file}`, integrity: entry.integrity } })
 }
 
-const startRegistry = (served: ReadonlyArray<Served>) =>
-  Effect.tryPromise({
-    try: () => {
-      const requests: Array<string> = []
-      const { promise, resolve, reject } = Promise.withResolvers<
-        { base: string; close: () => Promise<void>; requests: Array<string> }
-      >()
-      const server = createServer((request, response) => {
-        const decoded = decodeURIComponent(request.url ?? '')
-        requests.push(decoded)
-        if (decoded.startsWith('/tarballs/')) {
-          const file = decoded.slice('/tarballs/'.length)
-          const tarball = served.find((entry) => entry.file === file)
-          if (tarball === undefined) {
-            response.statusCode = 404
-            response.end()
-            return
-          }
-          response.setHeader('content-type', 'application/octet-stream')
-          response.end(Buffer.from(tarball.bytes))
-          return
-        }
-        const segments = decoded.replace(/^\//, '').split('/')
-        const version = segments.pop()
-        const name = segments.join('/')
-        const entry = served.find((candidate) => candidate.key === `${name}@${version}`)
-        if (entry === undefined) {
-          response.statusCode = 404
-          response.end()
-          return
-        }
-        response.setHeader('content-type', 'application/json')
-        response.end(
-          JSON.stringify({
-            dist: {
-              tarball: `http://127.0.0.1:${portOf(server)}/tarballs/${entry.file}`,
-              integrity: entry.integrity,
-            },
-          }),
-        )
-      })
-      server.on('error', reject)
-      server.listen(0, '127.0.0.1', () => {
-        resolve({ base: `http://127.0.0.1:${portOf(server)}`, close: () => closeServer(server), requests })
-      })
-      return promise
-    },
-    catch: (cause) => new Error('registry server failed', { cause: cause }),
-  })
+const urlOf = (input: string | URL | Request): string => {
+  if (input instanceof Request) {
+    return input.url
+  }
+  return input.toString()
+}
+
+const registryFetch = (served: ReadonlyArray<Served>, requests: Array<string>): typeof globalThis.fetch => (input) => {
+  const path = decodeURIComponent(new URL(urlOf(input)).pathname)
+  requests.push(path)
+  return Promise.resolve(respond(served, path))
+}
 
 interface Context {
   readonly root: string
@@ -199,7 +168,7 @@ interface Context {
   readonly tarballs: string
   readonly registry: string
   readonly requests: Array<string>
-  readonly close: () => Promise<void>
+  readonly fetch: typeof globalThis.fetch
 }
 
 interface PackEntry {
@@ -275,8 +244,8 @@ const prepare = (options: PrepareOptions) =>
         integrity: entry.integrity ?? integrityOf(bytes),
       })
     }
-    const registry = yield* startRegistry(served)
-    return { root, work, tarballs, registry: registry.base, requests: registry.requests, close: registry.close }
+    const requests: Array<string> = []
+    return { root, work, tarballs, registry: REGISTRY, requests, fetch: registryFetch(served, requests) }
   })
 
 const workspaceLayer = (members: ReadonlyArray<Member>) =>
@@ -321,7 +290,10 @@ const adaptersOf = (context: Context, members: ReadonlyArray<Member>) =>
     GitLive,
     TarballLive,
     LedgerLive(RepoRoot.make(context.work)),
-    RegistryLive.pipe(Layer.provide(FetchHttpClient.layer)),
+    RegistryLive.pipe(
+      Layer.provide(FetchHttpClient.layer),
+      Layer.provide(Layer.succeed(FetchHttpClient.Fetch, context.fetch)),
+    ),
     workspaceLayer(members),
     changesetsLayer,
     changesetStoreLayer,
@@ -422,7 +394,6 @@ const withWorkdir = <A, E, R>(context: Context, effect: Effect.Effect<A, E, R>):
 const cleanup = (context: Context) =>
   Effect.gen(function*() {
     const fs = yield* FileSystem
-    yield* Effect.promise(() => context.close())
     yield* fs.remove(context.root, { recursive: true, force: true })
   })
 
