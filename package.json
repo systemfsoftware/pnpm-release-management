@@ -28,6 +28,7 @@
   "packageManager": "pnpm@11.27.0",
   "private": true,
   "scripts": {
+    "bootstrap": "sandbox -- pnpm install",
     "build": "turbo --concurrency=${TURBO_CONCURRENCY:-50%} build",
     "check:ci": "s=0; pnpm format:check || s=1; TURBO_CONCURRENCY=${TURBO_CONCURRENCY:-100%} pnpm gate:tasks || s=1; pnpm gate:dist || s=1; exit $s",
     "clean": "turbo clean",
