@@ -42,10 +42,11 @@ import {
   publishedRecorded,
   stateForVersion,
   tagEntryOf,
+  verifyIntegrity,
 } from './integrity.js'
+import { type IntegrityCheck } from './integrity.schema.js'
 import { PlanCommand, type PlanDeferredUnknown, planRelease } from './plan-release.workflow.js'
 import { type PlanDecision, PlanReport } from './plan.schema.js'
-import { type IntegrityCheck, IntegrityCommand, verifyIntegrity } from './verify-integrity.workflow.js'
 
 export const PlanRequest = Wire.wire({
   deferred: Wire.mint(S.optional(FsPath)),
@@ -187,9 +188,11 @@ const read = (
         current: { integrity: digest.integrity, files: digest.files },
       })
     }
-    const verdict = verifyIntegrity(IntegrityCommand.make({ checks }))
-    if (Result.isFailure(verdict)) {
-      return yield* Effect.fail(verdict.failure)
+    if (toCheck.length > 0) {
+      const verdict = verifyIntegrity(checks)
+      if (Result.isFailure(verdict)) {
+        return yield* Effect.fail(verdict.failure)
+      }
     }
     return PlanCommand.make({
       pending: Count.make(intents.length),
