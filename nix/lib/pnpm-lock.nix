@@ -134,18 +134,9 @@ in
   inherit unresolvedPackages;
 
   # The shape `mitm-cache.fetch` consumes: tarball URL -> { hash = integrity; }.
-  # Each https URL also answers on http as a redirect to the same fetch, so pnpm
-  # can replay through mitm-cache's plain-HTTP proxy without TLS.
   tarballCacheData =
     lockFile:
-    lib.concatMapAttrs
-      (name: resolution:
-        let
-          url = urlOf name resolution;
-        in
-        { ${url} = { hash = integrityOf name resolution; }; }
-        // lib.optionalAttrs (lib.hasPrefix "https://" url) {
-          "http://${lib.removePrefix "https://" url}" = { redirect = url; };
-        })
+    lib.mapAttrs'
+      (name: resolution: lib.nameValuePair (urlOf name resolution) { hash = integrityOf name resolution; })
       (fetched lockFile);
 }
