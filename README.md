@@ -88,10 +88,13 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write
 
 jobs:
   release:
     uses: systemfsoftware/pnpm-release-management/.github/workflows/release.yml@main
+    with:
+      ci-workflow: ci.yml
 ```
 
 `.github/workflows/changeset-check.yml`:
