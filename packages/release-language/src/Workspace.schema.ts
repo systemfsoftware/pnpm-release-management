@@ -97,6 +97,9 @@ export const Member = S.Struct({
 })
 export type Member = S.Schema.Type<typeof Member>
 
+export const ChangelogStorage = S.Literals(['registry', 'repository'])
+export type ChangelogStorage = S.Schema.Type<typeof ChangelogStorage>
+
 export const RootFile = S.Struct({
   path: RelativePath,
   text: S.String,

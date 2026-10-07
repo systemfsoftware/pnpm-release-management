@@ -179,6 +179,7 @@ export {
   VersionUnknownPackage,
 } from './Version.schema.js'
 export {
+  ChangelogStorage,
   Count,
   FsPath,
   GitRef,

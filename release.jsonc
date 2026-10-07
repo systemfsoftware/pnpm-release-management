@@ -1,0 +1,21 @@
+{
+  // This repository dogfoods its own release toolchain: the reusable
+  // .github/workflows/release.yml runs these apps against this config on every
+  // push to the trunk. Every workspace member is private, so nothing is
+  // publishable and the plan settles to phase=none — the dogfood proves the
+  // workflow wiring end to end without ever cutting a tag or a GitHub Release.
+  "base": "main",
+  "branch": "changeset-release/main",
+  "changesetDir": ".changeset",
+  "changelogDir": ".changeset/changelogs",
+  "versioning": {
+    "strategy": "surfaces",
+    "manifest": "package.json",
+    "changelog": "CHANGELOG.md",
+  },
+  "gate": { "strategy": "turbo", "task": "build" },
+  "pr": {
+    "title": "chore(release): version packages",
+    "body": "Consumes the pending .changeset intents.",
+  },
+}
