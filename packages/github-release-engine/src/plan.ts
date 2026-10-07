@@ -84,6 +84,14 @@ const parseAnnotation = (text: string): Result.Result<TarballIntegrity, string> 
   )
 }
 
+const digestsWhen = <E, R>(
+  needed: boolean,
+  read: () => Effect.Effect<ReadonlyArray<TarballDigest>, E, R>,
+): Effect.Effect<ReadonlyArray<TarballDigest>, E, R> => {
+  if (!needed) return Effect.succeed([])
+  return read()
+}
+
 const read = (
   request: S.Schema.Type<typeof PlanRequest>,
 ): Effect.Effect<
@@ -118,10 +126,7 @@ const read = (
       planned.releases,
     )
     const toCheck = candidates.filter((member) => exempt.includes(member.name) === false)
-    let digests: ReadonlyArray<TarballDigest> = []
-    if (toCheck.length > 0) {
-      digests = yield* tarballs.read(request.tarballs)
-    }
+    const digests = yield* digestsWhen(toCheck.length > 0, () => tarballs.read(request.tarballs))
     const checks: Array<IntegrityCheck> = []
     const ledger = yield* ledgerPort.read(LEDGER_PATH)
     const ledgerEntries = Option.getOrElse(ledger, () => ReleaseLedger.make({ entries: [] })).entries
@@ -194,9 +199,10 @@ const read = (
         return yield* Effect.fail(verdict.failure)
       }
     }
+    const storage = yield* workspace.changelogStorage()
     return PlanCommand.make({
       pending: Count.make(intents.length),
-      cycle: dropExcluded(cycleOf([...members], tags, request.changelogDir), deferred),
+      cycle: dropExcluded(cycleOf(members, tags, request.changelogDir, storage), deferred),
       deferred: [...deferred],
       unknownDeferred: [],
       members: members.map((member) => member.name),
