@@ -113,6 +113,7 @@ const gateEffect = (scenario: {
     fakeChangeEvidencePort({
       members: scenario.members,
       touched: scenario.touched,
+      deleted: [],
       raw: null,
     }),
     fakeChangesetStore({ intents: scenario.intents }).layer,

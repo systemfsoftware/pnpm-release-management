@@ -8,7 +8,7 @@ import {
 } from '@systemfsoftware/release-language'
 import { Effect, Layer } from 'effect'
 import { pathsTouched } from './change-verdict.js'
-import { gitLines, MANIFEST_GLOB, membersAt } from './evidence-io.js'
+import { deletedAt, gitLines, MANIFEST_GLOB, membersAt } from './evidence-io.js'
 import { collectTurboEvidence } from './turbo-evidence.js'
 import { turboPin } from './turbo-pin.js'
 
@@ -26,6 +26,7 @@ const evidencePort = (git: GitPort): ChangeEvidencePort => ({
       const members = yield* membersAt(root, yield* gitLines(root, MANIFEST_GLOB))
       const evidence: ChangeEvidence = {
         members: [...members],
+        deleted: [...(yield* deletedAt(root, ref, changed))],
         touched: pathsTouched(members, changed),
         raw: { strategy: 'paths', base: ref, changedPaths: [...changed] },
       }
