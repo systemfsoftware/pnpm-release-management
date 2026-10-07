@@ -105,6 +105,8 @@ export const versionStageText = (refusal: BumpRefusal): string =>
       RootManifestUnwritable: (unwritable) => `RootManifestUnwritable: path=${unwritable.path}`,
       VersionIntentMalformed: (malformed) => `VersionIntentMalformed: path=${malformed.path}`,
       VersionSurfaceMissing: (missing) => `VersionSurfaceMissing: path=${missing.path}`,
+      VersionLockStale: (stale) => `VersionLockStale: path=${stale.path}`,
+      VersionCargoPackageMissing: (missing) => `VersionCargoPackageMissing: path=${missing.path}`,
       VersionUnknownPackage: (unknown) => `VersionUnknownPackage: package=${unknown.package}`,
     }),
   )

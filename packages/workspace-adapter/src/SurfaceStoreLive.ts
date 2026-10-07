@@ -1,7 +1,7 @@
 import { parse as parseToml } from '@std/toml'
 import {
   PackageVersion,
-  type RelativePath,
+  RelativePath,
   type RepoRoot,
   type RootFile,
   RootManifestUnwritable,
@@ -13,19 +13,26 @@ import {
   type VersionSurface,
   VersionSurfaceMissing,
 } from '@systemfsoftware/release-language'
-import { Effect, Layer } from 'effect'
+import { Effect, HashSet, Layer } from 'effect'
 import { FileSystem } from 'effect/FileSystem'
 import * as Match from 'effect/Match'
 import * as Option from 'effect/Option'
 import { Path } from 'effect/Path'
 import * as S from 'effect/Schema'
-import { overwriteTextFile, readTextFile } from './StoreFile.js'
+import {
+  type CargoArtifact,
+  type CargoInput,
+  currentCargoVersion,
+  memberGlobsOf,
+  planCargoBump,
+  workspaceVersionOf,
+} from './CargoSurface.js'
+import { isRegularFile, overwriteTextFile, readDirectoryEntries, readTextFile } from './StoreFile.js'
 import type { StoreFault } from './StoreFile.schema.js'
 import { JsonDocument, JsonVersion, PackageSection, WorkspaceSection } from './Surface.schema.js'
+import { spliceToml } from './TomlEdit.js'
 
 const NIX_BINDING = /^\s*version\s*=\s*"(\d+\.\d+\.\d+)"\s*;?\s*$/gm
-const TOML_SECTION = /^\s*\[(.+?)\]\s*$/
-const TOML_VERSION = /^(\s*version\s*=\s*")([^"]*)(".*)$/
 const JSON_INDENT = /^(\s+)"/m
 
 type LocatedToml = { readonly sections: ReadonlyArray<string>; readonly version: unknown }
@@ -66,37 +73,6 @@ const nixBinding = (text: string): Option.Option<RegExpExecArray> => {
   const hits = [...text.matchAll(NIX_BINDING)]
   if (hits.length !== 1) return Option.none()
   return Option.fromNullishOr(hits.at(0))
-}
-
-const spliceToml = (
-  text: string,
-  sections: ReadonlyArray<string>,
-  version: PackageVersion,
-): Option.Option<string> => {
-  const lines: Array<string> = []
-  let current: string | undefined
-  let spliced = 0
-  for (const line of text.split('\n')) {
-    const section = TOML_SECTION.exec(line)?.at(1)?.trim()
-    if (section !== undefined) {
-      current = section
-      lines.push(line)
-      continue
-    }
-    if (current === undefined || !sections.includes(current)) {
-      lines.push(line)
-      continue
-    }
-    const match = TOML_VERSION.exec(line)
-    if (match === null) {
-      lines.push(line)
-      continue
-    }
-    spliced += 1
-    lines.push(`${match.at(1) ?? ''}${version}${match.at(3) ?? ''}`)
-  }
-  if (spliced === sections.length) return Option.some(lines.join('\n'))
-  return Option.none()
 }
 
 const extractJson = (text: string, file: RelativePath): Effect.Effect<PackageVersion, VersionRefusal> =>
@@ -192,6 +168,138 @@ export const SurfaceStoreLive = (root: RepoRoot): Layer.Layer<SurfaceStore, neve
       const fs = yield* FileSystem
       const path = yield* Path
 
+      const brandRelative = (value: string, file: RelativePath): Effect.Effect<RelativePath, VersionRefusal> =>
+        S.decodeUnknownEffect(RelativePath)(value).pipe(Effect.mapError(() => malformed(file)))
+
+      const absent = <A>(effect: Effect.Effect<A, StoreFault>): Effect.Effect<A | undefined, never> =>
+        effect.pipe(
+          Effect.map((value): A | undefined => value),
+          Effect.catchTags({
+            Missing: () => Effect.succeed(undefined),
+            AlreadyExists: () => Effect.succeed(undefined),
+            Unavailable: () => Effect.succeed(undefined),
+          }),
+        )
+
+      const readDirEntries = (full: string): Effect.Effect<ReadonlyArray<string>, never> =>
+        absent(readDirectoryEntries(fs, full)).pipe(Effect.map((entries) => entries ?? []))
+
+      const walkGlob = (dir: string, segments: ReadonlyArray<string>): Effect.Effect<ReadonlyArray<string>, never> =>
+        Effect.gen(function*() {
+          const head = segments.at(0)
+          if (head === undefined) return [dir]
+          const rest = segments.slice(1)
+          if (head === '**') {
+            const here = yield* walkGlob(dir, rest)
+            const entries = yield* readDirEntries(dir)
+            const nested = yield* Effect.forEach(
+              entries,
+              (name) => walkGlob(path.join(dir, name), segments),
+              { concurrency: 'unbounded' },
+            )
+            return [...here, ...nested.flat()]
+          }
+          if (head === '*') {
+            const entries = yield* readDirEntries(dir)
+            const matched = yield* Effect.forEach(
+              entries,
+              (name) => walkGlob(path.join(dir, name), rest),
+              { concurrency: 'unbounded' },
+            )
+            return matched.flat()
+          }
+          return yield* walkGlob(path.join(dir, head), rest)
+        })
+
+      const expandMembers = (
+        file: RelativePath,
+        globs: ReadonlyArray<string>,
+      ): Effect.Effect<ReadonlyArray<RelativePath>, VersionRefusal> =>
+        Effect.gen(function*() {
+          const base = path.join(root, path.dirname(file))
+          const perGlob = yield* Effect.forEach(
+            globs,
+            (glob) =>
+              Effect.gen(function*() {
+                const segments = glob.split('/').filter((segment) => segment.length > 0)
+                const dirs = yield* walkGlob(base, segments)
+                const manifests = yield* Effect.forEach(
+                  dirs,
+                  (dir) =>
+                    Effect.gen(function*() {
+                      const manifest = path.join(dir, 'Cargo.toml')
+                      const exists = yield* absent(isRegularFile(fs, manifest))
+                      if (exists !== true) return Option.none<string>()
+                      return Option.some(path.relative(root, manifest))
+                    }),
+                  { concurrency: 'unbounded' },
+                )
+                return manifests.flatMap((entry): ReadonlyArray<string> => {
+                  if (Option.isSome(entry)) return [entry.value]
+                  return []
+                })
+              }),
+            { concurrency: 'unbounded' },
+          )
+          const unique = HashSet.fromIterable(perGlob.flat())
+          return yield* Effect.forEach([...unique], (value) => brandRelative(value, file), {
+            concurrency: 'unbounded',
+          })
+        })
+
+      const readCargoInput = (file: RelativePath): Effect.Effect<CargoInput, VersionRefusal> =>
+        Effect.gen(function*() {
+          const manifestText = yield* readTextFile(fs, path.join(root, file)).pipe(
+            Effect.mapError((fault) => surfaceFault(file, fault)),
+          )
+          yield* workspaceVersionOf(manifestText, file)
+          const memberFiles = yield* expandMembers(file, memberGlobsOf(manifestText))
+          const members = yield* Effect.forEach(
+            memberFiles,
+            (memberFile) =>
+              absent(readTextFile(fs, path.join(root, memberFile))).pipe(
+                Effect.map((memberText): Option.Option<CargoArtifact> => {
+                  if (memberText === undefined) return Option.none()
+                  return Option.some({ file: memberFile, text: memberText })
+                }),
+              ),
+            { concurrency: 'unbounded' },
+          )
+          const lockFile = yield* brandRelative(path.join(path.dirname(file), 'Cargo.lock'), file)
+          const lockText = yield* absent(readTextFile(fs, path.join(root, lockFile))).pipe(
+            Effect.map((text): Option.Option<CargoArtifact> => {
+              if (text === undefined) return Option.none()
+              return Option.some({ file: lockFile, text })
+            }),
+          )
+          return {
+            manifest: { file, text: manifestText },
+            members: members.flatMap((entry): ReadonlyArray<CargoArtifact> => {
+              if (Option.isSome(entry)) return [entry.value]
+              return []
+            }),
+            lock: Option.getOrUndefined(lockText),
+          }
+        })
+
+      const readCargo = (file: RelativePath): Effect.Effect<PackageVersion, VersionRefusal> =>
+        readCargoInput(file).pipe(Effect.flatMap(currentCargoVersion))
+
+      const writeCargo = (file: RelativePath, version: PackageVersion): Effect.Effect<SurfaceWrite, VersionRefusal> =>
+        Effect.gen(function*() {
+          const input = yield* readCargoInput(file)
+          const writes = yield* planCargoBump(input, version)
+          yield* Effect.forEach(
+            writes,
+            (write) =>
+              overwriteTextFile(fs, path.join(root, write.file), write.text).pipe(
+                Effect.mapError((fault) => surfaceFault(write.file, fault)),
+              ),
+            { discard: true },
+          )
+          return { path: file, moved: writes.length > 0 }
+        })
+
       const currentVersionOf = (
         text: string,
         file: RelativePath,
@@ -217,20 +325,23 @@ export const SurfaceStoreLive = (root: RepoRoot): Layer.Layer<SurfaceStore, neve
       const readSurface = (
         file: RelativePath,
         surface: VersionSurface,
-      ): Effect.Effect<PackageVersion, VersionRefusal> =>
-        Effect.gen(function*() {
+      ): Effect.Effect<PackageVersion, VersionRefusal> => {
+        if (surface.kind === 'cargo') return readCargo(file)
+        return Effect.gen(function*() {
           const text = yield* readTextFile(fs, path.join(root, file)).pipe(
             Effect.mapError((fault) => surfaceFault(file, fault)),
           )
           return yield* currentVersionOf(text, file, surface)
         })
+      }
 
       const writeSurface = (
         file: RelativePath,
         surface: VersionSurface,
         version: PackageVersion,
-      ): Effect.Effect<SurfaceWrite, VersionRefusal> =>
-        Effect.gen(function*() {
+      ): Effect.Effect<SurfaceWrite, VersionRefusal> => {
+        if (surface.kind === 'cargo') return writeCargo(file, version)
+        return Effect.gen(function*() {
           const text = yield* readTextFile(fs, path.join(root, file)).pipe(
             Effect.mapError((fault) => surfaceFault(file, fault)),
           )
@@ -242,6 +353,7 @@ export const SurfaceStoreLive = (root: RepoRoot): Layer.Layer<SurfaceStore, neve
           )
           return { path: file, moved: true }
         })
+      }
 
       const writeRootManifest = (file: RelativePath, text: string): Effect.Effect<RootFile, VersionRefusal> =>
         overwriteTextFile(fs, path.join(root, file), text).pipe(

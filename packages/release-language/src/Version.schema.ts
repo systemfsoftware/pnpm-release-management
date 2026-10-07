@@ -18,6 +18,21 @@ export const VersionSurfaceMissing = S.TaggedStruct('VersionSurfaceMissing', {
 })
 export type VersionSurfaceMissing = S.Schema.Type<typeof VersionSurfaceMissing>
 
+export const VersionLockStale = S.TaggedStruct('VersionLockStale', {
+  path: RelativePath,
+})
+export type VersionLockStale = S.Schema.Type<typeof VersionLockStale>
+
+export const VersionCargoPackageMissing = S.TaggedStruct(
+  'VersionCargoPackageMissing',
+  {
+    path: RelativePath,
+  },
+)
+export type VersionCargoPackageMissing = S.Schema.Type<
+  typeof VersionCargoPackageMissing
+>
+
 export const RootManifestUnwritable = S.TaggedStruct(
   'RootManifestUnwritable',
   {
@@ -32,6 +47,8 @@ export const VersionRefusal = S.Union([
   VersionIntentMalformed,
   VersionUnknownPackage,
   VersionSurfaceMissing,
+  VersionLockStale,
+  VersionCargoPackageMissing,
   RootManifestUnwritable,
 ])
 export type VersionRefusal = S.Schema.Type<typeof VersionRefusal>
