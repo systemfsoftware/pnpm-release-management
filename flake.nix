@@ -90,6 +90,66 @@
             { name = "pinned"; path = self.packages.${system}.sandbox-proofs-tiny-store; }
             { name = "bumped"; path = self.packages.${system}.sandbox-proofs-tiny-store-bumped; }
           ];
+
+          # An entry under `packages:` with no `resolution:` line must be refused
+          # at evaluation time, not disappear into an offline-install fetch
+          # error. Fixtures are inline so the check stays pure: no IFD.
+          pnpm-lock-parser =
+            let
+              parser = import ./nix/lib/pnpm-lock.nix { inherit (pkgs) lib; };
+              unresolvedFixture = builtins.toFile "pnpm-lock-unresolved.yaml" ''
+                lockfileVersion: '9.0'
+
+                packages:
+
+                  left-pad@1.3.0:
+                    engines: {node: '>=4'}
+
+                snapshots:
+
+                  left-pad@1.3.0: {}
+              '';
+              wellFormedFixture = builtins.toFile "pnpm-lock-well-formed.yaml" ''
+                lockfileVersion: '9.0'
+
+                packages:
+
+                  ms@2.1.3:
+                    resolution: {integrity: sha512-wells-formed-ms-integrity}
+
+                  '@scope/thing@2.0.0':
+                    resolution: {integrity: sha512-wells-formed-thing-integrity}
+
+                  local@0.0.0:
+                    resolution: {tarball: file:local-0.0.0.tgz}
+
+                snapshots:
+
+                  ms@2.1.3: {}
+              '';
+              accepted = builtins.tryEval (builtins.deepSeq (parser.tarballCacheData unresolvedFixture) true);
+              expectedCache = {
+                "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz" = { hash = "sha512-wells-formed-ms-integrity"; };
+                "http://registry.npmjs.org/ms/-/ms-2.1.3.tgz" = {
+                  redirect = "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz";
+                };
+                "https://registry.npmjs.org/@scope/thing/-/thing-2.0.0.tgz" = {
+                  hash = "sha512-wells-formed-thing-integrity";
+                };
+                "http://registry.npmjs.org/@scope/thing/-/thing-2.0.0.tgz" = {
+                  redirect = "https://registry.npmjs.org/@scope/thing/-/thing-2.0.0.tgz";
+                };
+              };
+            in
+            pkgs.runCommand "pnpm-lock-parser" { } (
+              assert accepted.success == false
+                || throw "pnpm-lock.nix: tarballCacheData accepted a package entry with no resolution";
+              assert parser.unresolvedPackages unresolvedFixture == [ "left-pad@1.3.0" ]
+                || throw "pnpm-lock.nix: unresolvedPackages did not report the entry with no resolution";
+              assert parser.tarballCacheData wellFormedFixture == expectedCache
+                || throw "pnpm-lock.nix: a well-formed lockfile did not produce the expected tarball cache";
+              "touch $out\n"
+            );
         });
 
       devShells = forEachSystem (pkgs: {
