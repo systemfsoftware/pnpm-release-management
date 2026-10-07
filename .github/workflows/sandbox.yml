@@ -41,8 +41,10 @@ jobs:
             exit 1
           fi
 
-      - name: A lockfile package with no resolution is refused
-        run: nix build ".#checks.$(nix eval --impure --raw --expr builtins.currentSystem).pnpm-lock-parser"
+      - name: A lockfile package with no resolution is refused; workspace globs resolve as pnpm's do
+        run: |
+          system="$(nix eval --impure --raw --expr builtins.currentSystem)"
+          nix build -L ".#checks.$system.pnpm-lock-parser" ".#checks.$system.workspace-globs"
 
       - name: Install through the sandbox, offline from the Nix pnpm store
         run: nix develop --command sandbox -- pnpm install
