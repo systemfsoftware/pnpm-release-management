@@ -782,14 +782,21 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members, files: {}, storage: 'repository' })
     const git = makeFakeGit({ tags: [] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(workspace, git, cycles.layer)
+    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball())
     scenario(
       'Under repository storage the captured cycle points at the package changelog',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
         Given('an owed package with an output file requested')(
           'input',
-          () => Effect.succeed({ dryRun: false, json: false, changelogDir, output: FsPath.make('out.json') }),
+          () =>
+            Effect.succeed({
+              tarballs: FsPath.make('tarballs'),
+              dryRun: false,
+              json: false,
+              changelogDir,
+              output: FsPath.make('out.json'),
+            }),
         ),
         When('tagging the cycle')('outcome', (s) =>
           Effect.match(Cell.run(Cell.provide(tagCell, live), s.input), {

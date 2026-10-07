@@ -14,6 +14,7 @@ export const FakeGitOnMain: Layer.Layer<GitPort> = Layer.succeed(GitPort, {
   deleteRemoteBranch: () => unimplemented('deleteRemoteBranch'),
   pushTags: () => unimplemented('pushTags'),
   writeTag: () => unimplemented('writeTag'),
+  tagAnnotation: () => unimplemented('tagAnnotation'),
   repoSlug: () => unimplemented('repoSlug'),
   stagedPaths: () => unimplemented('stagedPaths'),
   mergeInProgress: () => unimplemented('mergeInProgress'),

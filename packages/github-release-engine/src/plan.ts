@@ -98,7 +98,10 @@ const read = (
       planned.releases,
     )
     const toCheck = candidates.filter((member) => exempt.includes(member.name) === false)
-    const digests: ReadonlyArray<TarballDigest> = toCheck.length > 0 ? yield* tarballs.read(request.tarballs) : []
+    const digests: ReadonlyArray<TarballDigest> = yield* Effect.if(toCheck.length > 0, {
+      onTrue: () => tarballs.read(request.tarballs),
+      onFalse: () => Effect.succeed([]),
+    })
     const checks: Array<IntegrityCheck> = []
     for (const member of toCheck) {
       const version = member.version
