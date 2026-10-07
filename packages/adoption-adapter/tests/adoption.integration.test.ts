@@ -96,6 +96,9 @@ const goneMember: Member = {
 }
 
 const tagOf = (name: PackageName, version: PackageVersion): string => `${name}@v${version}`
+const GAMMA_NAME = PackageName.make('@e2e/gamma')
+const GAMMA_VERSION = PackageVersion.make('3.0.0')
+const GAMMA_TAG = tagOf(GAMMA_NAME, GAMMA_VERSION)
 const tarNameOf = (name: PackageName, version: PackageVersion): string => `${name.replace(/[/@]/g, '-')}-${version}.tgz`
 const integrityOf = (bytes: Uint8Array): string => `sha512-${createHash('sha512').update(bytes).digest('base64')}`
 const tarballBytes = (name: PackageName, version: PackageVersion, files: Record<string, string>): Buffer =>
@@ -143,9 +146,13 @@ const portOf = (server: Server): number => {
 const startRegistry = (served: ReadonlyArray<Served>) =>
   Effect.tryPromise({
     try: () => {
-      const { promise, resolve, reject } = Promise.withResolvers<{ base: string; close: () => Promise<void> }>()
+      const requests: Array<string> = []
+      const { promise, resolve, reject } = Promise.withResolvers<
+        { base: string; close: () => Promise<void>; requests: Array<string> }
+      >()
       const server = createServer((request, response) => {
         const decoded = decodeURIComponent(request.url ?? '')
+        requests.push(decoded)
         if (decoded.startsWith('/tarballs/')) {
           const file = decoded.slice('/tarballs/'.length)
           const tarball = served.find((entry) => entry.file === file)
@@ -179,7 +186,7 @@ const startRegistry = (served: ReadonlyArray<Served>) =>
       })
       server.on('error', reject)
       server.listen(0, '127.0.0.1', () => {
-        resolve({ base: `http://127.0.0.1:${portOf(server)}`, close: () => closeServer(server) })
+        resolve({ base: `http://127.0.0.1:${portOf(server)}`, close: () => closeServer(server), requests })
       })
       return promise
     },
@@ -191,6 +198,7 @@ interface Context {
   readonly work: string
   readonly tarballs: string
   readonly registry: string
+  readonly requests: Array<string>
   readonly close: () => Promise<void>
 }
 
@@ -268,7 +276,7 @@ const prepare = (options: PrepareOptions) =>
       })
     }
     const registry = yield* startRegistry(served)
-    return { root, work, tarballs, registry: registry.base, close: registry.close }
+    return { root, work, tarballs, registry: registry.base, requests: registry.requests, close: registry.close }
   })
 
 const workspaceLayer = (members: ReadonlyArray<Member>) =>
@@ -1111,6 +1119,254 @@ Feature('Adoption ledger').body(({ scenario }) => {
               onSuccess: () => 'tagged',
             })
             expect(burned).toBe(`${GONE_NAME}@1.0.0:404`)
+            yield* cleanup(s.context)
+          }),
+      ),
+    ),
+  )
+
+  scenario(
+    'A ledger read at an unknown point in history refuses instead of reading empty',
+    { scenarioLayer: NodeServices.layer },
+    Gherkin.Do.pipe(
+      Given('a repository whose ledger first appears in a later commit')(
+        'context',
+        () =>
+          Effect.gen(function*() {
+            const fs = yield* FileSystem
+            const path = yield* Path
+            const context = yield* prepare({
+              commits: [{ packages: [{ name: ALPHA_NAME, version: ALPHA_VERSION }], tags: [] }],
+              serve: [],
+            })
+            const before = yield* git(context.work, ['rev-parse', 'HEAD'])
+            const entry = {
+              _tag: 'published',
+              tag: tagOf(ALPHA_NAME, ALPHA_VERSION),
+              commit: before,
+              package: ALPHA_NAME,
+              version: ALPHA_VERSION,
+              integrity: 'sha512-recorded',
+              sha256: 'sha256-recorded',
+              files: { 'package/package.json': 'sha512-recorded' },
+            }
+            yield* fs.writeFileString(
+              path.join(context.work, 'release-ledger.json'),
+              `${JSON.stringify({ entries: [entry] }, null, 2)}\n`,
+            )
+            yield* git(context.work, ['add', '-A'])
+            yield* git(context.work, ['commit', '-q', '-m', 'chore: ledger'])
+            const withLedger = yield* git(context.work, ['rev-parse', 'HEAD'])
+            return { ...context, before, withLedger }
+          }),
+      ),
+      When('the ledger is read at an unknown point in history, at a commit without it and at the commit that has it')(
+        'outcome',
+        (s) =>
+          Effect.gen(function*() {
+            const live = LedgerLive(RepoRoot.make(s.context.work)).pipe(Layer.provide(NodeServices.layer))
+            return yield* Effect.gen(function*() {
+              const port = yield* LedgerPort
+              const missing = yield* Effect.result(port.readAt(GitRef.make('no-such-ref'), LEDGER_PATH))
+              const absent = yield* Effect.result(port.readAt(GitRef.make(s.context.before), LEDGER_PATH))
+              const present = yield* Effect.result(port.readAt(GitRef.make(s.context.withLedger), LEDGER_PATH))
+              return { missing, absent, present }
+            }).pipe(Effect.provide(live))
+          }),
+      ),
+      Then(
+        'the unknown point refuses, the commit without the ledger reads none, and the ledger commit reads the entry',
+      )(
+        (s) =>
+          Effect.gen(function*() {
+            const missing = Result.match(s.outcome.missing, {
+              onFailure: (error) =>
+                Match.value(error).pipe(
+                  Match.tag('LedgerUnreadable', (unreadable) => `unreadable:${unreadable.path}`),
+                  Match.tag('LedgerMalformed', () => 'malformed'),
+                  Match.exhaustive,
+                ),
+              onSuccess: () => 'read',
+            })
+            expect(missing).toBe('unreadable:no-such-ref:release-ledger.json')
+            const absent = Result.match(s.outcome.absent, {
+              onFailure: () => 'failed',
+              onSuccess: (value) => {
+                if (Option.isSome(value)) {
+                  return 'some'
+                }
+                return 'none'
+              },
+            })
+            expect(absent).toBe('none')
+            const present = Result.match(s.outcome.present, {
+              onFailure: () => [],
+              onSuccess: (value) =>
+                Option.getOrElse(value, () => ReleaseLedger.make({ entries: [] })).entries.map((entry) => entry.tag),
+            })
+            expect(present).toEqual([tagOf(ALPHA_NAME, ALPHA_VERSION)])
+            yield* cleanup(s.context)
+          }),
+      ),
+    ),
+  )
+
+  scenario(
+    'Adoption appends new tags without rewriting a ledger that already holds entries',
+    { scenarioLayer: NodeServices.layer },
+    Gherkin.Do.pipe(
+      Given('a ledger holding a kept tag and a vanished one, and a remote with a new tag')(
+        'context',
+        () =>
+          Effect.gen(function*() {
+            const fs = yield* FileSystem
+            const path = yield* Path
+            const context = yield* prepare({
+              commits: [{
+                packages: [
+                  { name: ALPHA_NAME, version: ALPHA_VERSION },
+                  { name: BETA_NAME, version: BETA_VERSION },
+                ],
+                tags: [
+                  { name: ALPHA_NAME, version: ALPHA_VERSION },
+                  { name: BETA_NAME, version: BETA_VERSION },
+                ],
+              }],
+              serve: [
+                {
+                  name: ALPHA_NAME,
+                  version: ALPHA_VERSION,
+                  files: { 'package/index.js': 'export const alpha = 2\n' },
+                },
+                { name: BETA_NAME, version: BETA_VERSION, files: { 'package/index.js': 'export const beta = 1\n' } },
+              ],
+            })
+            const alphaCommit = yield* git(context.work, ['rev-parse', `${tagOf(ALPHA_NAME, ALPHA_VERSION)}^{commit}`])
+            const entries = [
+              {
+                _tag: 'published',
+                tag: tagOf(ALPHA_NAME, ALPHA_VERSION),
+                commit: alphaCommit,
+                package: ALPHA_NAME,
+                version: ALPHA_VERSION,
+                integrity: 'sha512-existing-alpha',
+                sha256: 'sha256-existing-alpha',
+                files: { 'package/index.js': 'sha512-existing-alpha' },
+              },
+              {
+                _tag: 'unpublished',
+                tag: GAMMA_TAG,
+                commit: alphaCommit,
+                package: GAMMA_NAME,
+                version: GAMMA_VERSION,
+                url: `http://127.0.0.1/${GAMMA_NAME}/${GAMMA_VERSION}`,
+                status: 404,
+                fetchedAt: '2026-01-01T00:00:00.000Z',
+              },
+            ]
+            yield* fs.writeFileString(
+              path.join(context.work, 'release-ledger.json'),
+              `${JSON.stringify({ entries }, null, 2)}\n`,
+            )
+            return { ...context, alphaCommit }
+          }),
+      ),
+      When('adoption runs against the registry')(
+        'outcome',
+        (s) =>
+          Effect.gen(function*() {
+            const live = adaptersOf(s.context, [alphaMember, betaMember])
+            return yield* withWorkdir(
+              s.context,
+              Effect.gen(function*() {
+                const adopted = yield* attempt(Cell.run(Cell.provide(adoptCell, live), adoptRequest(s.context)))
+                const ledger = yield* LedgerPort.pipe(
+                  Effect.flatMap((port) => port.read(LEDGER_PATH)),
+                  Effect.provide(live),
+                )
+                return { adopted, ledger }
+              }),
+            )
+          }),
+      ),
+      Then('the written ledger keeps both existing entries and appends only the new tag')(
+        (s) =>
+          Effect.gen(function*() {
+            expect(
+              Result.match(s.outcome.adopted, {
+                onFailure: () => 'refused',
+                onSuccess: (report) => adoptionDecisionTag(report.decision),
+              }),
+            ).toBe('AdoptionRecorded')
+            expect(Option.isSome(s.outcome.ledger)).toBe(true)
+            const entries = Option.getOrThrow(s.outcome.ledger).entries
+            expect(entries.map((entry) => entry.tag)).toEqual([
+              tagOf(ALPHA_NAME, ALPHA_VERSION),
+              tagOf(BETA_NAME, BETA_VERSION),
+              GAMMA_TAG,
+            ])
+            const recorded = publishedEntries(entries).find((entry) => entry.tag === tagOf(ALPHA_NAME, ALPHA_VERSION))
+            expect(recorded?.integrity).toBe('sha512-existing-alpha')
+            expect(recorded?.sha256).toBe('sha256-existing-alpha')
+            expect(recorded?.commit).toBe(s.context.alphaCommit)
+            expect(entries.some((entry) => entry.tag === GAMMA_TAG)).toBe(true)
+            expect(s.context.requests.some((request) => request.startsWith(`/${ALPHA_NAME}/`))).toBe(false)
+            expect(s.context.requests.some((request) => request.startsWith(`/${BETA_NAME}/`))).toBe(true)
+            yield* cleanup(s.context)
+          }),
+      ),
+    ),
+  )
+
+  scenario(
+    'A ledger that cannot be parsed stops adoption instead of being ignored',
+    { scenarioLayer: NodeServices.layer },
+    Gherkin.Do.pipe(
+      Given('a repository whose ledger file is not valid JSON')(
+        'context',
+        () =>
+          Effect.gen(function*() {
+            const fs = yield* FileSystem
+            const path = yield* Path
+            const context = yield* prepare({
+              commits: [{
+                packages: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+                tags: [{ name: ALPHA_NAME, version: ALPHA_VERSION }],
+              }],
+              serve: [{
+                name: ALPHA_NAME,
+                version: ALPHA_VERSION,
+                files: { 'package/index.js': 'export const alpha = 1\n' },
+              }],
+            })
+            yield* fs.writeFileString(path.join(context.work, 'release-ledger.json'), '{ not valid json\n')
+            return context
+          }),
+      ),
+      When('adoption runs')(
+        'outcome',
+        (s) =>
+          Effect.gen(function*() {
+            const live = adaptersOf(s.context, [alphaMember])
+            return yield* withWorkdir(
+              s.context,
+              attempt(Cell.run(Cell.provide(adoptCell, live), adoptRequest(s.context))),
+            )
+          }),
+      ),
+      Then('adoption refuses and names the ledger as malformed')(
+        (s) =>
+          Effect.gen(function*() {
+            const refusal = Result.match(s.outcome, {
+              onFailure: (error) =>
+                Match.value(error).pipe(
+                  Match.tag('LedgerMalformed', () => 'ledger-malformed'),
+                  Match.tag('LedgerUnreadable', () => 'ledger-unreadable'),
+                  Match.orElse(() => 'other'),
+                ),
+              onSuccess: () => 'recorded',
+            })
+            expect(refusal).toBe('ledger-malformed')
             yield* cleanup(s.context)
           }),
       ),

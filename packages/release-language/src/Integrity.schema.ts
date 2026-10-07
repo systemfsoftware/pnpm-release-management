@@ -24,6 +24,16 @@ export const TagIntegrityMismatch = S.TaggedStruct('TagIntegrityMismatch', {
 })
 export type TagIntegrityMismatch = S.Schema.Type<typeof TagIntegrityMismatch>
 
+export const IntegrityNothingToVerify = S.TaggedStruct('IntegrityNothingToVerify', {})
+export type IntegrityNothingToVerify = S.Schema.Type<typeof IntegrityNothingToVerify>
+
+export const IntegrityFilesEmpty = S.TaggedStruct('IntegrityFilesEmpty', {
+  package: PackageName,
+  version: PackageVersion,
+  side: S.Literals(['recorded', 'current']),
+})
+export type IntegrityFilesEmpty = S.Schema.Type<typeof IntegrityFilesEmpty>
+
 export const TagAnnotationMalformed = S.TaggedStruct('TagAnnotationMalformed', {
   tag: ReleaseTag,
   reason: S.String,
@@ -52,6 +62,8 @@ export type TarballRefusal = S.Schema.Type<typeof TarballRefusal>
 
 export const IntegrityRefusal = S.Union([
   TagIntegrityMismatch,
+  IntegrityNothingToVerify,
+  IntegrityFilesEmpty,
   TagAnnotationMalformed,
   TagAnnotationLightweight,
   TarballMissing,

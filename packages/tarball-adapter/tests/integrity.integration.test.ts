@@ -1,7 +1,7 @@
 import { NodeServices } from '@effect/platform-node'
 import { Gherkin, Given, it, layer, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
 import { GitLive } from '@systemfsoftware/git-adapter'
-import { IntegrityCommand, verifyIntegrity } from '@systemfsoftware/github-release-engine'
+import { verifyIntegrity } from '@systemfsoftware/github-release-engine'
 import {
   FsPath,
   GitPort,
@@ -126,40 +126,33 @@ Feature('Tarball identity').body(({ scenario }) => {
             const recorded = Option.getOrThrow(
               S.decodeUnknownOption(S.fromJsonString(TarballIntegrity))(Option.getOrThrow(annotation)),
             )
-            const matched = verifyIntegrity(
-              IntegrityCommand.make({
-                checks: [{
-                  package: MEMBER,
-                  version: VERSION,
-                  recorded,
-                  current: { integrity: digestA.integrity, files: digestA.files },
-                }],
-              }),
-            )
-            const mismatched = verifyIntegrity(
-              IntegrityCommand.make({
-                checks: [{
-                  package: MEMBER,
-                  version: VERSION,
-                  recorded,
-                  current: { integrity: digestB.integrity, files: digestB.files },
-                }],
-              }),
-            )
+            const matched = verifyIntegrity([{
+              package: MEMBER,
+              version: VERSION,
+              recorded,
+              current: { integrity: digestA.integrity, files: digestA.files },
+            }])
+            const mismatched = verifyIntegrity([{
+              package: MEMBER,
+              version: VERSION,
+              recorded,
+              current: { integrity: digestB.integrity, files: digestB.files },
+            }])
             yield* git(['-C', work, 'tag', LIGHTWEIGHT])
             yield* git(['-C', work, 'push', '-q', 'origin', '--tags'])
             const lightweight = yield* gitPort.tagAnnotation(ORIGIN, ReleaseTag.make(LIGHTWEIGHT))
             const matchedChecked = Result.match(matched, {
               onFailure: () => -1,
-              onSuccess: (decision) =>
-                Match.value(decision).pipe(
-                  Match.tag('IntegrityVerified', (verified) => verified.checked),
-                  Match.tag('IntegrityVacant', () => -2),
-                  Match.exhaustive,
-                ),
+              onSuccess: (checked) => checked,
             })
             const mismatch = Result.match(mismatched, {
-              onFailure: (failure) => failure,
+              onFailure: (failure) =>
+                Match.value(failure).pipe(
+                  Match.tag('TagIntegrityMismatch', (mismatch) => mismatch),
+                  Match.tag('IntegrityFilesEmpty', () => undefined),
+                  Match.tag('IntegrityNothingToVerify', () => undefined),
+                  Match.exhaustive,
+                ),
               onSuccess: () => undefined,
             })
             return { digestA, digestB, recorded, matchedChecked, mismatch, lightweight }

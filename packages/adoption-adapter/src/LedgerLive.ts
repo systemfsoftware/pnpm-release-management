@@ -97,11 +97,9 @@ export const LedgerLive = (root: RepoRoot): Layer.Layer<LedgerPort> =>
 
       const full = (rel: RelativePath): string => path.join(root, rel)
 
-      const show = (ref: GitRef, rel: RelativePath): Effect.Effect<Result.Result<string, string>> =>
+      const capture = (args: ReadonlyArray<string>): Effect.Effect<Result.Result<string, string>> =>
         Effect.scoped(Effect.gen(function*() {
-          const handle = yield* spawner.spawn(
-            ChildProcess.make('git', ['show', `${ref}:${rel}`], { cwd: root }),
-          )
+          const handle = yield* spawner.spawn(ChildProcess.make('git', args, { cwd: root }))
           const [stdout, stderr] = yield* Effect.all(
             [
               Stream.mkString(Stream.decodeText(handle.stdout)),
@@ -114,7 +112,15 @@ export const LedgerLive = (root: RepoRoot): Layer.Layer<LedgerPort> =>
             return Result.succeed(stdout)
           }
           return Result.fail(stderr)
-        })).pipe(Effect.orElseSucceed(() => Result.fail('')))
+        })).pipe(Effect.orElseSucceed(() => Result.fail('git could not be spawned')))
+
+      const reasonOf = (stderr: string): string => {
+        const trimmed = stderr.trim()
+        if (trimmed.length > 0) {
+          return trimmed
+        }
+        return 'git reported no diagnostic'
+      }
 
       return {
         read: (rel: RelativePath) =>
@@ -131,11 +137,23 @@ export const LedgerLive = (root: RepoRoot): Layer.Layer<LedgerPort> =>
           }),
         readAt: (ref: GitRef, rel: RelativePath) =>
           Effect.gen(function*() {
-            const shown = yield* show(ref, rel)
-            if (Result.isFailure(shown)) {
+            const at = `${ref}:${rel}`
+            const listed = yield* capture(['ls-tree', '--name-only', ref, '--', rel])
+            if (Result.isFailure(listed)) {
+              return yield* Effect.fail(
+                LedgerUnreadable.make({ path: FsPath.make(at), reason: reasonOf(listed.failure) }),
+              )
+            }
+            if (listed.success.trim() === '') {
               return Option.none<ReleaseLedger>()
             }
-            return Option.some(yield* decodeLedger(FsPath.make(`${ref}:${rel}`), shown.success))
+            const shown = yield* capture(['show', at])
+            if (Result.isFailure(shown)) {
+              return yield* Effect.fail(
+                LedgerUnreadable.make({ path: FsPath.make(at), reason: reasonOf(shown.failure) }),
+              )
+            }
+            return Option.some(yield* decodeLedger(FsPath.make(at), shown.success))
           }),
         write: (rel: RelativePath, ledger: ReleaseLedger) =>
           Effect.gen(function*() {
