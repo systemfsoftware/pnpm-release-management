@@ -17,10 +17,9 @@ import { FileSystem } from 'effect/FileSystem'
 import * as Match from 'effect/Match'
 import { Path } from 'effect/Path'
 import * as S from 'effect/Schema'
-import * as Stream from 'effect/Stream'
-import { ChildProcess } from 'effect/unstable/process'
 import { expect, vi } from 'vitest'
 import { makeFakeForge } from './__fixtures__/FakeForge.js'
+import { git, insideRepo, SEED_IDENTITY, withoutGitIdentity, writeFiles } from './__fixtures__/RealGit.js'
 
 const Feature = makeFeature({ it, layer })
 
@@ -47,31 +46,6 @@ const PENDING_FILES: ReadonlyArray<readonly [string, string]> = [
   ['.changeset/alpha-minor.md', '---\n"@e2e/alpha": minor\n---\n\nalpha grows a public export\n'],
 ]
 
-const git = (cwd: string, ...args: ReadonlyArray<string>) =>
-  Effect.scoped(
-    Effect.gen(function*() {
-      const handle = yield* ChildProcess.make('git', args, { cwd })
-      const [stdout, code] = yield* Effect.all([
-        Stream.mkString(Stream.decodeText(handle.stdout)),
-        handle.exitCode,
-      ], { concurrency: 'unbounded' })
-      if (code !== 0) return yield* Effect.die(new Error(`git ${args.join(' ')} exited ${code}`))
-      return stdout.trim()
-    }),
-  )
-
-const writeFiles = (root: string, files: ReadonlyArray<readonly [string, string]>) =>
-  Effect.gen(function*() {
-    const fs = yield* FileSystem
-    const path = yield* Path
-    yield* Effect.forEach(files, ([file, text]) =>
-      Effect.gen(function*() {
-        const full = path.join(root, file)
-        yield* fs.makeDirectory(path.dirname(full), { recursive: true })
-        yield* fs.writeFileString(full, text)
-      }), { discard: true })
-  })
-
 const committedRepo = (files: ReadonlyArray<readonly [string, string]>) =>
   Effect.gen(function*() {
     const fs = yield* FileSystem
@@ -86,17 +60,7 @@ const committedRepo = (files: ReadonlyArray<readonly [string, string]>) =>
     yield* git(root, 'remote', 'add', 'origin', SLUG_URL)
     yield* git(root, 'config', `url.${remote}.pushInsteadOf`, SLUG_URL)
     yield* git(root, 'add', '-A')
-    yield* git(
-      root,
-      '-c',
-      'user.name=seed',
-      '-c',
-      'user.email=seed@example.invalid',
-      'commit',
-      '-q',
-      '-m',
-      'chore: seed',
-    )
+    yield* git(root, ...SEED_IDENTITY, 'commit', '-q', '-m', 'chore: seed')
     return { root: RepoRoot.make(root), remote }
   })
 
@@ -116,55 +80,6 @@ const bump = (root: RepoRoot) =>
       surfaces: [],
     })
     yield* Cell.run(Cell.provide(bumpCell, bumpLayer), input)
-  })
-
-const insideRepo = <A, E, R>(root: RepoRoot, effect: Effect.Effect<A, E, R>) =>
-  Effect.acquireUseRelease(
-    Effect.sync(() => {
-      const previous = process.cwd()
-      process.chdir(root)
-      return previous
-    }),
-    () => effect,
-    (previous) => Effect.sync(() => process.chdir(previous)),
-  )
-
-const GIT_IDENTITY_VARIABLES = [
-  'GIT_AUTHOR_NAME',
-  'GIT_AUTHOR_EMAIL',
-  'GIT_COMMITTER_NAME',
-  'GIT_COMMITTER_EMAIL',
-  'EMAIL',
-] as const
-
-const withoutGitIdentity = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  Effect.gen(function*() {
-    const fs = yield* FileSystem
-    const home = yield* fs.makeTempDirectory({ prefix: 'release-pull-request-home-' })
-    const overrides: Record<string, string | undefined> = {
-      HOME: home,
-      XDG_CONFIG_HOME: home,
-      GIT_CONFIG_NOSYSTEM: '1',
-      ...Object.fromEntries(GIT_IDENTITY_VARIABLES.map((name) => [name, undefined])),
-    }
-    return yield* Effect.acquireUseRelease(
-      Effect.sync(() => {
-        const saved = Object.fromEntries(Object.keys(overrides).map((name) => [name, process.env[name]]))
-        for (const [name, value] of Object.entries(overrides)) {
-          if (value === undefined) delete process.env[name]
-          else process.env[name] = value
-        }
-        return saved
-      }),
-      () => effect,
-      (saved) =>
-        Effect.sync(() => {
-          for (const [name, value] of Object.entries(saved)) {
-            if (value === undefined) delete process.env[name]
-            else process.env[name] = value
-          }
-        }),
-    )
   })
 
 const openReleasePullRequest = (root: RepoRoot) =>
