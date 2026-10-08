@@ -42,14 +42,25 @@ jobs:
       - uses: cachix/install-nix-action@v31
         if: runner.environment == 'github-hosted'
 
-      - name: Pack the workspace through the caller's flake
+      - &release-tools
+        name: Build the release tools at this workflow's own revision
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          tools=$(nix build --no-link --print-out-paths \
+            "github:${WORKFLOW_REPOSITORY:?job.workflow_repository is empty}/${WORKFLOW_SHA:?job.workflow_sha is empty}#release-tools")
+          echo "RELEASE_TOOLS=$tools/bin" >> "$GITHUB_ENV"
+
+      - &workspace-tarballs
+        name: Pack the workspace through the caller's flake
         run: echo "TARBALLS=$(nix build --no-link --print-out-paths .#workspace-tarballs)" >> "$GITHUB_ENV"
 
       - id: plan
         name: Decide release phase from repository state
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: nix develop --command github-release-management plan --tarballs "$TARBALLS" --output "$GITHUB_OUTPUT"
+        run: nix develop --command "$RELEASE_TOOLS/github-release-management" plan --tarballs "$TARBALLS" --output "$GITHUB_OUTPUT"
 
   version:
     name: version · open release PR
@@ -68,14 +79,16 @@ jobs:
       - uses: cachix/install-nix-action@v31
         if: runner.environment == 'github-hosted'
 
+      - *release-tools
+
       - name: Bump every package and version surface, consuming the intents
-        run: nix develop --command version-management bump
+        run: nix develop --command "$RELEASE_TOOLS/version-management" bump
 
       - id: pr
         name: Open or update the release PR
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: nix develop --command github-release-management pr --output "$GITHUB_OUTPUT"
+        run: nix develop --command "$RELEASE_TOOLS/github-release-management" pr --output "$GITHUB_OUTPUT"
 
       - name: Run the caller's CI on the release PR
         env:
@@ -106,25 +119,26 @@ jobs:
       - uses: cachix/install-nix-action@v31
         if: runner.environment == 'github-hosted'
 
-      - name: Pack the workspace through the caller's flake
-        run: echo "TARBALLS=$(nix build --no-link --print-out-paths .#workspace-tarballs)" >> "$GITHUB_ENV"
+      - *release-tools
+
+      - *workspace-tarballs
 
       - name: Capture this cycle
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           mkdir -p "${{ inputs.artifacts-dir }}"
-          nix develop --command github-release-management tag --tarballs "$TARBALLS" \
+          nix develop --command "$RELEASE_TOOLS/github-release-management" tag --tarballs "$TARBALLS" \
             --output "${{ inputs.artifacts-dir }}/captured.json"
 
       - name: Tag released versions, recording each tarball's integrity
         run: |
-          nix develop --command github-release-management tag --tarballs "$TARBALLS" \
+          nix develop --command "$RELEASE_TOOLS/github-release-management" tag --tarballs "$TARBALLS" \
             --captured "${{ inputs.artifacts-dir }}/captured.json"
 
       - name: GitHub Releases from the authored changelogs
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          nix develop --command github-release-management release \
+          nix develop --command "$RELEASE_TOOLS/github-release-management" release \
             --captured "${{ inputs.artifacts-dir }}/captured.json"

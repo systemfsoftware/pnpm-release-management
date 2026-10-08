@@ -30,11 +30,16 @@ Apps are Node programs built with tsdown into self-contained ESM bundles, then
 compiled with `deno compile` into one binary each. The flake exports them, and
 `packages.<system>.release-tools` joins the three release apps. A repository
 takes this flake as an input, pinned by its `flake.lock`, and puts
-`release-tools` in its dev shell, so a workflow runs the locked revision without
-installing anything:
+`release-tools` in its dev shell to run the apps locally. `release.yml` does not
+use that pin: it builds the `release-tools` of its own commit and runs them in
+the caller's dev shell (see [CI](#ci)). Each job sets `WORKFLOW_REPOSITORY` and
+`WORKFLOW_SHA` from the `job.workflow_repository` and `job.workflow_sha`
+contexts and fails when either is empty:
 
 ```bash
-nix develop --command github-release-management plan \
+tools=$(nix build --no-link --print-out-paths \
+  "github:${WORKFLOW_REPOSITORY:?job.workflow_repository is empty}/${WORKFLOW_SHA:?job.workflow_sha is empty}#release-tools")
+nix develop --command "$tools/bin/github-release-management" plan \
   --tarballs "$(nix build --no-link --print-out-paths .#workspace-tarballs)" \
   --output "$GITHUB_OUTPUT"
 ```
@@ -272,12 +277,20 @@ the caller's CI workflow (`ci-workflow`, which must accept `workflow_dispatch`)
 on that branch. A failed dispatch fails the job. That gives the release PR the
 checks the branch protection requires.
 
-`release.yml` runs the apps from the caller's dev shell (`nix develop`). The
-revision is the one the caller's `flake.lock` pins for its
-`pnpm-release-management` input; `nix flake update pnpm-release-management`
-moves it. The caller's `devShells.<system>.default` must provide
-`release-tools`, pnpm, the `sandbox` and `SANDBOX_PNPM_STORE` (see
-[Distribution through Nix](#distribution-through-nix)).
+`release.yml` runs the apps built from its own commit, not the caller's. Each
+job builds `github:${{ job.workflow_repository }}/${{ job.workflow_sha }}#release-tools`,
+the `release-tools` of the exact revision of this repository the caller's
+`uses:` resolved to, and runs those binaries by path inside the caller's dev
+shell (`nix develop --command "$RELEASE_TOOLS/<app>" …`). A caller on
+`release.yml@main` therefore always gets the flags `release.yml@main` passes,
+whatever revision its `flake.lock` pins for its `pnpm-release-management`
+input; that pin still decides the `release-tools` in its dev shell for local
+use, and `nix flake update pnpm-release-management` still moves it. The
+caller's `devShells.<system>.default` must provide pnpm, the `sandbox` and
+`SANDBOX_PNPM_STORE` (see [Distribution through Nix](#distribution-through-nix)).
+The job needs the `job.workflow_*` context: github.com provides it (self-hosted
+runners from actions/runner v2.334.0), GitHub Enterprise Server does not. A job
+that cannot read it fails before running any tool.
 
 `tools-ref` pins the revision of this repository that a release runs from;
 `@main` tracks the tip. Without `devshell`, the changeset check checks this
