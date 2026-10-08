@@ -7,6 +7,10 @@
   nodejs ? pkgs.nodejs_24,
   buildScript ? "build",
   nativeBuildInputs ? [ ],
+  # Directories the lockfile's `file:` tarballs live in, by path relative to
+  # src, as for mkPnpmConsumerStore. Both the store and the tarball build
+  # install from the lockfile, so both get them.
+  files ? { },
 }:
 let
   inherit (pkgs) lib;
@@ -71,7 +75,7 @@ let
     assert pinnedPnpm == null || pinnedPnpm == pnpm.version
       || throw "mkPnpmWorkspacePackages: package.json pins pnpm@${pinnedPnpm} but the build uses pnpm ${pnpm.version}; pin the version Nix provides so every pnpm run resolves the same way";
     import ./pnpm-store.nix {
-      inherit pkgs pname pnpm src iplConfigHook;
+      inherit pkgs pname pnpm src iplConfigHook files;
     };
 
   inherit (deps) mitmCache;
@@ -92,6 +96,7 @@ let
       pname = "${pname}-tarballs";
       version = "0";
       inherit src mitmCache;
+      postPatch = deps.copyFiles;
       prePnpmInstall = import ./pnpm-mitm-replay.nix;
 
       nativeBuildInputs = [ nodejs pnpm iplConfigHook pkgs.jq ] ++ nativeBuildInputs;

@@ -184,6 +184,22 @@
                 touch $out
               ''
             );
+
+          # A member depending on a `file:` tarball packs only when the tarball
+          # is laid into src where the lockfile names it.
+          workspace-file-deps =
+            let
+              tarballs = (self.lib.mkPnpmWorkspacePackages {
+                inherit pkgs;
+                src = ./nix/lib/fixtures/file-deps;
+                pname = "file-deps";
+                files.".deps" = self.packages.${system}.sandbox-proofs-tiny-lib;
+              }).workspace-tarballs;
+            in
+            pkgs.runCommand "workspace-file-deps" { nativeBuildInputs = [ pkgs.jq ]; } ''
+              jq -e '. == [{ name: "@fixture/app", file: "app-1.0.0.tgz" }]' ${tarballs}/index.json
+              touch $out
+            '';
         });
 
       devShells = forEachSystem (pkgs: {

@@ -378,6 +378,11 @@ fixed-output fetches as above; the `pnpm` and `@pnpm/exe.*` entries of pnpm
 12's env document are skipped, because the sandbox never lets pnpm fetch
 itself.
 
+A workspace that publishes its own packages and also consumes tarballs this way
+passes the same `files` to `lib.mkPnpmWorkspacePackages`. Its tarball build
+installs from the lockfile too, so without them the build fails on the first
+`file:` path it cannot open.
+
 Resolving the lockfile is the one step that runs on the host: `pnpm install
 --lockfile-only` needs registry metadata, which no store carries. It reads
 metadata only and runs no package code. Every install, build and test after it

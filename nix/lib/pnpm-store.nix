@@ -21,16 +21,20 @@ let
     data = tarballCacheData;
   };
 
+  # Lays each `files` derivation's tarballs into src where the lockfile's
+  # `file:` paths name them.
+  copyFiles = pkgs.lib.concatStrings (pkgs.lib.mapAttrsToList (dir: source: ''
+    mkdir -p ${pkgs.lib.escapeShellArg dir}
+    cp -r ${source}/. ${pkgs.lib.escapeShellArg dir}/
+  '') files);
+
   # Not a fixed-output derivation: the cache above holds every tarball, and pnpm
   # only reads it. The store dir itself is the output, in the layout pnpm writes
   # (`v*/files` next to `v*/index.db`).
   store = pkgs.stdenvNoCC.mkDerivation {
     pname = "${pname}-pnpm-store";
     inherit version src mitmCache;
-    postPatch = pkgs.lib.concatStrings (pkgs.lib.mapAttrsToList (dir: source: ''
-      mkdir -p ${pkgs.lib.escapeShellArg dir}
-      cp -r ${source}/. ${pkgs.lib.escapeShellArg dir}/
-    '') files);
+    postPatch = copyFiles;
     # A consumer's packageManager pin names whatever pnpm it uses on the host;
     # the store is built by the pnpm passed here, which must not fetch another.
     pnpm_config_manage_package_manager_versions = "false";
@@ -47,5 +51,5 @@ let
   };
 in
 {
-  inherit mitmCache store;
+  inherit mitmCache store copyFiles;
 }
