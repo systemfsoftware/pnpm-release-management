@@ -7,6 +7,7 @@ import {
   PrTitle,
   PullRequestLookup,
   PullRequestNumber,
+  RelativePath,
   ReleaseLabel,
   RemoteName,
   RepoSlug,
@@ -70,6 +71,7 @@ export class PullRequestCommand extends S.TaggedClass<PullRequestCommand>()(
   {
     pending: Count,
     changes: Count,
+    created: S.Array(RelativePath),
     existing: PullRequestLookup,
     branch: GitRef,
     base: GitRef,

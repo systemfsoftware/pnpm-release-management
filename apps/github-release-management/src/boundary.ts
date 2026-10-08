@@ -126,6 +126,11 @@ export interface PullRequestFlags {
   readonly branch: string | undefined
 }
 
+const rootChangelogOf = (versioning: ReleaseConfig['versioning']): RelativePath | undefined => {
+  if (versioning.strategy === 'surfaces') return versioning.changelog
+  return undefined
+}
+
 export const pullRequestRequestOf = (workspace: Workspace, flags: PullRequestFlags) =>
   Effect.gen(function*() {
     const path = yield* Path.Path
@@ -151,6 +156,8 @@ export const pullRequestRequestOf = (workspace: Workspace, flags: PullRequestFla
         branch: flags.branch ?? workspace.config.branch,
         remote: undefined,
         labels: ['release'],
+        changelogDir: workspace.config.changelogDir,
+        rootChangelog: rootChangelogOf(workspace.config.versioning),
       }),
     )
   })

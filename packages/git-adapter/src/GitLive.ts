@@ -204,16 +204,30 @@ const makeGitPort = (
       remote: RemoteName,
     ): Effect.Effect<ReadonlyArray<ReleaseTag>, TagRefusal> =>
       tagValue(['ls-remote', '--tags', remote], remoteTagsPath, S.Array(ReleaseTag), listedTags),
-    uncommittedChanges: (): Effect.Effect<Count, PullRequestRefusal> =>
+    trackedChanges: (): Effect.Effect<Count, PullRequestRefusal> =>
       capture(
-        ['status', '--porcelain', '--untracked-files=all'],
+        ['status', '--porcelain', '--untracked-files=no'],
         (failure) => PullRequestTreeUnreadable.make({ reason: failure.trim() }),
         (stdout) => Result.succeed(Count.make(nonEmptyLines(stdout).length)),
       ),
-    commitAll: (message: PrTitle): Effect.Effect<CommitSha, PullRequestRefusal> =>
+    commitRelease: (
+      message: PrTitle,
+      created: ReadonlyArray<RelativePath>,
+    ): Effect.Effect<CommitSha, PullRequestRefusal> =>
       Effect.gen(function*() {
-        yield* run(['add', '-A'], () => PullRequestBodyUnreadable.make({ path: commitPath }))
-        yield* run(['commit', '-m', message], () => PullRequestBodyUnreadable.make({ path: commitPath }))
+        const refuse = () => PullRequestBodyUnreadable.make({ path: commitPath })
+        yield* run(['add', '--update'], refuse)
+        if (created.length > 0) {
+          const untracked = yield* capture(
+            ['--literal-pathspecs', 'ls-files', '-z', '--others', '--exclude-standard', '--', ...created],
+            refuse,
+            (stdout) => Result.succeed(stdout.split('\0').filter((path) => path.length > 0)),
+          )
+          if (untracked.length > 0) {
+            yield* run(['--literal-pathspecs', 'add', '--', ...untracked], refuse)
+          }
+        }
+        yield* run(['commit', '-m', message], refuse)
         return yield* capture(
           ['rev-parse', 'HEAD'],
           () => PullRequestHeadInvalid.make({ branch: headRef }),

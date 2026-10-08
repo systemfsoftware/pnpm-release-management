@@ -1,5 +1,6 @@
 import { Cell, Wire } from '@systemfsoftware/effect-cell-types'
-import type { IntentRefusal, PullRequestRefusal, TagRefusal } from '@systemfsoftware/release-language'
+import type { IntentRefusal, MemberRefusal, PullRequestRefusal, TagRefusal } from '@systemfsoftware/release-language'
+import { memberChangelogPathOf } from '@systemfsoftware/release-language'
 import {
   ChangesetStore,
   Count,
@@ -34,6 +35,8 @@ export const PullRequestRequest = Wire.wire({
   branch: Wire.mint(GitRef),
   remote: Wire.mint(S.optional(RemoteName)),
   labels: Wire.mint(S.Array(ReleaseLabel)),
+  changelogDir: Wire.mint(RelativePath),
+  rootChangelog: Wire.mint(S.optional(RelativePath)),
 })
 
 interface BodyScan {
@@ -62,7 +65,7 @@ const read = (
   request: S.Schema.Type<typeof PullRequestRequest>,
 ): Effect.Effect<
   PullRequestCommand,
-  IntentRefusal | TagRefusal | PullRequestRefusal,
+  IntentRefusal | MemberRefusal | TagRefusal | PullRequestRefusal,
   ChangesetStore | WorkspaceStore | GitPort | ForgePort
 > =>
   Effect.gen(function*() {
@@ -72,13 +75,22 @@ const read = (
     const git = yield* GitPort
     const forge = yield* ForgePort
     const intents = yield* changesets.listIntents()
-    const changes = yield* git.uncommittedChanges()
+    const changes = yield* git.trackedChanges()
+    const storage = yield* workspace.changelogStorage()
+    const members = yield* workspace.listMembers()
+    const created = members.map((member) =>
+      memberChangelogPathOf(storage, request.changelogDir, member, member.manifest.version)
+    )
+    if (request.rootChangelog !== undefined) {
+      created.push(request.rootChangelog)
+    }
     const slug = yield* git.repoSlug()
     const existing = yield* forge.openPullRequest(slug, request.branch)
     const body = yield* readBody(workspace, request.body, request.bodyFile)
     return PullRequestCommand.make({
       pending: Count.make(intents.length),
       changes,
+      created,
       existing,
       branch: request.branch,
       base: request.base,
@@ -101,7 +113,7 @@ const openRequest = (
   return Effect.gen(function*() {
     const git = yield* GitPort
     const forge = yield* ForgePort
-    yield* git.commitAll(raw.title)
+    yield* git.commitRelease(raw.title, raw.created)
     yield* git.pushBranch(raw.branch, raw.remote)
     const number = yield* forge.createPullRequest(
       raw.slug,
@@ -135,7 +147,7 @@ const write = (
       Effect.gen(function*() {
         const git = yield* GitPort
         const forge = yield* ForgePort
-        yield* git.commitAll(raw.title)
+        yield* git.commitRelease(raw.title, raw.created)
         yield* git.pushBranch(raw.branch, raw.remote)
         yield* forge.updatePullRequest(raw.slug, updated.number, raw.title, raw.body, raw.labels)
         return updated
@@ -149,7 +161,7 @@ const write = (
 export const pullRequestCell: Cell.Cell<
   S.Schema.Type<typeof PullRequestRequest>,
   PullRequestDecision,
-  IntentRefusal | TagRefusal | PullRequestRefusal,
+  IntentRefusal | MemberRefusal | TagRefusal | PullRequestRefusal,
   ChangesetStore | WorkspaceStore | GitPort | ForgePort
 > = Cell.layer({
   read,

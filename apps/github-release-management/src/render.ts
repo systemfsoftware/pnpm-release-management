@@ -67,6 +67,7 @@ export type ReleaseFailure =
 export type PullRequestFailure =
   | PlatformRefusal
   | IntentRefusal
+  | MemberRefusal
   | TagRefusal
   | PullRequestRefusal
 
@@ -220,6 +221,8 @@ export const renderPullRequestRefusal = (
         WorkspaceRootNotAbsolute: (notAbsolute) => `refused: workspace-root-not-absolute, path: ${notAbsolute.given}`,
         IntentFrontmatterMalformed: (malformed) => `refused: intent-frontmatter-malformed, path: ${malformed.path}`,
         IntentUnknownPackage: () => 'refused: intent-unknown-package',
+        ManifestUnreadable: (unreadable) => `refused: manifest-unreadable, path: ${unreadable.path}`,
+        ManifestInvalid: (invalid) => `refused: manifest-invalid, path: ${invalid.path}`,
         IntentSlugTaken: () => 'refused: intent-slug-taken',
         TagCapturedMalformed: (malformed) => `refused: tag-captured-malformed, path: ${malformed.path}`,
         TagExcludedMalformed: (malformed) => `refused: tag-excluded-malformed, path: ${malformed.path}`,

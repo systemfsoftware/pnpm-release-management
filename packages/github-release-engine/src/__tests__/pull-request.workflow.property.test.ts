@@ -8,6 +8,7 @@ import {
   PullRequestAbsent,
   PullRequestFound,
   PullRequestNumber,
+  RelativePath,
   ReleaseLabel,
   RemoteName,
   RepoName,
@@ -55,14 +56,32 @@ const remoteArb = slugPartArb.map((remote) => RemoteName.make(remote))
 const labelsArb = fc
   .array(slugPartArb.map((label) => ReleaseLabel.make(label)), { maxLength: 3 })
 
+const createdArb = fc.array(
+  fc.stringMatching(/^[a-z][a-z0-9_-]{0,12}(\/[a-z0-9_-]{1,12}){0,2}\.md$/).map((path) => RelativePath.make(path)),
+  { maxLength: 3 },
+)
+
 it.prop(
   '∀state_PullRequest_≡OpensRefreshesCloses',
-  [countArb, countArb, refsArb, existingArb, titleArb, bodyArb, bodyIssueArb, slugArb, remoteArb, labelsArb],
-  ([pending, changes, refs, existing, title, body, bodyIssue, slug, remote, labels]) => {
+  [
+    countArb,
+    countArb,
+    createdArb,
+    refsArb,
+    existingArb,
+    titleArb,
+    bodyArb,
+    bodyIssueArb,
+    slugArb,
+    remoteArb,
+    labelsArb,
+  ],
+  ([pending, changes, created, refs, existing, title, body, bodyIssue, slug, remote, labels]) => {
     const outcome = pullRequest(
       PullRequestCommand.make({
         pending,
         changes,
+        created,
         existing,
         branch: refs.branch,
         base: refs.base,
