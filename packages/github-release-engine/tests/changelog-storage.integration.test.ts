@@ -102,7 +102,8 @@ const textOf = (root: RepoRoot, file: string) =>
     const fs = yield* FileSystem
     const path = yield* Path
     const full = path.join(root, file)
-    return (yield* fs.exists(full)) ? yield* fs.readFileString(full) : undefined
+    if (!(yield* fs.exists(full))) return undefined
+    return yield* fs.readFileString(full)
   })
 
 Feature('Member changelogs follow the declared storage from bump to release').body(({ scenario }) => {

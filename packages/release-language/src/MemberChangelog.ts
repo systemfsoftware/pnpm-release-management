@@ -6,10 +6,10 @@ export const memberChangelogPathOf = (
   changelogDir: RelativePath,
   member: { readonly name: PackageName; readonly dir: RelativePath },
   version: PackageVersion,
-): RelativePath =>
-  storage === 'repository'
-    ? RelativePath.make(`${member.dir}/CHANGELOG.md`)
-    : RelativePath.make(`${changelogDir}/${member.name.replaceAll('/', '!')}@${version}.md`)
+): RelativePath => {
+  if (storage === 'repository') return RelativePath.make(`${member.dir}/CHANGELOG.md`)
+  return RelativePath.make(`${changelogDir}/${member.name.replaceAll('/', '!')}@${version}.md`)
+}
 
 export const parkedChangelogOf = (name: PackageName, version: PackageVersion, summary: string): string =>
   `# ${name}@${version}\n\n${summary}\n`
@@ -22,11 +22,15 @@ export const withVersionSection = (
 ): string => {
   const section = `## ${version}\n\n${summary.trim()}\n`
   if (existing === undefined || existing.trim() === '') return `# ${name}\n\n${section}`
-  const lines = existing.split('\n')
-  const title = lines[0]?.startsWith('# ') === true ? lines[0] : undefined
-  const rest = (title === undefined ? lines : lines.slice(1)).join('\n').trim()
-  const body = rest === '' ? section : `${section}\n${rest}\n`
-  return title === undefined ? body : `${title}\n\n${body}`
+  const [first = '', ...after] = existing.split('\n')
+  if (!first.startsWith('# ')) return withRest(section, existing)
+  return `${first}\n\n${withRest(section, after.join('\n'))}`
+}
+
+const withRest = (section: string, rest: string): string => {
+  const kept = rest.trim()
+  if (kept === '') return section
+  return `${section}\n${kept}\n`
 }
 
 export const releaseNotesOf = (
