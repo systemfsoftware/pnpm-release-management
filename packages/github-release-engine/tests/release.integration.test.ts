@@ -1359,6 +1359,7 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
                 Match.tag('PullRequestBodyUnreadable', () => failUnexpected('expected PullRequestHeadInvalid')),
                 Match.tag('PullRequestUnversioned', () => failUnexpected('expected PullRequestHeadInvalid')),
                 Match.tag('PullRequestTreeUnreadable', () => failUnexpected('expected PullRequestHeadInvalid')),
+                Match.tag('PullRequestGitFailed', () => failUnexpected('expected PullRequestHeadInvalid')),
                 Match.exhaustive,
               )
             }),
@@ -1411,6 +1412,7 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
                 Match.tag('PullRequestHeadInvalid', () => failUnexpected('expected PullRequestBodyUnreadable')),
                 Match.tag('PullRequestUnversioned', () => failUnexpected('expected PullRequestBodyUnreadable')),
                 Match.tag('PullRequestTreeUnreadable', () => failUnexpected('expected PullRequestBodyUnreadable')),
+                Match.tag('PullRequestGitFailed', () => failUnexpected('expected PullRequestBodyUnreadable')),
                 Match.exhaustive,
               )
             }),

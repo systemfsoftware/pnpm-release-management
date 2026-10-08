@@ -235,6 +235,7 @@ export const renderPullRequestRefusal = (
         PullRequestUnversioned: (unversioned) =>
           `refused: pull-request-unversioned, pending intents: ${unversioned.pending}. Run \`version-management bump\` first: pr opens the release PR from the bumped tree`,
         PullRequestTreeUnreadable: (unreadable) => `cannot read the working tree: ${unreadable.reason}`,
+        PullRequestGitFailed: (failed) => `git command failed: ${failed.command}\n${failed.stderr}`,
       }),
     ),
   )

@@ -212,7 +212,11 @@ open or refresh the release PR, an unchanged tree closes it, and an intent still
 on disk means bump has not run, so `pr` refuses instead of reporting nothing to
 release. The release commit holds the tracked changes plus the changelogs bump
 created; any other untracked file, such as a `.release/` artifacts directory,
-neither opens the release PR nor rides into its commit.
+neither opens the release PR nor rides into its commit. The release commit is
+authored and committed as `github-actions[bot]
+<41898282+github-actions[bot]@users.noreply.github.com>`, passed to that one
+`git commit` with `-c`, so `pr` needs no git identity on the runner and changes
+no git config.
 
 ## Capabilities
 

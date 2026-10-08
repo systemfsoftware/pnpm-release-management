@@ -82,13 +82,21 @@ const committedRepo = (files: ReadonlyArray<readonly [string, string]>) =>
     yield* writeFiles(root, files)
     yield* git(scratch, 'init', '-q', '--bare', remote)
     yield* git(root, 'init', '-q', '-b', 'main')
-    yield* git(root, 'config', 'user.name', 't')
-    yield* git(root, 'config', 'user.email', 't@example.invalid')
     yield* git(root, 'config', 'commit.gpgsign', 'false')
     yield* git(root, 'remote', 'add', 'origin', SLUG_URL)
     yield* git(root, 'config', `url.${remote}.pushInsteadOf`, SLUG_URL)
     yield* git(root, 'add', '-A')
-    yield* git(root, 'commit', '-q', '-m', 'chore: seed')
+    yield* git(
+      root,
+      '-c',
+      'user.name=seed',
+      '-c',
+      'user.email=seed@example.invalid',
+      'commit',
+      '-q',
+      '-m',
+      'chore: seed',
+    )
     return { root: RepoRoot.make(root), remote }
   })
 
@@ -121,6 +129,44 @@ const insideRepo = <A, E, R>(root: RepoRoot, effect: Effect.Effect<A, E, R>) =>
     (previous) => Effect.sync(() => process.chdir(previous)),
   )
 
+const GIT_IDENTITY_VARIABLES = [
+  'GIT_AUTHOR_NAME',
+  'GIT_AUTHOR_EMAIL',
+  'GIT_COMMITTER_NAME',
+  'GIT_COMMITTER_EMAIL',
+  'EMAIL',
+] as const
+
+const withoutGitIdentity = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.gen(function*() {
+    const fs = yield* FileSystem
+    const home = yield* fs.makeTempDirectory({ prefix: 'release-pull-request-home-' })
+    const overrides: Record<string, string | undefined> = {
+      HOME: home,
+      XDG_CONFIG_HOME: home,
+      GIT_CONFIG_NOSYSTEM: '1',
+      ...Object.fromEntries(GIT_IDENTITY_VARIABLES.map((name) => [name, undefined])),
+    }
+    return yield* Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const saved = Object.fromEntries(Object.keys(overrides).map((name) => [name, process.env[name]]))
+        for (const [name, value] of Object.entries(overrides)) {
+          if (value === undefined) delete process.env[name]
+          else process.env[name] = value
+        }
+        return saved
+      }),
+      () => effect,
+      (saved) =>
+        Effect.sync(() => {
+          for (const [name, value] of Object.entries(saved)) {
+            if (value === undefined) delete process.env[name]
+            else process.env[name] = value
+          }
+        }),
+    )
+  })
+
 const openReleasePullRequest = (root: RepoRoot) =>
   Effect.gen(function*() {
     const forge = makeFakeForge()
@@ -130,7 +176,7 @@ const openReleasePullRequest = (root: RepoRoot) =>
       GitLive,
       forge.layer,
     ).pipe(Layer.provide(NodeServices.layer))
-    const outcome = yield* insideRepo(
+    const outcome = yield* withoutGitIdentity(insideRepo(
       root,
       Effect.match(
         Cell.run(Cell.provide(pullRequestCell, prLayer), {
@@ -145,7 +191,7 @@ const openReleasePullRequest = (root: RepoRoot) =>
           onSuccess: (decision) => ({ _tag: 'decided' as const, decision }),
         },
       ),
-    )
+    ))
     return { outcome, forge }
   })
 
@@ -179,6 +225,66 @@ Feature('The release PR is opened from the tree the version step bumped').body((
           expect(yield* git(s.repo.remote, 'ls-tree', '--name-only', 'release', '.changeset/')).toEqual(
             ['.changeset/README.md', '.changeset/changelogs'].join('\n'),
           )
+        })
+      ),
+    ),
+  )
+
+  scenario(
+    'With no git identity on the host, the release commit is authored by the release bot',
+    { scenarioLayer: NodeServices.layer },
+    Gherkin.Do.pipe(
+      Given('a committed workspace with one pending minor intent for alpha')(
+        'repo',
+        () => committedRepo(PENDING_FILES),
+      ),
+      When('the version step bumps and pr runs with an empty HOME and no git identity')(
+        'run',
+        (s) => Effect.andThen(bump(s.repo.root), openReleasePullRequest(s.repo.root)),
+      ),
+      Then('the pushed release commit names github-actions[bot] as author and committer')((s) =>
+        Effect.gen(function*() {
+          Match.value(s.run.outcome).pipe(
+            Match.tag('decided', ({ decision }) => expect(decision._tag).toEqual('PullRequestCreated')),
+            Match.tag('refused', ({ refusal }) => expect.fail(`expected a created PR, got ${JSON.stringify(refusal)}`)),
+            Match.exhaustive,
+          )
+          const bot = 'github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>'
+          expect(yield* git(s.repo.remote, 'log', '-1', '--format=%an <%ae>%n%cn <%ce>', 'release')).toEqual(
+            [bot, bot].join('\n'),
+          )
+        })
+      ),
+    ),
+  )
+
+  scenario(
+    'A failed git command is refused with the command and git stderr',
+    { scenarioLayer: NodeServices.layer },
+    Gherkin.Do.pipe(
+      Given('a committed workspace whose origin points at a repository that does not exist')('repo', () =>
+        Effect.tap(
+          committedRepo(PENDING_FILES),
+          (repo) => git(repo.root, 'remote', 'set-url', '--push', 'origin', `${repo.remote}-missing`),
+        )),
+      When('the version step bumps and pr runs')(
+        'run',
+        (s) => Effect.andThen(bump(s.repo.root), openReleasePullRequest(s.repo.root)),
+      ),
+      Then('pr refuses with the push command and the stderr git printed')((s) =>
+        Effect.sync(() => {
+          Match.value(s.run.outcome).pipe(
+            Match.tag('refused', ({ refusal }) => {
+              expect(refusal).toMatchObject({
+                _tag: 'PullRequestGitFailed',
+                command: 'git push --force origin HEAD:refs/heads/release',
+              })
+              expect(JSON.stringify(refusal)).toContain('does not appear to be a git repository')
+            }),
+            Match.tag('decided', ({ decision }) => expect.fail(`expected a refusal, got ${decision._tag}`)),
+            Match.exhaustive,
+          )
+          expect(s.run.forge.calls.createdPullRequests).toEqual([])
         })
       ),
     ),

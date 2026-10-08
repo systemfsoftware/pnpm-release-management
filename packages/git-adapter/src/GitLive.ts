@@ -11,7 +11,7 @@ import {
   OwnerName,
   PackageManifest,
   PackageName,
-  PullRequestBodyUnreadable,
+  PullRequestGitFailed,
   PullRequestHeadInvalid,
   PullRequestTreeUnreadable,
   RelativePath,
@@ -41,7 +41,15 @@ import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 const currentBranchPath = FsPath.make('git:current-branch')
 const headShaPath = FsPath.make('git:head-sha')
 const remoteTagsPath = FsPath.make('git:remote-tags')
-const commitPath = FsPath.make('git:commit')
+const RELEASE_BOT_IDENTITY: ReadonlyArray<string> = [
+  '-c',
+  'user.name=github-actions[bot]',
+  '-c',
+  'user.email=41898282+github-actions[bot]@users.noreply.github.com',
+]
+
+const gitFailed = (args: ReadonlyArray<string>) => (stderr: string): PullRequestGitFailed =>
+  PullRequestGitFailed.make({ command: `git ${args.join(' ')}`, stderr: stderr.trim() })
 const pushTagsPath = FsPath.make('git:push-tags')
 const writeTagPath = FsPath.make('git:write-tag')
 const repoSlugPath = FsPath.make('git:repo-slug')
@@ -215,19 +223,20 @@ const makeGitPort = (
       created: ReadonlyArray<RelativePath>,
     ): Effect.Effect<CommitSha, PullRequestRefusal> =>
       Effect.gen(function*() {
-        const refuse = () => PullRequestBodyUnreadable.make({ path: commitPath })
-        yield* run(['add', '--update'], refuse)
+        const step = (args: ReadonlyArray<string>) => run(args, gitFailed(args))
+        yield* step(['add', '--update'])
         if (created.length > 0) {
+          const listArgs = ['--literal-pathspecs', 'ls-files', '-z', '--others', '--exclude-standard', '--', ...created]
           const untracked = yield* capture(
-            ['--literal-pathspecs', 'ls-files', '-z', '--others', '--exclude-standard', '--', ...created],
-            refuse,
+            listArgs,
+            gitFailed(listArgs),
             (stdout) => Result.succeed(stdout.split('\0').filter((path) => path.length > 0)),
           )
           if (untracked.length > 0) {
-            yield* run(['--literal-pathspecs', 'add', '--', ...untracked], refuse)
+            yield* step(['--literal-pathspecs', 'add', '--', ...untracked])
           }
         }
-        yield* run(['commit', '-m', message], refuse)
+        yield* step([...RELEASE_BOT_IDENTITY, 'commit', '-m', message])
         return yield* capture(
           ['rev-parse', 'HEAD'],
           () => PullRequestHeadInvalid.make({ branch: headRef }),
@@ -241,19 +250,22 @@ const makeGitPort = (
     pushBranch: (
       branch: GitRef,
       remote: RemoteName,
-    ): Effect.Effect<void, PullRequestRefusal> =>
-      run(['push', '--force', remote, `HEAD:refs/heads/${branch}`], () => PullRequestHeadInvalid.make({ branch })),
+    ): Effect.Effect<void, PullRequestRefusal> => {
+      const args = ['push', '--force', remote, `HEAD:refs/heads/${branch}`]
+      return run(args, gitFailed(args))
+    },
     deleteRemoteBranch: (
       branch: GitRef,
       remote: RemoteName,
     ): Effect.Effect<BranchDeleted, PullRequestRefusal> =>
       Effect.gen(function*() {
-        const captured = yield* git(['push', remote, '--delete', branch])
+        const args = ['push', remote, '--delete', branch]
+        const captured = yield* git(args)
         if (Result.isFailure(captured)) {
           if (branchAlreadyGone(captured.failure)) {
             return BranchDeleted.make({ branch, deleted: false })
           }
-          return yield* Effect.fail(PullRequestHeadInvalid.make({ branch }))
+          return yield* Effect.fail(gitFailed(args)(captured.failure))
         }
         return BranchDeleted.make({ branch, deleted: true })
       }),
