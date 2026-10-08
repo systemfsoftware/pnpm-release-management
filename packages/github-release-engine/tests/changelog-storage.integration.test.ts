@@ -15,12 +15,15 @@ import { Effect, Layer } from 'effect'
 import { FileSystem } from 'effect/FileSystem'
 import { Path } from 'effect/Path'
 import * as S from 'effect/Schema'
-import { expect } from 'vitest'
+import { expect, vi } from 'vitest'
 import { makeFakeCycleStore } from './__fixtures__/FakeCycleStore.js'
 import { makeFakeForge } from './__fixtures__/FakeForge.js'
 import { makeFakeGit } from './__fixtures__/FakeGit.js'
 
 const Feature = makeFeature({ it, layer })
+
+const SPAWNS_REAL_PNPM_TIMEOUT_MS = 30_000
+vi.setConfig({ testTimeout: SPAWNS_REAL_PNPM_TIMEOUT_MS })
 
 const changelogDir = RelativePath.make('.changeset/changelogs')
 
