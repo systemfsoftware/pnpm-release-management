@@ -1,5 +1,5 @@
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers'
-import { releaseToolSteps, workflowEnvOf } from './workflow-env.js'
+import { releaseWorkflow, resolveExpressions, runStepsOf, toolStepsOf, workflowEnvOf } from './workflow-env.js'
 
 export const IMAGE = 'pnpm-release-management-e2e:local'
 export const BINS_DIR = '/opt/prm'
@@ -12,6 +12,24 @@ export const GITHUB_REPOSITORY = 'admin/fixture'
 export const REGISTRY = 'https://registry.npmjs.org'
 export const REGISTRY_LOG = '/tmp/verdaccio/verdaccio.log'
 export const REGISTRY_STORAGE = '/tmp/verdaccio/storage'
+export const CI_WORKFLOW = 'ci.yml'
+export const GH_DISPATCHES = '/tmp/gh-dispatches.log'
+
+const RUNNER_BIN = '/opt/runner-bin'
+const STEP_DIR = '/tmp/steps'
+
+const GH_STUB = `#!/bin/sh
+if [ -z "$GH_TOKEN" ]; then
+  echo 'gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable.' >&2
+  exit 4
+fi
+if [ "$1 $2" = "workflow run" ]; then
+  printf '%s\\n' "$*" >> ${GH_DISPATCHES}
+  exit 0
+fi
+echo "gh stub: only 'gh workflow run' is modelled, got: gh $*" >&2
+exit 2
+`
 
 export const REDIRECTED_HOSTS = [
   { host: 'api.github.com', ipAddress: '127.0.0.1' },
@@ -53,6 +71,10 @@ export interface CommandRecord {
   stderr: string
 }
 
+export interface StepResult extends ExecResult {
+  readonly step: string
+}
+
 export interface Listener {
   command(record: CommandRecord): void
 }
@@ -76,6 +98,7 @@ export interface World {
   must(command: string, options?: ExecOptions): Promise<ExecResult>
   fails(command: string, options?: ExecOptions): Promise<ExecResult>
   tool(app: string, subcommand: string, args?: string, options?: ExecOptions): Promise<ExecResult>
+  job(name: string): Promise<ReadonlyArray<StepResult>>
   write(path: string, content: string): Promise<void>
   read(path: string): Promise<string>
   github<T>(path: string, decode: (input: unknown) => T): Promise<GitHubResponse<T>>
@@ -100,9 +123,23 @@ const RUNNER_ENV: Readonly<Record<string, string>> = {
 
 const WORKFLOW_EXPRESSIONS: Readonly<Record<string, string>> = {
   'github.token': GITHUB_TOKEN,
+  'inputs.ci-workflow': CI_WORKFLOW,
 }
 
-const RELEASE_TOOL_STEPS = await releaseToolSteps()
+const RELEASE_WORKFLOW = await releaseWorkflow()
+const RELEASE_TOOL_STEPS = toolStepsOf(RELEASE_WORKFLOW)
+
+const outputsOf = (text: string): Record<string, string> =>
+  Object.fromEntries(
+    text.split('\n').flatMap((line) => {
+      const at = line.indexOf('=')
+      if (at <= 0) return []
+      return [[line.slice(0, at), line.slice(at + 1)]]
+    }),
+  )
+
+const withBins = (run: string): string =>
+  run.replaceAll(/nix develop --command (\S+)/g, (_, app: string) => quote(`${BINS_DIR}/${app}`))
 
 const shellScript = (command: string, options: ExecOptions): string => {
   const lines = Object.entries({ ...RUNNER_ENV, ...options.env }).map(([name, value]) =>
@@ -168,6 +205,37 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
       ...options,
       env: { ...workflowEnvOf(RELEASE_TOOL_STEPS, WORKFLOW_EXPRESSIONS, app, subcommand, args), ...options.env },
     })
+  }
+
+  const job = async (name: string): Promise<ReadonlyArray<StepResult>> => {
+    await must(
+      `mkdir -p ${RUNNER_BIN} ${STEP_DIR} && touch ${GH_DISPATCHES} && ` +
+        `cat > ${RUNNER_BIN}/gh <<'GH_STUB_EOF'\n${GH_STUB}GH_STUB_EOF\nchmod 0755 ${RUNNER_BIN}/gh`,
+    )
+    const outputs: Record<string, Record<string, string>> = {}
+    const lookup = (expression: string): string | undefined => {
+      const step = expression.match(/^steps\.([\w-]+)\.outputs\.([\w-]+)$/)
+      if (step?.[1] !== undefined && step[2] !== undefined) return outputs[step[1]]?.[step[2]] ?? ''
+      return WORKFLOW_EXPRESSIONS[expression]
+    }
+    const results: Array<StepResult> = []
+    for (const [index, step] of runStepsOf(RELEASE_WORKFLOW, name).entries()) {
+      const script = `${STEP_DIR}/${name}-${index}.sh`
+      const output = `${STEP_DIR}/${name}-${index}.output`
+      await writeFile(script, resolveExpressions(withBins(step.run), lookup))
+      await must(`: > ${quote(output)}`)
+      const env = Object.fromEntries(
+        Object.entries(step.env).map(([variable, value]) => [variable, resolveExpressions(value, lookup)]),
+      )
+      const result = await run(
+        `PATH=${RUNNER_BIN}:$PATH bash --noprofile --norc -eo pipefail ${quote(script)}`,
+        { cwd: FIXTURE, env: { ...env, GITHUB_OUTPUT: output } },
+      )
+      results.push({ step: step.label, ...result })
+      if (result.code !== 0) return results
+      if (step.id !== undefined) outputs[step.id] = outputsOf((await must(`cat ${quote(output)}`)).stdout)
+    }
+    return results
   }
 
   const curlJson = async (
@@ -265,6 +333,7 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
     must,
     fails,
     tool,
+    job,
     write: writeFile,
     read: async (path: string): Promise<string> => (await must(`cat ${quote(path)}`)).stdout,
     github,

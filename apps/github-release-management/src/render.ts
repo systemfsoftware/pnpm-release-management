@@ -12,6 +12,7 @@ import {
   type ConfigRefusal,
   FsPath,
   type GithubReleaseRefusal,
+  type GitRef,
   type IntegrityRefusal,
   type IntentRefusal,
   type LedgerIdentityRefusal,
@@ -454,7 +455,7 @@ export const renderRelease = (decision: GithubReleaseDecision): Effect.Effect<vo
     }),
   )
 
-export const renderPullRequest = (decision: PullRequestDecision): Effect.Effect<void, never, Reporter> =>
+const pullRequestLines = (decision: PullRequestDecision): Effect.Effect<void, never, Reporter> =>
   Match.value(decision).pipe(
     Match.tagsExhaustive({
       PullRequestCreated: (created) => emit(`created release PR #${created.number}`),
@@ -471,3 +472,28 @@ export const renderPullRequest = (decision: PullRequestDecision): Effect.Effect<
       PullRequestVacant: () => emit('no version changes on the tree — nothing to release'),
     }),
   )
+
+const pullRequestOutputs = (decision: PullRequestDecision, branch: GitRef): ReadonlyArray<string> =>
+  Match.value(decision).pipe(
+    Match.tagsExhaustive({
+      PullRequestCreated: (created) => ['outcome=created', `number=${created.number}`, `branch=${branch}`],
+      PullRequestUpdated: (updated) => ['outcome=updated', `number=${updated.number}`, `branch=${branch}`],
+      PullRequestClosed: (closed) => ['outcome=closed', `number=${closed.number}`, `branch=${closed.branch.branch}`],
+      PullRequestVacant: (vacant) => ['outcome=vacant', `branch=${vacant.branch}`],
+    }),
+  )
+
+export interface PullRequestOptions {
+  readonly branch: GitRef
+  readonly output: string | undefined
+}
+
+export const renderPullRequest = (
+  decision: PullRequestDecision,
+  options: PullRequestOptions,
+): Effect.Effect<void, OutputUnwritable, Reporter | FileSystem.FileSystem> =>
+  Effect.gen(function*() {
+    yield* pullRequestLines(decision)
+    if (options.output === undefined) return
+    yield* appendFile(options.output, pullRequestOutputs(decision, options.branch).join('\n'))
+  })

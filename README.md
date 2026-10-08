@@ -262,10 +262,14 @@ agree on what this cycle owns.
 | `release.yml`         | `ci-workflow` (required), `artifacts-dir`           | `contents: write`, `pull-requests: write`, `actions: write` |
 | `changeset-check.yml` | `tools-ref`, `base-sha`, `node-version`, `devshell` | `contents: read`, `pull-requests: read`                     |
 
-A pull request opened with the workflow token starts no workflows, so after
-opening or updating the release PR, `release.yml` dispatches the caller's CI
-workflow (`ci-workflow`, which must accept `workflow_dispatch`) on the release
-branch. That gives the release PR the checks the branch protection requires.
+The `pull_request` runs of a pull request opened or updated with the workflow
+token wait for a maintainer's approval, so they never run on their own.
+`release pr --output <file>` appends `outcome` (`created`, `updated`, `closed`
+or `vacant`), `number` and `branch` to the file. `release.yml` passes
+`$GITHUB_OUTPUT`, and when the outcome is `created` or `updated` it dispatches
+the caller's CI workflow (`ci-workflow`, which must accept `workflow_dispatch`)
+on that branch. A failed dispatch fails the job. That gives the release PR the
+checks the branch protection requires.
 
 `release.yml` runs the apps from the caller's dev shell (`nix develop`). The
 revision is the one the caller's `flake.lock` pins for its

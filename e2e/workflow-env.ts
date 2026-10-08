@@ -18,32 +18,62 @@ export interface ToolStep {
   readonly env: Readonly<Record<string, string>>
 }
 
+export interface RunStep {
+  readonly id: string | undefined
+  readonly label: string
+  readonly run: string
+  readonly env: Readonly<Record<string, string>>
+}
+
 const flagsOf = (args: string): ReadonlyArray<string> =>
   [...args.matchAll(/(?:^|\s)(--[a-z][a-z-]*)/g)].flatMap((match) => match[1] ?? []).sort()
 
 const sameFlags = (left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean =>
   left.length === right.length && left.every((flag, index) => flag === right[index])
 
-export const releaseToolSteps = (): Promise<ReadonlyArray<ToolStep>> =>
+export const releaseWorkflow = (): Promise<Workflow> =>
   Effect.runPromise(
     Effect.gen(function*() {
       const fs = yield* FileSystem
       const text = yield* fs.readFileString(RELEASE_WORKFLOW)
-      const workflow = yield* S.decodeUnknownEffect(Workflow)(parse(text))
-      return Object.entries(workflow.jobs).flatMap(([job, { steps = [] }]) =>
-        steps.flatMap((step) =>
-          [...(step.run ?? '').matchAll(TOOL_COMMAND)].map((match) => ({
-            job,
-            step: step.name ?? step.id ?? '(unnamed)',
-            app: match[1] ?? '',
-            subcommand: match[2] ?? '',
-            flags: flagsOf(match[3] ?? ''),
-            env: step.env ?? {},
-          }))
-        )
-      )
+      return yield* S.decodeUnknownEffect(Workflow)(parse(text))
     }).pipe(Effect.provide(NodeServices.layer)),
   )
+
+export const toolStepsOf = (workflow: Workflow): ReadonlyArray<ToolStep> =>
+  Object.entries(workflow.jobs).flatMap(([job, { steps = [] }]) =>
+    steps.flatMap((step) =>
+      [...(step.run ?? '').matchAll(TOOL_COMMAND)].map((match) => ({
+        job,
+        step: step.name ?? step.id ?? '(unnamed)',
+        app: match[1] ?? '',
+        subcommand: match[2] ?? '',
+        flags: flagsOf(match[3] ?? ''),
+        env: step.env ?? {},
+      }))
+    )
+  )
+
+export const runStepsOf = (workflow: Workflow, job: string): ReadonlyArray<RunStep> => {
+  const steps = workflow.jobs[job]?.steps
+  if (steps === undefined) throw new Error(`release.yml has no job ${job}`)
+  return steps.flatMap((step) => {
+    if (step.run === undefined) return []
+    return [{ id: step.id, label: step.id ?? step.name ?? step.run, run: step.run, env: step.env ?? {} }]
+  })
+}
+
+export const resolveExpressions = (
+  value: string,
+  lookup: (expression: string) => string | undefined,
+): string =>
+  value.replaceAll(/\$\{\{\s*([^}]+?)\s*\}\}/g, (_, expression: string) => {
+    const resolved = lookup(expression)
+    if (resolved === undefined) {
+      throw new Error(`release.yml uses \${{ ${expression} }}, which the e2e cannot resolve`)
+    }
+    return resolved
+  })
 
 const stepsRunning = (
   steps: ReadonlyArray<ToolStep>,
@@ -64,18 +94,11 @@ export const workflowEnvOf = (
   app: string,
   subcommand: string,
   args: string,
-): Record<string, string> => {
-  const resolve = (value: string): string =>
-    value.replaceAll(/\$\{\{\s*([^}]+?)\s*\}\}/g, (_, expression: string) => {
-      const resolved = expressions[expression]
-      if (resolved === undefined) {
-        throw new Error(`release.yml uses \${{ ${expression} }}, which the e2e cannot resolve`)
-      }
-      return resolved
-    })
-  return Object.fromEntries(
+): Record<string, string> =>
+  Object.fromEntries(
     stepsRunning(steps, app, subcommand, args).flatMap((step) =>
-      Object.entries(step.env).map(([name, value]) => [name, resolve(value)])
+      Object.entries(step.env).map((
+        [name, value],
+      ) => [name, resolveExpressions(value, (expression) => expressions[expression])])
     ),
   )
-}

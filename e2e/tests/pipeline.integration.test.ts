@@ -3,7 +3,16 @@ import { Effect } from 'effect'
 import * as S from 'effect/Schema'
 import { expect } from 'vitest'
 import { headSha, MEMBERS, packTarballs, setupFixture } from '../fixture.js'
-import { FIXTURE, parseJson, REGISTRY, REGISTRY_LOG, REGISTRY_STORAGE, type World } from '../harness.js'
+import {
+  CI_WORKFLOW,
+  FIXTURE,
+  GH_DISPATCHES,
+  parseJson,
+  REGISTRY,
+  REGISTRY_LOG,
+  REGISTRY_STORAGE,
+  type World,
+} from '../harness.js'
 import { Session } from '../session.js'
 import { CapturedEntry, Manifest, Pulls, Release, Releases } from './__fixtures__/pipeline.schema.js'
 
@@ -256,7 +265,7 @@ const runPhases = async (session: Session): Promise<void> => {
     expect(output).toContain('phase=none')
   })
 
-  await session.phase('release PR opens with the release label', async (world) => {
+  await session.phase('version job opens the release PR and dispatches CI on its branch', async (world) => {
     const created = await world.tool(
       'changeset-management',
       'new',
@@ -264,12 +273,11 @@ const runPhases = async (session: Session): Promise<void> => {
     )
     expect(created.code).toBe(0)
 
-    const versioned = await world.tool('version-management', 'bump')
-    expect(versioned.code).toBe(0)
-
-    const opened = await world.tool('github-release-management', 'pr')
-    expect(opened.code).toBe(0)
-    expect(`${opened.stdout}${opened.stderr}`).toContain('created release PR #')
+    const steps = await world.job('version')
+    expect(steps.filter((step) => step.code !== 0)).toEqual([])
+    const opened = steps.find((step) => step.step === 'pr')
+    expect(`${opened?.stdout}${opened?.stderr}`).toContain('created release PR #')
+    expect(await world.read(GH_DISPATCHES)).toBe(`workflow run ${CI_WORKFLOW} --ref changeset-release/main\n`)
 
     const pulls = await fetchOpenPulls(world)
     expect(pulls.body?.length).toBe(1)
@@ -277,13 +285,12 @@ const runPhases = async (session: Session): Promise<void> => {
     expect(pulls.body?.[0]?.labels.map((label) => label.name)).toEqual(['release'])
   })
 
-  await session.phase('release PR closes once a bump leaves the tree unchanged', async (world) => {
-    const versioned = await world.tool('version-management', 'bump')
-    expect(versioned.code).toBe(0)
-
-    const closed = await world.tool('github-release-management', 'pr')
-    expect(closed.code).toBe(0)
-    expect(`${closed.stdout}${closed.stderr}`).toContain('closed release PR #')
+  await session.phase('version job closes the release PR and dispatches nothing', async (world) => {
+    const steps = await world.job('version')
+    expect(steps.filter((step) => step.code !== 0)).toEqual([])
+    const closed = steps.find((step) => step.step === 'pr')
+    expect(`${closed?.stdout}${closed?.stderr}`).toContain('closed release PR #')
+    expect(await world.read(GH_DISPATCHES)).toBe(`workflow run ${CI_WORKFLOW} --ref changeset-release/main\n`)
 
     const pulls = await fetchOpenPulls(world)
     expect(pulls.body?.length).toBe(0)
