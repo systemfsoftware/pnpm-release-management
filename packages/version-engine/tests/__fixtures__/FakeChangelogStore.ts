@@ -36,12 +36,9 @@ export const makeFakeChangelogStore = (
       }),
     writeMemberChangelog: (entry: MemberChangelogEntry) =>
       Effect.sync(() => {
-        const path = RelativePath.make(
-          `${entry.changelogDir}/${entry.name.replaceAll('/', '!')}@${entry.version}.md`,
-        )
         const text = `# ${entry.name}@${entry.version}\n\n${entry.summary}\n`
-        memberChangelogs.set(path, text)
-        const file: ChangelogFile = { path, text }
+        memberChangelogs.set(entry.path, text)
+        const file: ChangelogFile = { path: entry.path, text }
         return file
       }),
   })

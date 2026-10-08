@@ -1,5 +1,5 @@
 import * as S from 'effect/Schema'
-import { PackageName, PackageVersion, RelativePath } from './Workspace.schema.js'
+import { ChangelogStorage, PackageName, PackageVersion, RelativePath } from './Workspace.schema.js'
 
 export const VersionIntentMalformed = S.TaggedStruct('VersionIntentMalformed', {
   path: RelativePath,
@@ -60,7 +60,8 @@ export const ChangelogFile = S.Struct({
 export type ChangelogFile = S.Schema.Type<typeof ChangelogFile>
 
 export const MemberChangelogEntry = S.Struct({
-  changelogDir: RelativePath,
+  storage: ChangelogStorage,
+  path: RelativePath,
   name: PackageName,
   version: PackageVersion,
   summary: S.String,

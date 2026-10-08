@@ -1,5 +1,5 @@
-import type { Bump, Intent, Member, PackageName, ReleaseBump } from '@systemfsoftware/release-language'
-import { Count, PackageVersion, RelativePath } from '@systemfsoftware/release-language'
+import type { Bump, Intent, Member, PackageName, RelativePath, ReleaseBump } from '@systemfsoftware/release-language'
+import { Count, PackageVersion } from '@systemfsoftware/release-language'
 
 const RANK: Record<Bump, number> = { none: 0, patch: 1, minor: 2, major: 3 }
 
@@ -46,17 +46,11 @@ export const summaryForPackage = (intents: ReadonlyArray<Intent>, name: PackageN
   return fallbackSummaryOf(intents)
 }
 
-const changelogPathOf = (
-  changelogDir: string,
-  name: PackageName,
-  version: PackageVersion,
-): RelativePath => RelativePath.make(`${changelogDir}/${name.replaceAll('/', '!')}@${version}.md`)
-
 export const deriveBump = (args: {
   readonly intents: ReadonlyArray<Intent>
   readonly members: ReadonlyArray<Member>
   readonly manifestVersion: string
-  readonly changelogDir: string
+  readonly changelogPathOf: (member: Member, version: PackageVersion) => RelativePath
 }): BumpDerivation => {
   const known = new Set(args.members.map((member) => member.name))
   let consolidated: Bump = 'none'
@@ -87,9 +81,9 @@ export const deriveBump = (args: {
     consolidated,
     consolidatedNext,
     moved,
-    changelogPaths: moved.map((name) => ({
-      name,
-      path: changelogPathOf(args.changelogDir, name, consolidatedNext),
+    changelogPaths: args.members.map((member) => ({
+      name: member.name,
+      path: args.changelogPathOf(member, consolidatedNext),
     })),
     unknownPackage,
     malformedPath,

@@ -38,8 +38,7 @@ export const makeFakeWorkspaceStore = (
         }
         return Effect.succeed({ path, text })
       }),
-    changelogStorage: () =>
-      Effect.die(new Error('FakeWorkspaceStore.changelogStorage is not used by the version cells')),
+    changelogStorage: () => Effect.succeed('registry' as const),
   })
   return { layer, state: { members: liveMembers, files: liveFiles } }
 }

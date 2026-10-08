@@ -14,6 +14,7 @@ import {
   FsPath,
   GitPort,
   RelativePath,
+  releaseNotesOf,
   ReleaseTag,
   RemoteName,
   WorkspaceStore,
@@ -22,7 +23,7 @@ import { Effect } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import { cycleOf, releaseNotesOf } from './cycle.js'
+import { cycleOf } from './cycle.js'
 import {
   type CreatedRelease,
   githubRelease,

@@ -5,11 +5,13 @@ import {
   ChangesetsPort,
   ChangesetStore,
   type IntentRefusal,
+  type Member,
+  memberChangelogPathOf,
   type MemberRefusal,
   type PackageName,
   type PackageVersion,
   type PlannedRelease,
-  RelativePath,
+  type RelativePath,
   SurfaceStore,
   VersionCargoPackageMissing,
   type VersionRefusal,
@@ -35,6 +37,9 @@ const read = (
     const workspace = yield* WorkspaceStore
     const surfaces = yield* SurfaceStore
     const members = yield* workspace.listMembers()
+    const storage = yield* workspace.changelogStorage()
+    const changelogPathOf = (member: Member, version: PackageVersion): RelativePath =>
+      memberChangelogPathOf(storage, request.changelogDir, member, version)
     const known = HashSet.fromIterable(members.map((member) => member.name))
     for (const target of request.surfaces) {
       if (target.surface.kind !== 'cargo') continue
@@ -55,18 +60,18 @@ const read = (
       const port = yield* ChangesetsPort
       const planned = yield* port.plan()
       const moved = planned.releases.map((release) => release.name)
-      const changelogPaths = planned.releases.map((release) => ({
-        name: release.name,
-        path: RelativePath.make(
-          `${request.changelogDir}/${release.name.replaceAll('/', '!')}@${release.newVersion}.md`,
-        ),
-      }))
+      const changelogPaths = yield* Effect.forEach(planned.releases, (release) => {
+        const member = members.find((candidate) => candidate.name === release.name)
+        if (member === undefined) return Effect.fail(VersionUnknownPackage.make({ package: release.name }))
+        return Effect.succeed({ name: release.name, path: changelogPathOf(member, release.newVersion) })
+      })
       return BumpCommand.make({
         strategy: request.strategy,
         intents: [],
         members: [...members],
         manifestVersion,
         changelogDir: request.changelogDir,
+        changelogStorage: storage,
         rootChangelog: request.rootChangelog,
         manifest: request.manifest,
         surfaces: [...request.surfaces],
@@ -88,7 +93,7 @@ const read = (
       intents,
       members,
       manifestVersion,
-      changelogDir: request.changelogDir,
+      changelogPathOf,
     })
     return BumpCommand.make({
       strategy: request.strategy,
@@ -96,6 +101,7 @@ const read = (
       members: [...members],
       manifestVersion,
       changelogDir: request.changelogDir,
+      changelogStorage: storage,
       rootChangelog: request.rootChangelog,
       manifest: request.manifest,
       surfaces: [...request.surfaces],
@@ -128,10 +134,11 @@ const writeMemberChangelogs = (
   Effect.gen(function*() {
     const changelogs = yield* ChangelogStore
     yield* Effect.forEach(
-      moved,
-      (name) =>
+      command.changelogPaths.filter((entry) => moved.includes(entry.name)),
+      ({ name, path }) =>
         changelogs.writeMemberChangelog({
-          changelogDir: command.changelogDir,
+          storage: command.changelogStorage,
+          path,
           name,
           version: versionOf(name),
           summary: summaryOf(name),

@@ -1,5 +1,6 @@
 import {
   Bump,
+  ChangelogStorage,
   Count,
   Intent,
   Member,
@@ -33,6 +34,7 @@ export class BumpCommand extends S.TaggedClass<BumpCommand>()(
     members: S.Array(Member),
     manifestVersion: PackageVersion,
     changelogDir: RelativePath,
+    changelogStorage: ChangelogStorage,
     rootChangelog: S.optional(RelativePath),
     manifest: VersionTarget,
     surfaces: S.Array(VersionTarget),
