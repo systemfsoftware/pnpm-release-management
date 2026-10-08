@@ -127,6 +127,8 @@ export {
   PullRequestNumber,
   PullRequestRefusal,
   PullRequestSummary,
+  PullRequestTreeUnreadable,
+  PullRequestUnversioned,
   ReleaseLabel,
 } from './PullRequest.schema.js'
 export {

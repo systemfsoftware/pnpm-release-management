@@ -13,6 +13,7 @@ import {
   PackageName,
   PullRequestBodyUnreadable,
   PullRequestHeadInvalid,
+  PullRequestTreeUnreadable,
   RelativePath,
   ReleaseTag,
   RepoName,
@@ -203,6 +204,12 @@ const makeGitPort = (
       remote: RemoteName,
     ): Effect.Effect<ReadonlyArray<ReleaseTag>, TagRefusal> =>
       tagValue(['ls-remote', '--tags', remote], remoteTagsPath, S.Array(ReleaseTag), listedTags),
+    uncommittedChanges: (): Effect.Effect<Count, PullRequestRefusal> =>
+      capture(
+        ['status', '--porcelain', '--untracked-files=all'],
+        (failure) => PullRequestTreeUnreadable.make({ reason: failure.trim() }),
+        (stdout) => Result.succeed(Count.make(nonEmptyLines(stdout).length)),
+      ),
     commitAll: (message: PrTitle): Effect.Effect<CommitSha, PullRequestRefusal> =>
       Effect.gen(function*() {
         yield* run(['add', '-A'], () => PullRequestBodyUnreadable.make({ path: commitPath }))

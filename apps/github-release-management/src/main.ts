@@ -10,22 +10,11 @@ import {
   githubReleaseCell,
   planCell,
   pullRequestCell,
-  type PullRequestDecision,
   tagCell,
 } from '@systemfsoftware/github-release-engine'
 import { ProcessLive } from '@systemfsoftware/process-adapter'
-import {
-  GitPort,
-  type GitRef,
-  type PrTitle,
-  type PullRequestRefusal,
-  type ReleaseConfig,
-  ReleaseConfigStore,
-  RemoteName,
-  RepoRoot,
-} from '@systemfsoftware/release-language'
+import { ReleaseConfigStore, RepoRoot } from '@systemfsoftware/release-language'
 import { TarballLive } from '@systemfsoftware/tarball-adapter'
-import { bumpCell } from '@systemfsoftware/version-engine'
 import {
   ChangelogStoreLive,
   ChangesetStoreLive,
@@ -35,13 +24,11 @@ import {
   WorkspaceStoreLive,
 } from '@systemfsoftware/workspace-adapter'
 import { Effect, Layer, Option } from 'effect'
-import * as Match from 'effect/Match'
 import * as S from 'effect/Schema'
 import { Command, Flag } from 'effect/unstable/cli'
 import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 import {
   adoptRequestOf,
-  bumpInput,
   CHANGESET_FALLBACK,
   planRequestOf,
   pullRequestRequestOf,
@@ -49,7 +36,6 @@ import {
   tagRequestOf,
   workspaceOf,
 } from './boundary.js'
-import { VersionStageRefused } from './boundary.schema.js'
 import {
   renderAdoption,
   renderAdoptRefusal,
@@ -61,12 +47,9 @@ import {
   renderReleaseRefusal,
   renderTag,
   renderTagRefusal,
-  renderVersion,
 } from './render.js'
 
 const VERSION = '0.0.0'
-
-const DEFAULT_REMOTE: RemoteName = RemoteName.make('origin')
 
 const workspaceAtEdge = Effect.gen(function*() {
   const cwd = yield* Effect.sync(() => process.cwd())
@@ -108,26 +91,6 @@ const MainLive = Layer.unwrap(
       ).pipe(Layer.provide(NodeServices.layer)),
   ),
 )
-
-const landVersion = (
-  decision: PullRequestDecision,
-  branch: GitRef,
-  title: PrTitle,
-): Effect.Effect<void, PullRequestRefusal, GitPort> => {
-  const land: Effect.Effect<void, PullRequestRefusal, GitPort> = Effect.gen(function*() {
-    const git = yield* GitPort
-    yield* git.commitAll(title)
-    yield* git.pushBranch(branch, DEFAULT_REMOTE)
-  })
-  return Match.value(decision).pipe(
-    Match.tagsExhaustive({
-      PullRequestCreated: () => land,
-      PullRequestUpdated: () => land,
-      PullRequestClosed: () => Effect.void,
-      PullRequestVacant: () => Effect.void,
-    }),
-  )
-}
 
 const adopt = Command.make('adopt', {
   registry: Flag.string('registry'),
@@ -234,14 +197,7 @@ const pr = Command.make('pr', {
       branch: Option.getOrUndefined(flags.branch),
     })
     const decision = yield* Cell.run(pullRequestCell, request)
-    const config: ReleaseConfig = workspace.config
-    yield* Cell.run(bumpCell, bumpInput(config.changelogDir, config.versioning)).pipe(
-      Effect.provide(ChangesetsPortLive({ root: workspace.root, base: config.base })),
-      Effect.mapError((refusal): VersionStageRefused => VersionStageRefused.make({ refusal })),
-      Effect.flatMap((versioned) => renderVersion(versioned)),
-    )
     yield* renderPullRequest(decision)
-    yield* landVersion(decision, request.branch, request.title)
   }).pipe(Effect.catch(renderPullRequestRefusal)))
 
 const release = Command.make('release').pipe(

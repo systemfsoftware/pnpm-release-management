@@ -264,6 +264,9 @@ const runPhases = async (session: Session): Promise<void> => {
     )
     expect(created.code).toBe(0)
 
+    const versioned = await world.tool('version-management', 'bump')
+    expect(versioned.code).toBe(0)
+
     const opened = await world.tool('github-release-management', 'pr')
     expect(opened.code).toBe(0)
     expect(`${opened.stdout}${opened.stderr}`).toContain('created release PR #')
@@ -274,7 +277,10 @@ const runPhases = async (session: Session): Promise<void> => {
     expect(pulls.body?.[0]?.labels.map((label) => label.name)).toEqual(['release'])
   })
 
-  await session.phase('release PR closes when no intents remain', async (world) => {
+  await session.phase('release PR closes once a bump leaves the tree unchanged', async (world) => {
+    const versioned = await world.tool('version-management', 'bump')
+    expect(versioned.code).toBe(0)
+
     const closed = await world.tool('github-release-management', 'pr')
     expect(closed.code).toBe(0)
     expect(`${closed.stdout}${closed.stderr}`).toContain('closed release PR #')

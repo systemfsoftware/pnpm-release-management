@@ -9,6 +9,7 @@ const onMain = (changed: ReadonlyArray<RelativePath>) => ({
   headSha: () => unimplemented('headSha'),
   changedPaths: () => Effect.succeed(changed),
   remoteTags: () => unimplemented('remoteTags'),
+  uncommittedChanges: () => unimplemented('uncommittedChanges'),
   commitAll: () => unimplemented('commitAll'),
   pushBranch: () => unimplemented('pushBranch'),
   deleteRemoteBranch: () => unimplemented('deleteRemoteBranch'),

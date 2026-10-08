@@ -12,9 +12,7 @@ import {
   type ReleaseConfig,
   ReleaseConfigStore,
   type RepoRoot,
-  type VersionSurface,
 } from '@systemfsoftware/release-language'
-import type { BumpInput } from '@systemfsoftware/version-engine'
 import { Effect, type FileSystem, Option, Path } from 'effect'
 import * as S from 'effect/Schema'
 import { InvalidFlags } from './boundary.schema.js'
@@ -156,38 +154,3 @@ export const pullRequestRequestOf = (workspace: Workspace, flags: PullRequestFla
       }),
     )
   })
-
-const surfaceEntryOf = (
-  surface: VersionSurface,
-): ReadonlyArray<BumpInput['surfaces'][number]> => {
-  if (surface.kind !== 'toml') return [{ file: surface.path, surface }]
-  if (surface.path === undefined) return []
-  return [{ file: surface.path, surface }]
-}
-
-export const bumpInput = (
-  changelogDir: RelativePath,
-  versioning: ReleaseConfig['versioning'],
-): BumpInput => {
-  if (versioning.strategy === 'changesets') {
-    return {
-      strategy: 'changesets',
-      changelogDir,
-      manifest: {
-        file: RelativePath.make('package.json'),
-        surface: { kind: 'json', path: RelativePath.make('package.json') },
-      },
-      surfaces: versioning.surfaces.flatMap(surfaceEntryOf),
-    }
-  }
-  return {
-    strategy: 'surfaces',
-    changelogDir,
-    rootChangelog: versioning.changelog,
-    manifest: {
-      file: versioning.manifest,
-      surface: { kind: 'json', path: versioning.manifest },
-    },
-    surfaces: versioning.surfaces.flatMap(surfaceEntryOf),
-  }
-}

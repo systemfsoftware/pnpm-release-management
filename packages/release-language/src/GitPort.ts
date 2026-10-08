@@ -16,6 +16,7 @@ export interface GitPort {
   readonly remoteTags: (
     remote: RemoteName,
   ) => Effect.Effect<ReadonlyArray<ReleaseTag>, TagRefusal, never>
+  readonly uncommittedChanges: () => Effect.Effect<Count, PullRequestRefusal, never>
   readonly commitAll: (
     message: PrTitle,
   ) => Effect.Effect<CommitSha, PullRequestRefusal, never>

@@ -206,7 +206,10 @@ node apps/changeset-management/dist/main.js new @scope/alpha --bump minor \
 
 `none` consumes an intent without moving a version — use it for work that must
 be recorded but does not ship. `version bump` deletes every intent it consumes,
-so the release PR diff _is_ the set of notes that shipped.
+so the release PR diff _is_ the set of notes that shipped. `release pr` runs
+after `version bump` and commits the tree bump left: uncommitted changes open or
+refresh the release PR, an unchanged tree closes it, and an intent still on disk
+means bump has not run, so `pr` refuses instead of reporting nothing to release.
 
 ## Capabilities
 
@@ -217,7 +220,7 @@ so the release PR diff _is_ the set of notes that shipped.
 | `version bump`      | Consumes intents, bumps every surface, writes per-package changelogs                                          |
 | `version sync`      | `check` or `bump <version>` across every declared surface                                                     |
 | `version sync-root` | Stamps the launcher manifest with the released version                                                        |
-| `release pr`        | Commits the release branch, opens, refreshes, or closes the release PR                                        |
+| `release pr`        | Commits the bumped tree to the release branch, opens, refreshes, or closes the release PR                     |
 | `release adopt`     | Records every pre-adoption release tag's bytes in the adoption ledger                                         |
 | `release plan`      | Derives the release phase from repository state                                                               |
 | `release tag`       | Captures the cycle, then pushes one tag per released package                                                  |

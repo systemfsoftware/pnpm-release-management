@@ -72,11 +72,13 @@ const read = (
     const git = yield* GitPort
     const forge = yield* ForgePort
     const intents = yield* changesets.listIntents()
+    const changes = yield* git.uncommittedChanges()
     const slug = yield* git.repoSlug()
     const existing = yield* forge.openPullRequest(slug, request.branch)
     const body = yield* readBody(workspace, request.body, request.bodyFile)
     return PullRequestCommand.make({
       pending: Count.make(intents.length),
+      changes,
       existing,
       branch: request.branch,
       base: request.base,
@@ -93,7 +95,7 @@ const openRequest = (
   raw: PullRequestCommand,
   vacant: PullRequestVacant,
 ): Effect.Effect<PullRequestDecision, PullRequestRefusal, GitPort | ForgePort> => {
-  if (raw.pending <= 0) {
+  if (raw.changes <= 0) {
     return Effect.succeed(vacant)
   }
   return Effect.gen(function*() {

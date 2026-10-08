@@ -25,6 +25,7 @@ export const makeFakeGitPort = (state: FakeGitState): Layer.Layer<GitPort> =>
     headSha: () => unimplemented('headSha'),
     changedPaths: () => unimplemented('changedPaths'),
     remoteTags: () => unimplemented('remoteTags'),
+    uncommittedChanges: () => unimplemented('uncommittedChanges'),
     commitAll: () => unimplemented('commitAll'),
     pushBranch: () => unimplemented('pushBranch'),
     deleteRemoteBranch: () => unimplemented('deleteRemoteBranch'),

@@ -199,9 +199,6 @@ importers:
       '@systemfsoftware/tarball-adapter':
         specifier: workspace:*
         version: link:../../packages/tarball-adapter
-      '@systemfsoftware/version-engine':
-        specifier: workspace:*
-        version: link:../../packages/version-engine
       '@systemfsoftware/workspace-adapter':
         specifier: workspace:*
         version: link:../../packages/workspace-adapter
@@ -614,6 +611,9 @@ importers:
       '@systemfsoftware/effect-gherkin-spec':
         specifier: ^4.0.1
         version: 4.0.1(@effect/vitest@4.0.0-rc.112(effect@4.0.0-rc.112)(vitest@4.1.11(@types/node@24.13.4)(vite@8.2.2(@types/node@24.13.4)(jiti@2.6.1)(yaml@2.9.0))))(effect@4.0.0-rc.112)(vitest@4.1.11(@types/node@24.13.4)(vite@8.2.2(@types/node@24.13.4)(jiti@2.6.1)(yaml@2.9.0)))
+      '@systemfsoftware/git-adapter':
+        specifier: workspace:*
+        version: link:../git-adapter
       '@systemfsoftware/tsconfig':
         specifier: ^1.3.3
         version: 1.3.3
