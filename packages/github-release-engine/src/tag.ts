@@ -1,9 +1,11 @@
 import { Cell, Wire } from '@systemfsoftware/effect-cell-types'
 import type {
+  CommitSha,
   CycleEntry,
   MemberRefusal,
   PackageName,
   PlanDeferredUnknown,
+  ReleaseTag,
   TagRefusal,
   TarballRefusal,
 } from '@systemfsoftware/release-language'
@@ -17,6 +19,7 @@ import {
   RelativePath,
   ReleaseLedger,
   RemoteName,
+  TagAtOtherCommit,
   type TarballDigest,
   TarballMissing,
   TarballPort,
@@ -209,25 +212,50 @@ const captureCycle = (
   })
 }
 
-const pushTags = (raw: TagCommand, pushed: TagPushed): Effect.Effect<TagPushed, TagRefusal, GitPort> =>
+const requireTaggedAt = (
+  remote: RemoteName,
+  head: CommitSha,
+) =>
+(tag: ReleaseTag): Effect.Effect<void, TagRefusal | TagAtOtherCommit, GitPort> =>
+  Effect.gen(function*() {
+    const found = yield* (yield* GitPort).tagCommit(remote, tag)
+    if (Option.isSome(found) && found.value === head) {
+      return
+    }
+    return yield* Effect.fail(TagAtOtherCommit.make({
+      tag,
+      expected: head,
+      found: Option.getOrElse(found, () => 'no commit'),
+    }))
+  })
+
+const pushTags = (
+  raw: TagCommand,
+  pushed: TagPushed,
+): Effect.Effect<TagPushed, TagRefusal | TagAtOtherCommit, GitPort> =>
   Effect.gen(function*() {
     const git = yield* GitPort
     const remote = yield* git.remoteTags(raw.remote)
+    const head = yield* git.headSha()
     yield* Effect.forEach(
-      raw.annotations.filter((annotation) =>
-        pushed.tags.includes(annotation.tag) && remote.includes(annotation.tag) === false
-      ),
-      (annotation) => git.writeTag(annotation.tag, annotation.message),
+      pushed.tags.filter((tag) => remote.includes(tag)),
+      requireTaggedAt(raw.remote, head),
       { discard: true },
     )
-    yield* git.pushTags([...pushed.tags], raw.remote)
+    const unpushed = raw.annotations.filter((annotation) =>
+      pushed.tags.includes(annotation.tag) && remote.includes(annotation.tag) === false
+    )
+    yield* Effect.forEach(unpushed, (annotation) => git.writeTag(annotation.tag, annotation.message), {
+      discard: true,
+    })
+    yield* git.pushTags(unpushed.map((annotation) => annotation.tag), raw.remote)
     return pushed
   })
 
 const write = (
   outcome: Result.Result<TagDecision, TagRefusal>,
   raw: TagCommand,
-): Effect.Effect<TagDecision, TagRefusal | PlanDeferredUnknown, GitPort | CycleStore> => {
+): Effect.Effect<TagDecision, TagRefusal | TagAtOtherCommit | PlanDeferredUnknown, GitPort | CycleStore> => {
   if (Result.isFailure(outcome)) {
     return Effect.fail(outcome.failure)
   }
@@ -246,7 +274,7 @@ const write = (
 export const tagCell: Cell.Cell<
   S.Schema.Type<typeof TagRequest>,
   TagDecision,
-  MemberRefusal | TagRefusal | PlanDeferredUnknown | TarballRefusal | VersionBurned | LedgerRefusal,
+  MemberRefusal | TagRefusal | TagAtOtherCommit | PlanDeferredUnknown | TarballRefusal | VersionBurned | LedgerRefusal,
   WorkspaceStore | GitPort | CycleStore | TarballPort | LedgerPort
 > = Cell.layer({
   read,
