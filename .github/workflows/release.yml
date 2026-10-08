@@ -71,18 +71,24 @@ jobs:
       - name: Bump every package and version surface, consuming the intents
         run: nix develop --command version-management bump
 
-      - name: Open or update the release PR
+      - id: pr
+        name: Open or update the release PR
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: nix develop --command github-release-management pr
+        run: nix develop --command github-release-management pr --output "$GITHUB_OUTPUT"
 
       - name: Run the caller's CI on the release PR
         env:
           GH_TOKEN: ${{ github.token }}
           CI_WORKFLOW: ${{ inputs.ci-workflow }}
+          PR_OUTCOME: ${{ steps.pr.outputs.outcome }}
+          PR_BRANCH: ${{ steps.pr.outputs.branch }}
         run: |
-          branch="$(gh pr list --label release --state open --json headRefName --jq '.[0].headRefName // empty')"
-          if [ -n "$branch" ]; then gh workflow run "$CI_WORKFLOW" --ref "$branch"; fi
+          case "$PR_OUTCOME" in
+            created | updated) gh workflow run "$CI_WORKFLOW" --ref "${PR_BRANCH:?pr reported no branch}" ;;
+            closed | vacant) echo "no open release PR ($PR_OUTCOME); nothing to dispatch" ;;
+            *) echo "::error::pr reported no outcome; cannot tell whether a release PR needs CI"; exit 1 ;;
+          esac
 
   release:
     name: release · tag · GitHub releases

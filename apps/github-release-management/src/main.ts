@@ -186,6 +186,7 @@ const pr = Command.make('pr', {
   base: Flag.string('base').pipe(Flag.optional),
   branch: Flag.string('branch').pipe(Flag.optional),
   config: Flag.string('config').pipe(Flag.optional),
+  output: Flag.string('output').pipe(Flag.optional),
 }, (flags) =>
   Effect.gen(function*() {
     const workspace = yield* workspaceOf(flags.config)
@@ -197,7 +198,7 @@ const pr = Command.make('pr', {
       branch: Option.getOrUndefined(flags.branch),
     })
     const decision = yield* Cell.run(pullRequestCell, request)
-    yield* renderPullRequest(decision)
+    yield* renderPullRequest(decision, { branch: request.branch, output: Option.getOrUndefined(flags.output) })
   }).pipe(Effect.catch(renderPullRequestRefusal)))
 
 const release = Command.make('release').pipe(

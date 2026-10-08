@@ -10,3 +10,4 @@ export const WorkflowStep = S.Struct({
 export const Workflow = S.Struct({
   jobs: S.Record(S.String, S.Struct({ steps: S.optional(S.Array(WorkflowStep)) })),
 })
+export type Workflow = S.Schema.Type<typeof Workflow>
