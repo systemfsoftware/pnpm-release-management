@@ -283,7 +283,8 @@ const makeGitPort = (
       }),
     writeTag: (tag: ReleaseTag, message: string): Effect.Effect<ReleaseTag, TagRefusal> =>
       Effect.gen(function*() {
-        yield* run(['tag', '-a', tag, '-m', message], () => TagCapturedMalformed.make({ path: writeTagPath }))
+        yield* run([...RELEASE_BOT_IDENTITY, 'tag', '-a', tag, '-m', message], () =>
+          TagCapturedMalformed.make({ path: writeTagPath }))
         return tag
       }),
     tagAnnotation: (
