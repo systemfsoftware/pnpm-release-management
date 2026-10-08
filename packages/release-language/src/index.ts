@@ -160,6 +160,7 @@ export { SurfaceStore } from './SurfaceStore.js'
 export { SurfaceWrite } from './Sync.schema.js'
 export {
   CommitSha,
+  LegacyRelease,
   LegacyTagUnverified,
   RemoteName,
   RepoSlug,

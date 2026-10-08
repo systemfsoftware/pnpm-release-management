@@ -328,6 +328,14 @@ export const renderPlan = (
       (name) => note(`${name} is listed as deferred but is not a package in this workspace; ignoring it.`),
       { discard: true },
     )
+    yield* Effect.forEach(
+      report.legacy,
+      (release) =>
+        note(
+          `plan-release: legacy release ${release.tag} (${release.package}@${release.version}), identity not recorded`,
+        ),
+      { discard: true },
+    )
     yield* note(
       `plan-release: pending_intents=${report.pendingIntents} this_cycle=${report.thisCycle} ` +
         `deferred=${report.deferred} -> phase=${report.phase}`,

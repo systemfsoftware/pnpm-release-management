@@ -211,6 +211,7 @@ const read = (
       deferred: [...deferred],
       unknownDeferred: [],
       members: members.map((member) => member.name),
+      legacy: [...legacy],
     })
   })
 
@@ -245,6 +246,7 @@ const write = (
       thisCycle: projected.thisCycle,
       deferred: Count.make(raw.deferred.length),
       unpublished: raw.deferred.filter((name) => raw.members.includes(name) === false),
+      legacy: raw.legacy,
     }),
   )
 }

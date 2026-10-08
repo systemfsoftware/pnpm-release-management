@@ -526,7 +526,10 @@ remote holds the legacy tag for it — but only after reading the tagged commit:
 exactly one `package.json` there must name the member, must not be `private`,
 and must declare the same version. Anything else is a red
 `legacy-tag-unverified` refusal naming the tag, the package and what the commit
-declares; the tooling never invents an identity it cannot read back.
+declares; the tooling never invents an identity it cannot read back. A
+recognised version is a declared skip, not a silent one: `release plan` prints
+`plan-release: legacy release v0.3.6 (<name>@0.3.6), identity not recorded`
+for each.
 
 A version above `through` is never matched against the old template, so every
 release after adoption is tagged `<name>@v<version>` as usual. A legacy-released

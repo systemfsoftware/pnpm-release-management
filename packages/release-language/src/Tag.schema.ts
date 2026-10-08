@@ -52,6 +52,13 @@ export const LegacyTagUnverified = S.TaggedStruct('LegacyTagUnverified', {
 })
 export type LegacyTagUnverified = S.Schema.Type<typeof LegacyTagUnverified>
 
+export const LegacyRelease = S.Struct({
+  tag: ReleaseTag,
+  package: PackageName,
+  version: PackageVersion,
+})
+export type LegacyRelease = S.Schema.Type<typeof LegacyRelease>
+
 export const TaggedManifest = S.Struct({
   path: RelativePath,
   manifest: PackageManifest,

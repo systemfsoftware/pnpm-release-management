@@ -5,7 +5,7 @@ import { Cell } from '@systemfsoftware/effect-cell-types'
 import { Gherkin, Given, it, layer, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
 import { GitLive } from '@systemfsoftware/git-adapter'
 import { planCell, type PlanDecision, tagCell } from '@systemfsoftware/github-release-engine'
-import { renderPlanRefusal } from '@systemfsoftware/github-release-management/render'
+import { renderPlan, renderPlanRefusal } from '@systemfsoftware/github-release-management/render'
 import {
   ChangesetsPort,
   ChangesetStore,
@@ -50,6 +50,7 @@ interface Commit {
 interface Repo {
   readonly scratch: string
   readonly root: string
+  readonly remote: string
   readonly tarballs: string
   readonly member: Member
 }
@@ -81,6 +82,8 @@ const releasedRepo = (commits: ReadonlyArray<Commit>) =>
     yield* git(root, 'init', '-q', '-b', 'main')
     yield* git(root, 'config', 'commit.gpgsign', 'false')
     yield* git(root, 'config', 'tag.gpgsign', 'false')
+    yield* git(root, 'config', 'user.name', 'seed')
+    yield* git(root, 'config', 'user.email', 'seed@example.invalid')
     yield* git(root, 'remote', 'add', 'origin', remote)
     for (const commit of commits) {
       yield* fs.writeFileString(
@@ -104,9 +107,19 @@ const releasedRepo = (commits: ReadonlyArray<Commit>) =>
       }
     }
     yield* git(root, 'push', '-q', 'origin', 'main', '--tags')
+    yield* git(
+      root,
+      'archive',
+      '--format=tar.gz',
+      '--prefix=package/',
+      '-o',
+      path.join(tarballs, 'alpha.tgz'),
+      'HEAD:packages/alpha',
+    )
     const repo: Repo = {
       scratch,
       root,
+      remote,
       tarballs,
       member: {
         name: NAME,
@@ -177,6 +190,38 @@ const plan = (repo: Repo, legacyTags: LegacyTags | undefined) =>
     ),
   )
 
+const tag = (repo: Repo) =>
+  insideRepo(
+    repo.root,
+    Effect.result(
+      Cell.run(Cell.provide(tagCell, adaptersOf(repo.root, repo.member)), {
+        tarballs: FsPath.make(repo.tarballs),
+        dryRun: false,
+        json: false,
+        changelogDir,
+        legacyTags: legacy,
+      }),
+    ),
+  )
+
+const reported = <E, R>(effect: Effect.Effect<void, E, R | Reporter>) =>
+  Effect.gen(function*() {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const errors = yield* Ref.make<ReadonlyArray<string>>([])
+    const exitCodes = yield* Ref.make<ReadonlyArray<number>>([])
+    yield* effect.pipe(Effect.provide(Layer.succeed(Reporter, {
+      emit: (text: string) => Ref.update(lines, (all) => [...all, text]),
+      note: (text: string) => Ref.update(lines, (all) => [...all, text]),
+      annotateError: (text: string) => Ref.update(errors, (all) => [...all, text]),
+      exitCode: (code: number) => Ref.update(exitCodes, (codes) => [...codes, code]),
+    })))
+    return {
+      lines: (yield* Ref.get(lines)).join('\n'),
+      annotated: (yield* Ref.get(errors)).join('\n'),
+      exitCodes: yield* Ref.get(exitCodes),
+    }
+  })
+
 const succeeded = <A, E>(result: Result.Result<A, E>): A => {
   if (Result.isFailure(result)) throw new Error(`expected success, got ${JSON.stringify(result.failure)}`)
   return result.success
@@ -208,32 +253,34 @@ Feature('Recognising releases cut under a legacy tag scheme').body(({ scenario }
         'repo',
         () => releasedRepo([{ version: '0.9.0', tags: ['v0.9.0'] }, { version: '1.0.0', tags: ['v1.0.0'] }]),
       ),
-      When('planning and then dry-run tagging the release')('run', (s) =>
+      When('planning, printing the plan and then tagging for real')('run', (s) =>
         Effect.gen(function*() {
+          const before = yield* git(s.repo.root, 'ls-remote', '--tags', 'origin')
           const planned = yield* plan(s.repo, legacy)
-          const tagged = yield* insideRepo(
-            s.repo.root,
-            Effect.result(
-              Cell.run(Cell.provide(tagCell, adaptersOf(s.repo.root, s.repo.member)), {
-                tarballs: FsPath.make(s.repo.tarballs),
-                dryRun: true,
-                json: false,
-                changelogDir,
-                legacyTags: legacy,
-              }),
-            ),
+          const printed = yield* reported(
+            Result.match(planned, {
+              onFailure: () => Effect.void,
+              onSuccess: (report) => renderPlan(report, undefined).pipe(Effect.orDie),
+            }),
           )
-          const remoteTags = yield* git(s.repo.root, 'ls-remote', '--tags', 'origin')
-          return { planned, tagged, remoteTags }
+          const tagged = yield* tag(s.repo)
+          const after = yield* git(s.repo.root, 'ls-remote', '--tags', 'origin')
+          const localTags = yield* git(s.repo.root, 'tag', '-l')
+          return { planned, printed, tagged, before, after, localTags }
         })),
-      Then('the plan settles, the dry run would tag nothing, and the origin gains no alpha@v1.0.0 tag')((s) =>
+      Then('the plan settles naming the legacy release, and tagging writes and pushes nothing')((s) =>
         Effect.ensuring(
           Effect.sync(() => {
             const planned = succeeded(s.run.planned)
             expect(planned.phase).toEqual('none')
             expect(planned.thisCycle).toEqual(Count.make(0))
-            expect(succeeded(s.run.tagged)).toMatchObject({ _tag: 'TagPreview', tags: [] })
-            expect(s.run.remoteTags).not.toContain(OWN_TAG('1.0.0'))
+            expect(planned.legacy).toEqual([{ tag: 'v1.0.0', package: NAME, version: '1.0.0' }])
+            expect(s.run.printed.lines).toContain(
+              `plan-release: legacy release v1.0.0 (${NAME}@1.0.0), identity not recorded`,
+            )
+            expect(succeeded(s.run.tagged)).toMatchObject({ _tag: 'TagUpToDate' })
+            expect(s.run.after).toEqual(s.run.before)
+            expect(s.run.localTags.split('\n')).toEqual(['v0.9.0', 'v1.0.0'])
           }),
           cleanUp(s.repo.scratch),
         )
@@ -271,14 +318,28 @@ Feature('Recognising releases cut under a legacy tag scheme').body(({ scenario }
         'repo',
         () => releasedRepo([{ version: '1.0.0', tags: ['v1.0.0'] }, { version: '1.1.0', tags: ['v1.1.0'] }]),
       ),
-      When('planning the release')('planned', (s) => plan(s.repo, legacy)),
-      Then('the cycle owes alpha@v1.1.0')((s) =>
-        Effect.ensuring(
-          Effect.sync(() => {
-            expect(cycleTags(succeeded(s.planned).decision)).toEqual([OWN_TAG('1.1.0')])
-          }),
-          cleanUp(s.repo.scratch),
-        )
+      When('planning and then tagging for real')('run', (s) =>
+        Effect.gen(function*() {
+          const planned = yield* plan(s.repo, legacy)
+          const tagged = yield* tag(s.repo)
+          const ref = `refs/tags/${OWN_TAG('1.1.0')}`
+          const kind = yield* git(s.repo.remote, 'cat-file', '-t', ref)
+          const annotation = yield* git(s.repo.remote, 'cat-file', '-p', ref)
+          const legacyKind = yield* git(s.repo.remote, 'cat-file', '-t', 'refs/tags/v1.1.0')
+          return { planned, tagged, kind, annotation, legacyKind }
+        })),
+      Then('the origin gains an annotated alpha@v1.1.0 carrying the tarball integrity, and v1.1.0 is untouched')(
+        (s) =>
+          Effect.ensuring(
+            Effect.sync(() => {
+              expect(cycleTags(succeeded(s.run.planned).decision)).toEqual([OWN_TAG('1.1.0')])
+              expect(succeeded(s.run.tagged)).toMatchObject({ _tag: 'TagPushed', tags: [OWN_TAG('1.1.0')] })
+              expect(s.run.kind).toEqual('tag')
+              expect(s.run.annotation).toContain('"integrity":"sha512-')
+              expect(s.run.legacyKind).toEqual('commit')
+            }),
+            cleanUp(s.repo.scratch),
+          ),
       ),
     ),
   )
@@ -294,23 +355,13 @@ Feature('Recognising releases cut under a legacy tag scheme').body(({ scenario }
       When('planning the release and rendering the refusal')('run', (s) =>
         Effect.gen(function*() {
           const planned = yield* plan(s.repo, legacy)
-          const annotations = yield* Ref.make<ReadonlyArray<string>>([])
-          const exitCodes = yield* Ref.make<ReadonlyArray<number>>([])
-          if (Result.isFailure(planned)) {
-            yield* renderPlanRefusal(planned.failure).pipe(
-              Effect.provide(Layer.succeed(Reporter, {
-                emit: () => Effect.void,
-                note: () => Effect.void,
-                annotateError: (text: string) => Ref.update(annotations, (lines) => [...lines, text]),
-                exitCode: (code: number) => Ref.update(exitCodes, (codes) => [...codes, code]),
-              })),
-            )
-          }
-          return {
-            planned,
-            annotated: (yield* Ref.get(annotations)).join('\n'),
-            exitCodes: yield* Ref.get(exitCodes),
-          }
+          const rendered = yield* reported(
+            Result.match(planned, {
+              onFailure: renderPlanRefusal,
+              onSuccess: () => Effect.void,
+            }),
+          )
+          return { planned, annotated: rendered.annotated, exitCodes: rendered.exitCodes }
         })),
       Then('the plan refuses with the tag, the package and the version the tagged commit declares')((s) =>
         Effect.ensuring(

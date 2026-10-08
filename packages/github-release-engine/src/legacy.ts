@@ -7,7 +7,7 @@ import type {
   RemoteName,
   TagRefusal,
 } from '@systemfsoftware/release-language'
-import { LegacyTagUnverified, ReleaseTag } from '@systemfsoftware/release-language'
+import { LegacyRelease, LegacyTagUnverified, ReleaseTag } from '@systemfsoftware/release-language'
 import { Effect, Option } from 'effect'
 import { tagOf } from './cycle.js'
 
@@ -97,11 +97,11 @@ export const legacyReleased = (input: {
   readonly members: ReadonlyArray<Member>
   readonly remoteTags: ReadonlyArray<ReleaseTag>
   readonly legacy: LegacyTags | undefined
-}): Effect.Effect<ReadonlyArray<PackageName>, LegacyTagUnverified | TagRefusal> =>
+}): Effect.Effect<ReadonlyArray<LegacyRelease>, LegacyTagUnverified | TagRefusal> =>
   Effect.gen(function*() {
     const legacy = input.legacy
     if (legacy === undefined) return []
-    const released: Array<PackageName> = []
+    const released: Array<LegacyRelease> = []
     for (const member of input.members) {
       const version = member.manifest.version
       if (!member.publishable) continue
@@ -110,7 +110,7 @@ export const legacyReleased = (input: {
       const tag = legacyTagOf(legacy, member.name, version)
       if (!input.remoteTags.includes(tag)) continue
       yield* verify(input.git, input.remote, tag, member)
-      released.push(member.name)
+      released.push(LegacyRelease.make({ tag, package: member.name, version }))
     }
     return released
   })
