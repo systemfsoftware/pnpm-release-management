@@ -2,9 +2,12 @@
   "compilerOptions": {
     "customConditions": ["@systemfsoftware/source"],
     "noEmit": true,
+    "paths": {
+      "@systemfsoftware/github-release-management/render": ["./src/render.ts"]
+    },
     "plugins": [{ "name": "@effect/language-service" }],
     "types": ["node"]
   },
   "extends": "@systemfsoftware/tsconfig/tsc/no-dom/library-monorepo",
-  "include": ["src"]
+  "include": ["src", "tests"]
 }

@@ -26,7 +26,13 @@ export const TagExcludedMalformed = S.TaggedStruct('TagExcludedMalformed', {
 })
 export type TagExcludedMalformed = S.Schema.Type<typeof TagExcludedMalformed>
 
-export const TagRefusal = S.Union([TagCapturedMalformed, TagExcludedMalformed])
+export const TagGitFailed = S.TaggedStruct('TagGitFailed', {
+  command: S.String,
+  stderr: S.String,
+})
+export type TagGitFailed = S.Schema.Type<typeof TagGitFailed>
+
+export const TagRefusal = S.Union([TagCapturedMalformed, TagExcludedMalformed, TagGitFailed])
 export type TagRefusal = S.Schema.Type<typeof TagRefusal>
 
 export const TaggedManifest = S.Struct({

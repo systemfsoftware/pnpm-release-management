@@ -629,6 +629,7 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
                   expect(git.calls.pushed.length).toEqual(0)
                 }),
                 Match.tag('TagExcludedMalformed', () => failUnexpected('expected TagCapturedMalformed')),
+                Match.tag('TagGitFailed', () => failUnexpected('expected TagCapturedMalformed')),
                 Match.exhaustive,
               )
             }),
