@@ -102,7 +102,7 @@ const WORKFLOW_EXPRESSIONS: Readonly<Record<string, string>> = {
   'github.token': GITHUB_TOKEN,
 }
 
-const RELEASE_TOOL_STEPS = releaseToolSteps()
+const RELEASE_TOOL_STEPS = await releaseToolSteps()
 
 const shellScript = (command: string, options: ExecOptions): string => {
   const lines = Object.entries({ ...RUNNER_ENV, ...options.env }).map(([name, value]) =>
