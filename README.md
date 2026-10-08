@@ -32,10 +32,13 @@ compiled with `deno compile` into one binary each. The flake exports them, and
 takes this flake as an input, pinned by its `flake.lock`, and puts
 `release-tools` in its dev shell to run the apps locally. `release.yml` does not
 use that pin: it builds the `release-tools` of its own commit and runs them in
-the caller's dev shell (see [CI](#ci)):
+the caller's dev shell (see [CI](#ci)). Each job sets `WORKFLOW_REPOSITORY` and
+`WORKFLOW_SHA` from the `job.workflow_repository` and `job.workflow_sha`
+contexts and fails when either is empty:
 
 ```bash
-tools=$(nix build --no-link --print-out-paths "github:$WORKFLOW_REPOSITORY/$WORKFLOW_SHA#release-tools")
+tools=$(nix build --no-link --print-out-paths \
+  "github:${WORKFLOW_REPOSITORY:?job.workflow_repository is empty}/${WORKFLOW_SHA:?job.workflow_sha is empty}#release-tools")
 nix develop --command "$tools/bin/github-release-management" plan \
   --tarballs "$(nix build --no-link --print-out-paths .#workspace-tarballs)" \
   --output "$GITHUB_OUTPUT"

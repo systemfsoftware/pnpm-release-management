@@ -11,6 +11,7 @@ import {
   REGISTRY,
   REGISTRY_LOG,
   REGISTRY_STORAGE,
+  WORKSPACE_TARBALLS,
   type World,
 } from '../harness.js'
 import { Session } from '../session.js'
@@ -399,7 +400,7 @@ const runPhases = async (session: Session): Promise<void> => {
     expect(alphaLog).toContain('alpha patch')
     await world.read(`${FIXTURE}/.changeset/changelogs/@e2e!beta@${betaNext}.md`)
 
-    const releasing120 = await packTarballs(world, '/tmp/prm-tarballs-120')
+    const releasing120 = await packTarballs(world, WORKSPACE_TARBALLS)
     const packedBeta = await world.must(`tar -xzOf ${releasing120}/e2e-beta-${betaNext}.tgz package/package.json`)
     expect(packedBeta.stdout).toContain(`"@e2e/alpha": "^${alphaNext}"`)
 
@@ -411,24 +412,18 @@ const runPhases = async (session: Session): Promise<void> => {
     )
     release120 = (await world.must('git rev-parse HEAD', { cwd: FIXTURE })).stdout.trim()
 
-    const releasing = await world.tool('github-release-management', 'plan', `--tarballs ${releasing120}`)
-    expect(`${releasing.stdout}${releasing.stderr}`).toContain('phase=release')
-    const captured = await world.tool(
-      'github-release-management',
-      'tag',
-      `--tarballs ${releasing120} --output /tmp/changesets-captured.json`,
-    )
-    expect(captured.code).toBe(0)
-    expect(
-      await world.tool(
-        'github-release-management',
-        'tag',
-        `--captured /tmp/changesets-captured.json --tarballs ${releasing120}`,
-      ),
-    ).toMatchObject({ code: 0 })
-    expect(
-      await world.tool('github-release-management', 'release', '--captured /tmp/changesets-captured.json'),
-    ).toMatchObject({ code: 0 })
+    const planned = await world.job('plan')
+    expect(planned.filter((step) => step.code !== 0)).toEqual([])
+    expect(planned.find((step) => step.step === 'plan')?.outputs).toMatchObject({ phase: 'release' })
+    const released = await world.job('release')
+    expect(released.filter((step) => step.code !== 0)).toEqual([])
+    expect(released.map((step) => step.step)).toEqual([
+      "Build the release tools at this workflow's own revision",
+      "Pack the workspace through the caller's flake",
+      'Capture this cycle',
+      "Tag released versions, recording each tarball's integrity",
+      'GitHub Releases from the authored changelogs',
+    ])
 
     const tags = await world.must('git ls-remote --tags origin', { cwd: FIXTURE })
     expect(tags.stdout).toContain(`refs/tags/@e2e/alpha@v${alphaNext}`)

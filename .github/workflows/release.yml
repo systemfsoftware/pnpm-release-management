@@ -42,7 +42,8 @@ jobs:
       - uses: cachix/install-nix-action@v31
         if: runner.environment == 'github-hosted'
 
-      - name: Build the release tools at this workflow's own revision
+      - &release-tools
+        name: Build the release tools at this workflow's own revision
         env:
           WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
           WORKFLOW_SHA: ${{ job.workflow_sha }}
@@ -51,7 +52,8 @@ jobs:
             "github:${WORKFLOW_REPOSITORY:?job.workflow_repository is empty}/${WORKFLOW_SHA:?job.workflow_sha is empty}#release-tools")
           echo "RELEASE_TOOLS=$tools/bin" >> "$GITHUB_ENV"
 
-      - name: Pack the workspace through the caller's flake
+      - &workspace-tarballs
+        name: Pack the workspace through the caller's flake
         run: echo "TARBALLS=$(nix build --no-link --print-out-paths .#workspace-tarballs)" >> "$GITHUB_ENV"
 
       - id: plan
@@ -77,14 +79,7 @@ jobs:
       - uses: cachix/install-nix-action@v31
         if: runner.environment == 'github-hosted'
 
-      - name: Build the release tools at this workflow's own revision
-        env:
-          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
-          WORKFLOW_SHA: ${{ job.workflow_sha }}
-        run: |
-          tools=$(nix build --no-link --print-out-paths \
-            "github:${WORKFLOW_REPOSITORY:?job.workflow_repository is empty}/${WORKFLOW_SHA:?job.workflow_sha is empty}#release-tools")
-          echo "RELEASE_TOOLS=$tools/bin" >> "$GITHUB_ENV"
+      - *release-tools
 
       - name: Bump every package and version surface, consuming the intents
         run: nix develop --command "$RELEASE_TOOLS/version-management" bump
@@ -124,17 +119,9 @@ jobs:
       - uses: cachix/install-nix-action@v31
         if: runner.environment == 'github-hosted'
 
-      - name: Build the release tools at this workflow's own revision
-        env:
-          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
-          WORKFLOW_SHA: ${{ job.workflow_sha }}
-        run: |
-          tools=$(nix build --no-link --print-out-paths \
-            "github:${WORKFLOW_REPOSITORY:?job.workflow_repository is empty}/${WORKFLOW_SHA:?job.workflow_sha is empty}#release-tools")
-          echo "RELEASE_TOOLS=$tools/bin" >> "$GITHUB_ENV"
+      - *release-tools
 
-      - name: Pack the workspace through the caller's flake
-        run: echo "TARBALLS=$(nix build --no-link --print-out-paths .#workspace-tarballs)" >> "$GITHUB_ENV"
+      - *workspace-tarballs
 
       - name: Capture this cycle
         env:

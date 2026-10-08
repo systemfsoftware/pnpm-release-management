@@ -14,6 +14,8 @@ export const REGISTRY_LOG = '/tmp/verdaccio/verdaccio.log'
 export const REGISTRY_STORAGE = '/tmp/verdaccio/storage'
 export const CI_WORKFLOW = 'ci.yml'
 export const GH_DISPATCHES = '/tmp/gh-dispatches.log'
+export const WORKSPACE_TARBALLS = '/tmp/workspace-tarballs'
+const ARTIFACTS_DIR = '.release'
 const WORKFLOW_REPOSITORY = 'systemfsoftware/pnpm-release-management'
 const WORKFLOW_SHA = 'feedfacefeedfacefeedfacefeedfacefeedface'
 const CALLER_LOCK_REV = '0449f15b2db9602a1dfe58bee2598adca2a726ed'
@@ -48,13 +50,20 @@ case "$1" in
     PATH="${CALLER_DEVSHELL_BIN}:$PATH" exec "$@"
     ;;
   build)
-    for ref; do :; done
-    if [ "$ref" = "github:${WORKFLOW_REPOSITORY}/${WORKFLOW_SHA}#release-tools" ]; then
-      echo ${WORKFLOW_RELEASE_TOOLS}
-      exit 0
+    shift
+    if [ $# -ne 3 ] || [ "$1" != --no-link ] || [ "$2" != --print-out-paths ]; then
+      echo "nix stub: only 'nix build --no-link --print-out-paths <ref>' is modelled, got: nix build $*" >&2
+      exit 2
     fi
-    echo "nix stub: no flake output for $ref" >&2
-    exit 1
+    case "$3" in
+      "github:${WORKFLOW_REPOSITORY}/${WORKFLOW_SHA}#release-tools") echo ${WORKFLOW_RELEASE_TOOLS} ;;
+      .#workspace-tarballs) echo ${WORKSPACE_TARBALLS} ;;
+      *)
+        echo "nix stub: no flake output for $3" >&2
+        exit 1
+        ;;
+    esac
+    exit 0
     ;;
 esac
 echo "nix stub: only develop and build are modelled, got: nix $*" >&2
@@ -109,6 +118,7 @@ export interface CommandRecord {
 
 export interface StepResult extends ExecResult {
   readonly step: string
+  readonly outputs: Readonly<Record<string, string>>
 }
 
 export interface Listener {
@@ -160,6 +170,7 @@ const RUNNER_ENV: Readonly<Record<string, string>> = {
 const WORKFLOW_EXPRESSIONS: Readonly<Record<string, string>> = {
   'github.token': GITHUB_TOKEN,
   'inputs.ci-workflow': CI_WORKFLOW,
+  'inputs.artifacts-dir': ARTIFACTS_DIR,
   'job.workflow_repository': WORKFLOW_REPOSITORY,
   'job.workflow_sha': WORKFLOW_SHA,
 }
@@ -277,9 +288,10 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
         `PATH=${RUNNER_BIN}:$PATH bash --noprofile --norc -eo pipefail ${quote(script)}`,
         { cwd: FIXTURE, env: { ...jobEnv, ...env, GITHUB_OUTPUT: output, GITHUB_ENV: githubEnv } },
       )
-      results.push({ step: step.label, ...result })
+      const stepOutputs = outputsOf((await must(`cat ${quote(output)}`)).stdout)
+      results.push({ step: step.label, outputs: stepOutputs, ...result })
       if (result.code !== 0) return results
-      if (step.id !== undefined) outputs[step.id] = outputsOf((await must(`cat ${quote(output)}`)).stdout)
+      if (step.id !== undefined) outputs[step.id] = stepOutputs
       jobEnv = outputsOf((await must(`cat ${quote(githubEnv)}`)).stdout)
     }
     return results
