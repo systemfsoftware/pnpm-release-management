@@ -1,7 +1,7 @@
 import { Effect } from 'effect'
 import * as S from 'effect/Schema'
 import * as SchemaGetter from 'effect/SchemaGetter'
-import { FsPath, GitRef, PackageName, RelativePath } from './Workspace.schema.js'
+import { FsPath, GitRef, PackageName, PackageVersion, RelativePath } from './Workspace.schema.js'
 
 export const TaskName = S.NonEmptyString.pipe(S.brand('TaskName'))
 export type TaskName = S.Schema.Type<typeof TaskName>
@@ -160,6 +160,18 @@ export const PrBlock = S.Struct({
 })
 export type PrBlock = S.Schema.Type<typeof PrBlock>
 
+export const LegacyTagTemplate = S.String.pipe(
+  S.check(S.isPattern(/^(?:[^\s{}]|\{name\}|\{version\})*\{version\}(?:[^\s{}]|\{name\}|\{version\})*$/)),
+  S.brand('LegacyTagTemplate'),
+)
+export type LegacyTagTemplate = S.Schema.Type<typeof LegacyTagTemplate>
+
+export const LegacyTags = S.Struct({
+  tag: LegacyTagTemplate,
+  through: PackageVersion,
+})
+export type LegacyTags = S.Schema.Type<typeof LegacyTags>
+
 const ReleaseConfigWire = S.Struct({
   base: GitRef,
   branch: GitRef,
@@ -170,6 +182,7 @@ const ReleaseConfigWire = S.Struct({
   versioning: Versioning,
   gate: Gate,
   distribution: S.optional(Distribution),
+  legacyTags: S.optional(LegacyTags),
   pr: PrBlock.pipe(
     S.withDecodingDefault(Effect.succeed({
       title: 'chore(release): version packages',
@@ -187,6 +200,7 @@ const ReleaseConfigFull = S.Struct({
   versioning: Versioning,
   gate: Gate,
   distribution: S.optional(Distribution),
+  legacyTags: S.optional(LegacyTags),
   pr: PrBlock,
 })
 

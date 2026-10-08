@@ -1,5 +1,14 @@
 import * as S from 'effect/Schema'
-import { FsPath, OwnerName, PackageManifest, RelativePath, RepoName } from './Workspace.schema.js'
+import {
+  FsPath,
+  OwnerName,
+  PackageManifest,
+  PackageName,
+  PackageVersion,
+  RelativePath,
+  ReleaseTag,
+  RepoName,
+} from './Workspace.schema.js'
 
 export const RepoSlug = S.Struct({
   owner: OwnerName,
@@ -34,6 +43,14 @@ export type TagGitFailed = S.Schema.Type<typeof TagGitFailed>
 
 export const TagRefusal = S.Union([TagCapturedMalformed, TagExcludedMalformed, TagGitFailed])
 export type TagRefusal = S.Schema.Type<typeof TagRefusal>
+
+export const LegacyTagUnverified = S.TaggedStruct('LegacyTagUnverified', {
+  tag: ReleaseTag,
+  package: PackageName,
+  version: PackageVersion,
+  reason: S.String,
+})
+export type LegacyTagUnverified = S.Schema.Type<typeof LegacyTagUnverified>
 
 export const TaggedManifest = S.Struct({
   path: RelativePath,

@@ -17,6 +17,7 @@ import {
   type IntentRefusal,
   type LedgerIdentityRefusal,
   type LedgerRefusal,
+  type LegacyTagUnverified,
   type MemberRefusal,
   type PlanDeferredUnknown,
   type PlanRefusal,
@@ -42,6 +43,7 @@ export type PlanFailure =
   | MemberRefusal
   | PlanRefusal
   | TagRefusal
+  | LegacyTagUnverified
   | IntegrityRefusal
   | LedgerRefusal
   | LedgerIdentityRefusal
@@ -55,6 +57,7 @@ export type TagFailure =
   | LedgerRefusal
   | PlanDeferredUnknown
   | TagRefusal
+  | LegacyTagUnverified
   | TarballRefusal
   | VersionBurned
 
@@ -63,6 +66,7 @@ export type ReleaseFailure =
   | MemberRefusal
   | PlanRefusal
   | TagRefusal
+  | LegacyTagUnverified
   | GithubReleaseRefusal
 
 export type PullRequestFailure =
@@ -103,6 +107,9 @@ const appendFile = (
     )
   })
 
+const legacyTagUnverifiedText = (unverified: LegacyTagUnverified): string =>
+  `refused: legacy-tag-unverified, tag: ${unverified.tag}, package: ${unverified.package}@${unverified.version}, reason: ${unverified.reason}`
+
 export const renderPlanRefusal = (refusal: PlanFailure): Effect.Effect<void, never, Reporter> =>
   refuse(
     Match.value(refusal).pipe(
@@ -126,6 +133,7 @@ export const renderPlanRefusal = (refusal: PlanFailure): Effect.Effect<void, nev
         TagCapturedMalformed: (malformed) => `refused: tag-captured-malformed, path: ${malformed.path}`,
         TagExcludedMalformed: (malformed) => `refused: tag-excluded-malformed, path: ${malformed.path}`,
         TagGitFailed: (failed) => `git command failed: ${failed.command}\n${failed.stderr}`,
+        LegacyTagUnverified: legacyTagUnverifiedText,
         TagIntegrityMismatch: (mismatch) =>
           `refused: tag-integrity-mismatch, package: ${mismatch.package}@${mismatch.version}, recorded: ${mismatch.recorded}, current: ${mismatch.current}, file: ${mismatch.file}`,
         IntegrityNothingToVerify: () => 'refused: integrity-nothing-to-verify',
@@ -175,6 +183,7 @@ export const renderTagRefusal = (refusal: TagFailure): Effect.Effect<void, never
         TagCapturedMalformed: (malformed) => `cannot read captured file: ${malformed.path}`,
         TagExcludedMalformed: (malformed) => `cannot read exclude file: ${malformed.path}`,
         TagGitFailed: (failed) => `git command failed: ${failed.command}\n${failed.stderr}`,
+        LegacyTagUnverified: legacyTagUnverifiedText,
         TarballMissing: (missing) => `refused: tarball-missing, package: ${missing.package}@${missing.version}`,
         TarballUnreadable: (unreadable) =>
           `refused: tarball-unreadable, path: ${unreadable.path}, reason: ${unreadable.reason}`,
@@ -204,6 +213,7 @@ export const renderReleaseRefusal = (refusal: ReleaseFailure): Effect.Effect<voi
         TagCapturedMalformed: (malformed) => `refused: tag-captured-malformed, path: ${malformed.path}`,
         TagExcludedMalformed: (malformed) => `refused: tag-excluded-malformed, path: ${malformed.path}`,
         TagGitFailed: (failed) => `git command failed: ${failed.command}\n${failed.stderr}`,
+        LegacyTagUnverified: legacyTagUnverifiedText,
         ReleaseChangelogMissing: (missing) =>
           `Missing changelog for ${missing.package}@${missing.version}: expected ${missing.changelog} to hold the generated changelog. Did the version step run before this one?`,
         ReleaseChangelogEmpty: (empty) =>

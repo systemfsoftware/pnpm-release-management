@@ -153,6 +153,7 @@ Then add a `release.jsonc`:
 | `gate.task`                     | `build`                     | `turbo`: the task whose inputs decide the changed packages            |
 | `distribution.launcherManifest` | —                           | required only for repositories that ship platform packages            |
 | `distribution.targets[]`        | —                           | `{ target, suffix, os, cpu, libc?, runner, bin }`                     |
+| `legacyTags.tag` / `.through`   | —                           | release tags cut before adoption; see [Legacy tags](#legacy-tags)     |
 | `pr.title` / `pr.body`          | built-in copy               | release PR copy                                                       |
 
 Member changelogs follow `versioning.changelog.storage` in `pnpm-workspace.yaml`, read with
@@ -504,6 +505,33 @@ The ledger is append-only. `changeset check <base>` — which already receives t
 pull request base revision — fails red when an entry present at the base is
 removed or changed at the head; additions are fine. That is what proves the
 record was extended rather than rewritten.
+
+### Legacy tags
+
+A repository whose releases predate this tooling and were never published to a
+registry has no registry bytes to adopt — only its own tags, often a bare
+`v<version>`. `adopt` has nothing to record there, and without help the plan
+reads the current version as unreleased and owes a second `<name>@v<version>`
+tag for it. `legacyTags` names that earlier scheme:
+
+```jsonc
+"legacyTags": { "tag": "v{version}", "through": "0.3.6" }
+```
+
+`tag` is the old tag template: `{version}` is required, `{name}` is optional.
+`through` is the last version released under it. `release plan`, `release tag`
+and `release github` count a publishable member as already released when its
+`<name>@v<version>` tag is absent, its version is at or below `through`, and the
+remote holds the legacy tag for it — but only after reading the tagged commit:
+exactly one `package.json` there must name the member, must not be `private`,
+and must declare the same version. Anything else is a red
+`legacy-tag-unverified` refusal naming the tag, the package and what the commit
+declares; the tooling never invents an identity it cannot read back.
+
+A version above `through` is never matched against the old template, so every
+release after adoption is tagged `<name>@v<version>` as usual. A legacy-released
+version gets no ledger entry and no integrity check: there are no recorded bytes
+to compare against, so the guarantee starts at the first managed release.
 
 ## Sandbox
 

@@ -1,6 +1,7 @@
 import { Cell, Wire } from '@systemfsoftware/effect-cell-types'
 import type {
   CycleEntry,
+  LegacyTagUnverified,
   MemberRefusal,
   PackageName,
   PlanDeferredUnknown,
@@ -14,6 +15,7 @@ import {
   LEDGER_PATH,
   LedgerPort,
   type LedgerRefusal,
+  LegacyTags,
   RelativePath,
   ReleaseLedger,
   RemoteName,
@@ -29,6 +31,7 @@ import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import { cycleOf, dropExcluded } from './cycle.js'
 import { burnedOf, stateForVersion } from './integrity.js'
+import { legacyReleased } from './legacy.js'
 import {
   type TagAnnotation,
   TagCapturedMalformed,
@@ -48,6 +51,7 @@ export const TagRequest = Wire.wire({
   dryRun: Wire.mint(S.Boolean),
   json: Wire.mint(S.Boolean),
   changelogDir: Wire.mint(RelativePath),
+  legacyTags: Wire.mint(S.optional(LegacyTags)),
 })
 
 interface ExclusionScan {
@@ -95,13 +99,21 @@ const readLive = (input: {
   readonly remote: RemoteName
   readonly changelogDir: RelativePath
   readonly excluded: ReadonlyArray<PackageName>
-}): Effect.Effect<CycleScan, MemberRefusal | TagRefusal, never> =>
+  readonly legacyTags: LegacyTags | undefined
+}): Effect.Effect<CycleScan, MemberRefusal | TagRefusal | LegacyTagUnverified, never> =>
   Effect.gen(function*() {
     const members = yield* input.workspace.listMembers()
     const tags = yield* input.git.remoteTags(input.remote)
+    const legacy = yield* legacyReleased({
+      git: input.git,
+      remote: input.remote,
+      members,
+      remoteTags: tags,
+      legacy: input.legacyTags,
+    })
     const storage = yield* input.workspace.changelogStorage()
     return {
-      entries: dropExcluded(cycleOf(members, tags, input.changelogDir, storage), input.excluded),
+      entries: dropExcluded(cycleOf(members, tags, legacy, input.changelogDir, storage), input.excluded),
       issue: undefined,
     }
   })
@@ -114,7 +126,8 @@ const readCycle = (input: {
   readonly capturedPath: FsPath | undefined
   readonly changelogDir: RelativePath
   readonly excluded: ReadonlyArray<PackageName>
-}): Effect.Effect<CycleScan, MemberRefusal | TagRefusal | PlanDeferredUnknown, never> => {
+  readonly legacyTags: LegacyTags | undefined
+}): Effect.Effect<CycleScan, MemberRefusal | TagRefusal | LegacyTagUnverified | PlanDeferredUnknown, never> => {
   const capturedPath = input.capturedPath
   if (capturedPath !== undefined) {
     return readCaptured(input.cycles, capturedPath, input.excluded)
@@ -144,7 +157,13 @@ const read = (
   request: S.Schema.Type<typeof TagRequest>,
 ): Effect.Effect<
   TagCommand,
-  MemberRefusal | TagRefusal | PlanDeferredUnknown | TarballRefusal | VersionBurned | LedgerRefusal,
+  | MemberRefusal
+  | TagRefusal
+  | LegacyTagUnverified
+  | PlanDeferredUnknown
+  | TarballRefusal
+  | VersionBurned
+  | LedgerRefusal,
   WorkspaceStore | GitPort | CycleStore | TarballPort | LedgerPort
 > =>
   Effect.gen(function*() {
@@ -163,6 +182,7 @@ const read = (
       capturedPath: request.captured ?? request.capturedFile,
       changelogDir: request.changelogDir,
       excluded: exclusion.names,
+      legacyTags: request.legacyTags,
     })
     let digests: ReadonlyArray<TarballDigest> = []
     if (scan.entries.length > 0) {
@@ -246,7 +266,13 @@ const write = (
 export const tagCell: Cell.Cell<
   S.Schema.Type<typeof TagRequest>,
   TagDecision,
-  MemberRefusal | TagRefusal | PlanDeferredUnknown | TarballRefusal | VersionBurned | LedgerRefusal,
+  | MemberRefusal
+  | TagRefusal
+  | LegacyTagUnverified
+  | PlanDeferredUnknown
+  | TarballRefusal
+  | VersionBurned
+  | LedgerRefusal,
   WorkspaceStore | GitPort | CycleStore | TarballPort | LedgerPort
 > = Cell.layer({
   read,
