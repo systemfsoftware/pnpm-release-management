@@ -39,6 +39,7 @@ export const renderRefusal = (refusal: AppRefusal): Effect.Effect<void, never, R
           `config ${invalid.path} field "${invalid.field}" is invalid: ${invalid.reason}`,
         ManifestUnreadable: (unreadable) => `cannot read workspace manifest ${unreadable.path}`,
         ManifestInvalid: (invalid) => `cannot parse workspace manifest ${invalid.path}: ${invalid.reason}`,
+        CommandUnstartable: (unstartable) => `${unstartable.command} could not be started: ${unstartable.reason}`,
         IntentFrontmatterMalformed: (malformed) =>
           `cannot parse changeset intent ${malformed.path}: malformed frontmatter`,
         IntentUnknownPackage: (unknown) => `not workspace packages: ${unknown.package}`,
