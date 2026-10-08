@@ -7,7 +7,7 @@ import { Workflow } from './workflow.schema.js'
 
 const RELEASE_WORKFLOW = new URL('../.github/workflows/release.yml', import.meta.url).pathname
 
-const TOOL_COMMAND = /nix develop --command (\S+) (\S+)([^\n]*(?:\\\n[^\n]*)*)/g
+const TOOL_COMMAND = /nix develop --command "?(?:\S*\/)?([\w-]+)"? (\S+)([^\n]*(?:\\\n[^\n]*)*)/g
 
 export interface ToolStep {
   readonly job: string
