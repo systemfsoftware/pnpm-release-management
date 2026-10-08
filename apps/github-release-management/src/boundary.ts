@@ -56,6 +56,7 @@ export const planRequestOf = (workspace: Workspace, flags: PlanFlags) =>
       remote: flags.remote,
       tarballs: flags.tarballs,
       changelogDir: workspace.config.changelogDir,
+      legacyTags: workspace.config.legacyTags,
     }),
   )
 
@@ -97,6 +98,7 @@ export const tagRequestOf = (workspace: Workspace, flags: TagFlags) =>
       dryRun: flags.dryRun,
       json: flags.json,
       changelogDir: workspace.config.changelogDir,
+      legacyTags: workspace.config.legacyTags,
     }),
   )
 
@@ -115,6 +117,7 @@ export const releaseRequestOf = (workspace: Workspace, flags: ReleaseFlags) =>
       assert: flags.assert,
       dryRun: flags.dryRun,
       changelogDir: workspace.config.changelogDir,
+      legacyTags: workspace.config.legacyTags,
     }),
   )
 

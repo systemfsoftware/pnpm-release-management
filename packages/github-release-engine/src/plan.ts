@@ -1,5 +1,5 @@
 import { Cell, Wire } from '@systemfsoftware/effect-cell-types'
-import type { IntentRefusal, MemberRefusal, TagRefusal } from '@systemfsoftware/release-language'
+import type { IntentRefusal, LegacyTagUnverified, MemberRefusal, TagRefusal } from '@systemfsoftware/release-language'
 import {
   ChangesetsPort,
   ChangesetStore,
@@ -15,6 +15,7 @@ import {
   type LedgerRefusal,
   LedgerTagMissing,
   LedgerTagMoved,
+  LegacyTags,
   type PlanRefusal,
   RelativePath,
   ReleaseLedger,
@@ -45,6 +46,7 @@ import {
   verifyIntegrity,
 } from './integrity.js'
 import { type IntegrityCheck } from './integrity.schema.js'
+import { legacyReleased } from './legacy.js'
 import { PlanCommand, type PlanDeferredUnknown, planRelease } from './plan-release.workflow.js'
 import { type PlanDecision, PlanReport } from './plan.schema.js'
 
@@ -53,6 +55,7 @@ export const PlanRequest = Wire.wire({
   remote: Wire.mint(S.optional(RemoteName)),
   tarballs: Wire.mint(FsPath),
   changelogDir: Wire.mint(RelativePath),
+  legacyTags: Wire.mint(S.optional(LegacyTags)),
 })
 
 export type PlanReadRefusal =
@@ -66,6 +69,7 @@ export type PlanReadRefusal =
   | IntentRefusal
   | MemberRefusal
   | TagRefusal
+  | LegacyTagUnverified
 
 const parseAnnotation = (text: string): Result.Result<TarballIntegrity, string> => {
   let parsed: unknown
@@ -111,6 +115,7 @@ const read = (
     const intents = yield* changesets.listIntents()
     const members = yield* workspace.listMembers()
     const tags = yield* git.remoteTags(remote)
+    const legacy = yield* legacyReleased({ git, remote, members, remoteTags: tags, legacy: request.legacyTags })
     const deferred = yield* cycles.readDeferred(request.deferred)
     const planned = yield* port.plan()
     const candidates = identityCandidates(
@@ -202,10 +207,11 @@ const read = (
     const storage = yield* workspace.changelogStorage()
     return PlanCommand.make({
       pending: Count.make(intents.length),
-      cycle: dropExcluded(cycleOf(members, tags, request.changelogDir, storage), deferred),
+      cycle: dropExcluded(cycleOf(members, tags, legacy, request.changelogDir, storage), deferred),
       deferred: [...deferred],
       unknownDeferred: [],
       members: members.map((member) => member.name),
+      legacy: [...legacy],
     })
   })
 
@@ -240,6 +246,7 @@ const write = (
       thisCycle: projected.thisCycle,
       deferred: Count.make(raw.deferred.length),
       unpublished: raw.deferred.filter((name) => raw.members.includes(name) === false),
+      legacy: raw.legacy,
     }),
   )
 }

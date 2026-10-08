@@ -79,7 +79,7 @@ it.prop(
   [pendingArb, cycleArb, deferredArb, unknownArb, membersArb],
   ([pending, cycle, deferred, unknownDeferred, members]) => {
     const outcome = planRelease(
-      PlanCommand.make({ pending, cycle, deferred, unknownDeferred, members }),
+      PlanCommand.make({ pending, cycle, deferred, unknownDeferred, members, legacy: [] }),
     )
     if (unknownDeferred.length > 0) {
       if (Result.isFailure(outcome) === false) {

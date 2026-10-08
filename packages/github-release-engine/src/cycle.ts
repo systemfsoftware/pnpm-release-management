@@ -1,5 +1,6 @@
 import type {
   ChangelogStorage,
+  LegacyRelease,
   Member,
   PackageName,
   PackageVersion,
@@ -12,12 +13,14 @@ export const tagOf = (name: PackageName, version: PackageVersion): ReleaseTag =>
 export const cycleOf = (
   members: ReadonlyArray<Member>,
   remoteTags: ReadonlyArray<ReleaseTag>,
+  legacyReleased: ReadonlyArray<LegacyRelease>,
   changelogDir: RelativePath,
   storage: ChangelogStorage,
 ): ReadonlyArray<CycleEntry> =>
   members
     .filter((member) => member.publishable)
     .filter((member) => remoteTags.includes(tagOf(member.name, member.manifest.version)) === false)
+    .filter((member) => legacyReleased.some((release) => release.package === member.name) === false)
     .map((member) =>
       CycleEntry.make({
         name: member.name,

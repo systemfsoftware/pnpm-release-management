@@ -1,5 +1,5 @@
 import { Workflow } from '@systemfsoftware/effect-cell-types'
-import { Count, CycleEntry, DecisionTypeId, PackageName } from '@systemfsoftware/release-language'
+import { Count, CycleEntry, DecisionTypeId, LegacyRelease, PackageName } from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
@@ -35,6 +35,7 @@ export class PlanCommand extends S.TaggedClass<PlanCommand>()('PlanCommand', {
   deferred: S.Array(PackageName),
   unknownDeferred: S.Array(PackageName),
   members: S.Array(PackageName),
+  legacy: S.Array(LegacyRelease),
 }) {}
 
 const UnknownDeferredCase = S.TaggedStruct('UnknownDeferred', {

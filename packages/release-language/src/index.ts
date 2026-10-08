@@ -20,6 +20,8 @@ export {
   ConfigField,
   ConfigRefusal,
   Gate,
+  LegacyTags,
+  LegacyTagTemplate,
   PrTitle,
   ReleaseConfig,
   SurfacesVersioning,
@@ -158,6 +160,8 @@ export { SurfaceStore } from './SurfaceStore.js'
 export { SurfaceWrite } from './Sync.schema.js'
 export {
   CommitSha,
+  LegacyRelease,
+  LegacyTagUnverified,
   RemoteName,
   RepoSlug,
   TagCapturedMalformed,
