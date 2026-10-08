@@ -1069,6 +1069,84 @@ Feature('Versioning packages').body(({ scenario }) => {
   }
 
   {
+    const members = membersOf([
+      { name: '@e2e/alpha', version: '1.0.0' },
+      { name: '@e2e/beta', version: '1.0.0' },
+    ])
+    const surfaces = makeFakeSurfaceStore(
+      new Map([
+        [brandPath('package.json'), brandVersion('1.0.0')],
+        [brandPath('Cargo.toml'), brandVersion('1.0.0')],
+        [brandPath('flake.nix'), brandVersion('1.0.0')],
+      ]),
+    )
+    const workspace = makeFakeWorkspaceStore(members, brandRoot('/test'), new Map(), 'repository')
+    const changesets = makeFakeChangesetStore(
+      new Map(
+        intentsOf([{
+          path: '.changeset/alpha-minor.md',
+          name: '@e2e/alpha',
+          bump: 'minor',
+          summary: 'alpha ships',
+        }]).map((intent) => [intent.path, intent] as const),
+      ),
+    )
+    const changelogs = makeFakeChangelogStore()
+    const live = Layer.mergeAll(
+      surfaces.layer,
+      workspace.layer,
+      changesets.layer,
+      changelogs.layer,
+    )
+    scenario(
+      'Under repository storage moved members gain a section in their own CHANGELOG.md',
+      { scenarioLayer: live },
+      Gherkin.Do.pipe(
+        Given('one intent touching one of two same-versioned packages in a repository-storage workspace')(
+          'input',
+          () =>
+            Effect.succeed(bumpInputOf({
+              strategy: 'surfaces',
+              changelogDir: '.changeset/changelogs',
+              rootChangelog: 'CHANGELOG.md',
+              ...surfacesInput,
+            })),
+        ),
+        When('the pending intents are versioned together')(
+          'outcome',
+          (s) =>
+            Effect.match(Cell.run(Cell.provide(bumpCell, live), s.input), {
+              onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
+              onSuccess: (decision) => ({ _tag: 'decided' as const, decision }),
+            }),
+        ),
+        Then('each moved member CHANGELOG.md carries the consolidated version and nothing is parked')((s) => {
+          Match.value(s.outcome).pipe(
+            Match.tag('decided', (decided) =>
+              Match.value(decided.decision).pipe(
+                Match.tag('VersionBumped', (bumped) => {
+                  expect(bumped.version).toEqual('1.1.0')
+                  expect([...changelogs.state.memberChangelogs.keys()].sort()).toEqual([
+                    'packages/@e2e/alpha/CHANGELOG.md',
+                    'packages/@e2e/beta/CHANGELOG.md',
+                  ])
+                  expect(changelogs.state.memberChangelogs.get(brandPath('packages/@e2e/alpha/CHANGELOG.md'))).toEqual(
+                    '# @e2e/alpha\n\n## 1.1.0\n\nalpha ships\n',
+                  )
+                }),
+                Match.tag('VersionConsumed', () => failUnexpected('expected a consolidated bump')),
+                Match.tag('VersionIdle', () => failUnexpected('expected a consolidated bump')),
+                Match.exhaustive,
+              )),
+            Match.tag('refused', () => failUnexpected('expected a version decision')),
+            Match.exhaustive,
+          )
+        }),
+      ),
+    )
+  }
+
+  {
     const members = membersOf([{ name: '@e2e/alpha', version: '1.0.0' }])
     const surfaces = makeFakeSurfaceStore(
       new Map([

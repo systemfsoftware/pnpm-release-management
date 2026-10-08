@@ -1,5 +1,5 @@
 import { it } from '@effect/vitest'
-import { type Bump, Intent, Member } from '@systemfsoftware/release-language'
+import { type Bump, Intent, Member, memberChangelogPathOf, RelativePath } from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
@@ -77,7 +77,8 @@ const toCommand = (input: {
     intents,
     members,
     manifestVersion: input.manifestVersion,
-    changelogDir: input.changelogDir,
+    changelogPathOf: (member, version) =>
+      memberChangelogPathOf('registry', RelativePath.make(input.changelogDir), member, version),
   })
   return S.decodeUnknownSync(BumpCommand)({
     _tag: 'BumpCommand',
@@ -86,6 +87,7 @@ const toCommand = (input: {
     members,
     manifestVersion: input.manifestVersion,
     changelogDir: input.changelogDir,
+    changelogStorage: 'registry',
     rootChangelog: input.rootChangelog,
     manifest: { file: 'package.json', surface: { kind: 'json', path: 'package.json' } },
     surfaces: [],

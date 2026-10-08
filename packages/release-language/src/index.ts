@@ -106,6 +106,7 @@ export {
   VersionState,
 } from './Ledger.schema.js'
 export { LEDGER_PATH, LedgerPort } from './LedgerPort.js'
+export { memberChangelogPathOf, parkedChangelogOf, releaseNotesOf, withVersionSection } from './MemberChangelog.js'
 export {
   NewIntentInvalidBump,
   NewIntentPackageNameMalformed,

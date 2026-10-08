@@ -139,21 +139,27 @@ Then add a `release.jsonc`:
 
 `release.jsonc` at the repository root. Every path is relative to the root.
 
-| Key                             | Default                     | Meaning                                                          |
-| ------------------------------- | --------------------------- | ---------------------------------------------------------------- |
-| `base`                          | required                    | branch the release PR targets                                    |
-| `branch`                        | required                    | branch the release PR is opened from                             |
-| `changesetDir`                  | `.changeset`                | where pending intents live                                       |
-| `changelogDir`                  | `<changesetDir>/changelogs` | where generated per-package changelogs are written               |
-| `versioning.strategy`           | required                    | `surfaces` or `changesets`                                       |
-| `versioning.manifest`           | —                           | `surfaces`: the JSON manifest that owns the version              |
-| `versioning.changelog`          | —                           | `surfaces`: the root changelog that receives the release summary |
-| `versioning.surfaces[]`         | —                           | `surfaces`: additional files rewritten on every bump             |
-| `gate.strategy`                 | required                    | `turbo` (a task graph decides what a change touches) or `paths`  |
-| `gate.task`                     | `build`                     | `turbo`: the task whose inputs decide the changed packages       |
-| `distribution.launcherManifest` | —                           | required only for repositories that ship platform packages       |
-| `distribution.targets[]`        | —                           | `{ target, suffix, os, cpu, libc?, runner, bin }`                |
-| `pr.title` / `pr.body`          | built-in copy               | release PR copy                                                  |
+| Key                             | Default                     | Meaning                                                               |
+| ------------------------------- | --------------------------- | --------------------------------------------------------------------- |
+| `base`                          | required                    | branch the release PR targets                                         |
+| `branch`                        | required                    | branch the release PR is opened from                                  |
+| `changesetDir`                  | `.changeset`                | where pending intents live                                            |
+| `changelogDir`                  | `<changesetDir>/changelogs` | `registry` storage: where generated per-package changelogs are parked |
+| `versioning.strategy`           | required                    | `surfaces` or `changesets`                                            |
+| `versioning.manifest`           | —                           | `surfaces`: the JSON manifest that owns the version                   |
+| `versioning.changelog`          | —                           | `surfaces`: the root changelog that receives the release summary      |
+| `versioning.surfaces[]`         | —                           | `surfaces`: additional files rewritten on every bump                  |
+| `gate.strategy`                 | required                    | `turbo` (a task graph decides what a change touches) or `paths`       |
+| `gate.task`                     | `build`                     | `turbo`: the task whose inputs decide the changed packages            |
+| `distribution.launcherManifest` | —                           | required only for repositories that ship platform packages            |
+| `distribution.targets[]`        | —                           | `{ target, suffix, os, cpu, libc?, runner, bin }`                     |
+| `pr.title` / `pr.body`          | built-in copy               | release PR copy                                                       |
+
+Member changelogs follow `versioning.changelog.storage` in `pnpm-workspace.yaml`, read with
+`pnpm config get`. Under `repository`, `bump` adds a `## <version>` section to each moved member's
+`CHANGELOG.md`, above its earlier sections, and the release phase reads that section back. Under
+`registry` or unset, `bump` parks one file per moved member under `changelogDir`, and the release
+phase reads that file.
 
 A surface is one of:
 
