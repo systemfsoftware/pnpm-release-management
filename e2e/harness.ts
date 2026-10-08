@@ -14,9 +14,15 @@ export const REGISTRY_LOG = '/tmp/verdaccio/verdaccio.log'
 export const REGISTRY_STORAGE = '/tmp/verdaccio/storage'
 export const CI_WORKFLOW = 'ci.yml'
 export const GH_DISPATCHES = '/tmp/gh-dispatches.log'
+const WORKFLOW_REPOSITORY = 'systemfsoftware/pnpm-release-management'
+const WORKFLOW_SHA = 'feedfacefeedfacefeedfacefeedfacefeedface'
+const CALLER_LOCK_REV = '0449f15b2db9602a1dfe58bee2598adca2a726ed'
 
 const RUNNER_BIN = '/opt/runner-bin'
 const STEP_DIR = '/tmp/steps'
+const WORKFLOW_RELEASE_TOOLS = '/tmp/workflow-release-tools'
+const CALLER_DEVSHELL_BIN = '/tmp/caller-devshell/bin'
+const RELEASE_APPS = ['changeset-management', 'version-management', 'github-release-management'] as const
 
 const GH_STUB = `#!/bin/sh
 if [ -z "$GH_TOKEN" ]; then
@@ -29,6 +35,36 @@ if [ "$1 $2" = "workflow run" ]; then
 fi
 echo "gh stub: only 'gh workflow run' is modelled, got: gh $*" >&2
 exit 2
+`
+
+const NIX_STUB = `#!/bin/sh
+case "$1" in
+  develop)
+    if [ "$2" != --command ]; then
+      echo "nix stub: only 'nix develop --command' is modelled, got: nix $*" >&2
+      exit 2
+    fi
+    shift 2
+    PATH="${CALLER_DEVSHELL_BIN}:$PATH" exec "$@"
+    ;;
+  build)
+    for ref; do :; done
+    if [ "$ref" = "github:${WORKFLOW_REPOSITORY}/${WORKFLOW_SHA}#release-tools" ]; then
+      echo ${WORKFLOW_RELEASE_TOOLS}
+      exit 0
+    fi
+    echo "nix stub: no flake output for $ref" >&2
+    exit 1
+    ;;
+esac
+echo "nix stub: only develop and build are modelled, got: nix $*" >&2
+exit 2
+`
+
+const callerLockTool = (app: string): string =>
+  `#!/bin/sh
+echo "${app} at ${CALLER_LOCK_REV}, the revision the caller's flake.lock pins, ran instead of the workflow's: $*" >&2
+exit 1
 `
 
 export const REDIRECTED_HOSTS = [
@@ -124,6 +160,8 @@ const RUNNER_ENV: Readonly<Record<string, string>> = {
 const WORKFLOW_EXPRESSIONS: Readonly<Record<string, string>> = {
   'github.token': GITHUB_TOKEN,
   'inputs.ci-workflow': CI_WORKFLOW,
+  'job.workflow_repository': WORKFLOW_REPOSITORY,
+  'job.workflow_sha': WORKFLOW_SHA,
 }
 
 const RELEASE_WORKFLOW = await releaseWorkflow()
@@ -138,9 +176,6 @@ const outputsOf = (text: string): Record<string, string> =>
     }),
   )
 
-const withBins = (run: string): string =>
-  run.replaceAll(/nix develop --command (\S+)/g, (_, app: string) => quote(`${BINS_DIR}/${app}`))
-
 const shellScript = (command: string, options: ExecOptions): string => {
   const lines = Object.entries({ ...RUNNER_ENV, ...options.env }).map(([name, value]) =>
     `export ${name}=${quote(value)}`
@@ -149,6 +184,17 @@ const shellScript = (command: string, options: ExecOptions): string => {
   lines.push(command)
   return lines.join('\n')
 }
+
+const installScript = (path: string, content: string): string =>
+  `cat > ${path} <<'STUB_EOF'\n${content}STUB_EOF\nchmod 0755 ${path}`
+
+const RUNNER_SETUP = [
+  `mkdir -p ${RUNNER_BIN} ${STEP_DIR} ${CALLER_DEVSHELL_BIN} ${WORKFLOW_RELEASE_TOOLS} && touch ${GH_DISPATCHES}`,
+  `ln -sfn ${BINS_DIR} ${WORKFLOW_RELEASE_TOOLS}/bin`,
+  installScript(`${RUNNER_BIN}/gh`, GH_STUB),
+  installScript(`${RUNNER_BIN}/nix`, NIX_STUB),
+  ...RELEASE_APPS.map((app) => installScript(`${CALLER_DEVSHELL_BIN}/${app}`, callerLockTool(app))),
+].join('\n')
 
 export const makeWorld = (container: StartedTestContainer, listener: Listener): World => {
   const state = { phase: 'setup', kept: false }
@@ -208,10 +254,10 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
   }
 
   const job = async (name: string): Promise<ReadonlyArray<StepResult>> => {
-    await must(
-      `mkdir -p ${RUNNER_BIN} ${STEP_DIR} && touch ${GH_DISPATCHES} && ` +
-        `cat > ${RUNNER_BIN}/gh <<'GH_STUB_EOF'\n${GH_STUB}GH_STUB_EOF\nchmod 0755 ${RUNNER_BIN}/gh`,
-    )
+    await must(RUNNER_SETUP)
+    const githubEnv = `${STEP_DIR}/${name}.env`
+    await must(`: > ${quote(githubEnv)}`)
+    let jobEnv: Record<string, string> = {}
     const outputs: Record<string, Record<string, string>> = {}
     const lookup = (expression: string): string | undefined => {
       const step = expression.match(/^steps\.([\w-]+)\.outputs\.([\w-]+)$/)
@@ -222,18 +268,19 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
     for (const [index, step] of runStepsOf(RELEASE_WORKFLOW, name).entries()) {
       const script = `${STEP_DIR}/${name}-${index}.sh`
       const output = `${STEP_DIR}/${name}-${index}.output`
-      await writeFile(script, resolveExpressions(withBins(step.run), lookup))
+      await writeFile(script, resolveExpressions(step.run, lookup))
       await must(`: > ${quote(output)}`)
       const env = Object.fromEntries(
         Object.entries(step.env).map(([variable, value]) => [variable, resolveExpressions(value, lookup)]),
       )
       const result = await run(
         `PATH=${RUNNER_BIN}:$PATH bash --noprofile --norc -eo pipefail ${quote(script)}`,
-        { cwd: FIXTURE, env: { ...env, GITHUB_OUTPUT: output } },
+        { cwd: FIXTURE, env: { ...jobEnv, ...env, GITHUB_OUTPUT: output, GITHUB_ENV: githubEnv } },
       )
       results.push({ step: step.label, ...result })
       if (result.code !== 0) return results
       if (step.id !== undefined) outputs[step.id] = outputsOf((await must(`cat ${quote(output)}`)).stdout)
+      jobEnv = outputsOf((await must(`cat ${quote(githubEnv)}`)).stdout)
     }
     return results
   }

@@ -265,25 +265,28 @@ const runPhases = async (session: Session): Promise<void> => {
     expect(output).toContain('phase=none')
   })
 
-  await session.phase('version job opens the release PR and dispatches CI on its branch', async (world) => {
-    const created = await world.tool(
-      'changeset-management',
-      'new',
-      '@e2e/beta --bump patch --summary "beta stops dropping the last frame" --slug beta-fix',
-    )
-    expect(created.code).toBe(0)
+  await session.phase(
+    'version job runs its own revision of the tools over a caller lock pinned to an older one, opens the release PR and dispatches CI on its branch',
+    async (world) => {
+      const created = await world.tool(
+        'changeset-management',
+        'new',
+        '@e2e/beta --bump patch --summary "beta stops dropping the last frame" --slug beta-fix',
+      )
+      expect(created.code).toBe(0)
 
-    const steps = await world.job('version')
-    expect(steps.filter((step) => step.code !== 0)).toEqual([])
-    const opened = steps.find((step) => step.step === 'pr')
-    expect(`${opened?.stdout}${opened?.stderr}`).toContain('created release PR #')
-    expect(await world.read(GH_DISPATCHES)).toBe(`workflow run ${CI_WORKFLOW} --ref changeset-release/main\n`)
+      const steps = await world.job('version')
+      expect(steps.filter((step) => step.code !== 0)).toEqual([])
+      const opened = steps.find((step) => step.step === 'pr')
+      expect(`${opened?.stdout}${opened?.stderr}`).toContain('created release PR #')
+      expect(await world.read(GH_DISPATCHES)).toBe(`workflow run ${CI_WORKFLOW} --ref changeset-release/main\n`)
 
-    const pulls = await fetchOpenPulls(world)
-    expect(pulls.body?.length).toBe(1)
-    expect(pulls.body?.[0]?.title).toBe('chore(release): version packages')
-    expect(pulls.body?.[0]?.labels.map((label) => label.name)).toEqual(['release'])
-  })
+      const pulls = await fetchOpenPulls(world)
+      expect(pulls.body?.length).toBe(1)
+      expect(pulls.body?.[0]?.title).toBe('chore(release): version packages')
+      expect(pulls.body?.[0]?.labels.map((label) => label.name)).toEqual(['release'])
+    },
+  )
 
   await session.phase('version job closes the release PR and dispatches nothing', async (world) => {
     const steps = await world.job('version')
