@@ -122,6 +122,7 @@ export {
   PullRequestAbsent,
   PullRequestBodyUnreadable,
   PullRequestFound,
+  PullRequestGitFailed,
   PullRequestHeadInvalid,
   PullRequestLookup,
   PullRequestNumber,

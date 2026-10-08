@@ -65,10 +65,17 @@ export const PullRequestTreeUnreadable = S.TaggedStruct('PullRequestTreeUnreadab
 })
 export type PullRequestTreeUnreadable = S.Schema.Type<typeof PullRequestTreeUnreadable>
 
+export const PullRequestGitFailed = S.TaggedStruct('PullRequestGitFailed', {
+  command: S.String,
+  stderr: S.String,
+})
+export type PullRequestGitFailed = S.Schema.Type<typeof PullRequestGitFailed>
+
 export const PullRequestRefusal = S.Union([
   PullRequestBodyUnreadable,
   PullRequestHeadInvalid,
   PullRequestUnversioned,
   PullRequestTreeUnreadable,
+  PullRequestGitFailed,
 ])
 export type PullRequestRefusal = S.Schema.Type<typeof PullRequestRefusal>
