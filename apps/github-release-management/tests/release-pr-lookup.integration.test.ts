@@ -183,10 +183,15 @@ const insideRepo = <A, E, R>(root: string, effect: Effect.Effect<A, E, R>) =>
     Effect.sync(() => {
       const previous = process.cwd()
       process.chdir(root)
+      vi.stubEnv('GITHUB_REPOSITORY', `${OWNER}/${REPO}`)
       return previous
     }),
     () => effect,
-    (previous) => Effect.sync(() => process.chdir(previous)),
+    (previous) =>
+      Effect.sync(() => {
+        vi.unstubAllEnvs()
+        process.chdir(previous)
+      }),
   )
 
 const openReleasePullRequest = (seed: ReadonlyArray<Pull>, filter: HeadFilter) =>
