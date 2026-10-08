@@ -7,15 +7,22 @@ import {
   type TagRefusal,
 } from '@systemfsoftware/release-language'
 import { Effect, Layer } from 'effect'
+import * as Match from 'effect/Match'
 import { pathsTouched } from './change-verdict.js'
 import { deletedAt, gitLines, MANIFEST_GLOB, membersAt } from './evidence-io.js'
 import { collectTurboEvidence } from './turbo-evidence.js'
 import { turboPin } from './turbo-pin.js'
 
+const refusalDetail = (refusal: TagRefusal): string =>
+  Match.value(refusal).pipe(
+    Match.tag('TagGitFailed', (failed) => `git command failed: ${failed.command}\n${failed.stderr}`),
+    Match.orElse((other) => other.path),
+  )
+
 const branchFault = (refusal: TagRefusal): EvidenceCommandFailed =>
   new EvidenceCommandFailed({
     program: 'git',
-    detail: `current branch unreadable: ${refusal.path}`,
+    detail: `current branch unreadable: ${refusalDetail(refusal)}`,
   })
 
 const evidencePort = (git: GitPort): ChangeEvidencePort => ({

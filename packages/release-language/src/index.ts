@@ -164,6 +164,7 @@ export {
   TagExcludedMalformed,
   TaggedManifest,
   TaggedTree,
+  TagGitFailed,
   TagRefusal,
 } from './Tag.schema.js'
 export { TarballPort } from './TarballPort.js'

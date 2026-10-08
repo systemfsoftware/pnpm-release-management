@@ -19,8 +19,8 @@ import {
   RepoName,
   StagedPath,
   StagedStateUnreadable,
-  TagCapturedMalformed,
   TagExcludedMalformed,
+  TagGitFailed,
 } from '@systemfsoftware/release-language'
 import type {
   GateRefusal,
@@ -50,12 +50,9 @@ const RELEASE_BOT_IDENTITY: ReadonlyArray<string> = [
 
 const gitFailed = (args: ReadonlyArray<string>) => (stderr: string): PullRequestGitFailed =>
   PullRequestGitFailed.make({ command: `git ${args.join(' ')}`, stderr: stderr.trim() })
-const pushTagsPath = FsPath.make('git:push-tags')
-const writeTagPath = FsPath.make('git:write-tag')
+const tagGitFailed = (args: ReadonlyArray<string>) => (stderr: string): TagGitFailed =>
+  TagGitFailed.make({ command: `git ${args.join(' ')}`, stderr: stderr.trim() })
 const repoSlugPath = FsPath.make('git:repo-slug')
-const tagAnnotationPath = FsPath.make('git:tag-annotation')
-const tagCommitPath = FsPath.make('git:tag-commit')
-const tagTreePath = FsPath.make('git:tag-tree')
 const diffPath = RelativePath.make('git:diff')
 
 const headRef = GitRef.make('HEAD')
@@ -169,7 +166,7 @@ const makeGitPort = (
   ): Effect.Effect<A, TagRefusal> =>
     capture<A, TagRefusal>(
       args,
-      () => TagCapturedMalformed.make({ path }),
+      tagGitFailed(args),
       (stdout) =>
         Result.mapError(
           S.decodeUnknownResult(schema)(shape(stdout)),
@@ -179,9 +176,10 @@ const makeGitPort = (
 
   const readRepoSlug = (): Effect.Effect<RepoSlug, TagRefusal> =>
     Effect.gen(function*() {
-      const captured = yield* git(['remote', 'get-url', 'origin'])
+      const args = ['remote', 'get-url', 'origin']
+      const captured = yield* git(args)
       if (Result.isFailure(captured)) {
-        return yield* Effect.fail(TagCapturedMalformed.make({ path: repoSlugPath }))
+        return yield* Effect.fail(tagGitFailed(args)(captured.failure))
       }
       const slug = remoteSlug(captured.success.trim())
       if (Option.isNone(slug)) {
@@ -277,13 +275,14 @@ const makeGitPort = (
         if (tags.length === 0) {
           return Count.make(0)
         }
-        yield* run(['push', remote, ...tags.map((tag) => `refs/tags/${tag}`)], () =>
-          TagCapturedMalformed.make({ path: pushTagsPath }))
+        const args = ['push', remote, ...tags.map((tag) => `refs/tags/${tag}`)]
+        yield* run(args, tagGitFailed(args))
         return Count.make(tags.length)
       }),
     writeTag: (tag: ReleaseTag, message: string): Effect.Effect<ReleaseTag, TagRefusal> =>
       Effect.gen(function*() {
-        yield* run(['tag', '-a', tag, '-m', message], () => TagCapturedMalformed.make({ path: writeTagPath }))
+        const args = ['tag', '-a', tag, '-m', message]
+        yield* run(args, tagGitFailed(args))
         return tag
       }),
     tagAnnotation: (
@@ -291,20 +290,20 @@ const makeGitPort = (
       tag: ReleaseTag,
     ): Effect.Effect<Option.Option<string>, TagRefusal> =>
       Effect.gen(function*() {
-        yield* run(
-          ['fetch', '--force', '--no-tags', remote, `+refs/tags/${tag}:refs/tags/${tag}`],
-          () => TagCapturedMalformed.make({ path: tagAnnotationPath }),
-        )
-        const kind = yield* git(['cat-file', '-t', `refs/tags/${tag}`])
+        const fetchArgs = ['fetch', '--force', '--no-tags', remote, `+refs/tags/${tag}:refs/tags/${tag}`]
+        yield* run(fetchArgs, tagGitFailed(fetchArgs))
+        const kindArgs = ['cat-file', '-t', `refs/tags/${tag}`]
+        const kind = yield* git(kindArgs)
         if (Result.isFailure(kind)) {
-          return yield* Effect.fail(TagCapturedMalformed.make({ path: tagAnnotationPath }))
+          return yield* Effect.fail(tagGitFailed(kindArgs)(kind.failure))
         }
         if (kind.success.trim() !== 'tag') {
           return Option.none()
         }
-        const body = yield* git(['cat-file', '-p', `refs/tags/${tag}`])
+        const bodyArgs = ['cat-file', '-p', `refs/tags/${tag}`]
+        const body = yield* git(bodyArgs)
         if (Result.isFailure(body)) {
-          return yield* Effect.fail(TagCapturedMalformed.make({ path: tagAnnotationPath }))
+          return yield* Effect.fail(tagGitFailed(bodyArgs)(body.failure))
         }
         return Option.some(annotationOf(body.success))
       }),
@@ -313,10 +312,8 @@ const makeGitPort = (
       tag: ReleaseTag,
     ): Effect.Effect<Option.Option<CommitSha>, TagRefusal> =>
       Effect.gen(function*() {
-        yield* run(
-          ['fetch', '--force', '--no-tags', remote, `+refs/tags/${tag}:refs/tags/${tag}`],
-          () => TagCapturedMalformed.make({ path: tagCommitPath }),
-        )
+        const fetchArgs = ['fetch', '--force', '--no-tags', remote, `+refs/tags/${tag}:refs/tags/${tag}`]
+        yield* run(fetchArgs, tagGitFailed(fetchArgs))
         const peeled = yield* git(['rev-parse', '--verify', `refs/tags/${tag}^{commit}`])
         if (Result.isFailure(peeled)) {
           return Option.none()
@@ -328,10 +325,8 @@ const makeGitPort = (
       tag: ReleaseTag,
     ): Effect.Effect<Option.Option<TaggedTree>, TagRefusal> =>
       Effect.gen(function*() {
-        yield* run(
-          ['fetch', '--force', '--no-tags', remote, `+refs/tags/${tag}:refs/tags/${tag}`],
-          () => TagCapturedMalformed.make({ path: tagTreePath }),
-        )
+        const fetchArgs = ['fetch', '--force', '--no-tags', remote, `+refs/tags/${tag}:refs/tags/${tag}`]
+        yield* run(fetchArgs, tagGitFailed(fetchArgs))
         const peeled = yield* git(['rev-parse', '--verify', `refs/tags/${tag}^{commit}`])
         if (Result.isFailure(peeled)) {
           return Option.none()
@@ -341,9 +336,10 @@ const makeGitPort = (
           return Option.none()
         }
         const commit = decoded.value
-        const listed = yield* git(['ls-tree', '-r', '--name-only', commit])
+        const listedArgs = ['ls-tree', '-r', '--name-only', commit]
+        const listed = yield* git(listedArgs)
         if (Result.isFailure(listed)) {
-          return yield* Effect.fail(TagCapturedMalformed.make({ path: tagTreePath }))
+          return yield* Effect.fail(tagGitFailed(listedArgs)(listed.failure))
         }
         const paths = listed.success
           .split('\n')
