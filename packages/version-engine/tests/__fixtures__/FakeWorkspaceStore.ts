@@ -1,4 +1,5 @@
 import {
+  type ChangelogStorage,
   FsPath,
   type Member,
   type RelativePath,
@@ -16,6 +17,7 @@ export const makeFakeWorkspaceStore = (
   members: ReadonlyArray<Member>,
   root: RepoRoot,
   files: ReadonlyMap<RelativePath, string> = new Map(),
+  storage: ChangelogStorage = 'registry',
 ): { readonly layer: Layer.Layer<WorkspaceStore>; readonly state: FakeWorkspaceState } => {
   const liveMembers = [...members]
   const liveFiles = new Map(files)
@@ -38,7 +40,7 @@ export const makeFakeWorkspaceStore = (
         }
         return Effect.succeed({ path, text })
       }),
-    changelogStorage: () => Effect.succeed('registry' as const),
+    changelogStorage: () => Effect.succeed(storage),
   })
   return { layer, state: { members: liveMembers, files: liveFiles } }
 }

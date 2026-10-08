@@ -20,17 +20,28 @@ export const withVersionSection = (
   version: PackageVersion,
   summary: string,
 ): string => {
-  const section = `## ${version}\n\n${summary.trim()}\n`
-  if (existing === undefined || existing.trim() === '') return `# ${name}\n\n${section}`
-  const [first = '', ...after] = existing.split('\n')
-  if (!first.startsWith('# ')) return withRest(section, existing)
-  return `${first}\n\n${withRest(section, after.join('\n'))}`
+  const section = [`## ${version}`, '', summary.trim()]
+  if (existing === undefined || existing.trim() === '') return [`# ${name}`, '', ...section, ''].join('\n')
+  const lines = existing.replaceAll('\r\n', '\n').split('\n')
+  if (lines.some((line) => line.trimEnd() === `## ${version}`)) return existing
+  const eol = lineEndingOf(existing)
+  const firstSection = lines.findIndex((line) => line.startsWith('## '))
+  if (firstSection === -1) return [...trimmedLines(lines), '', ...section, ''].join(eol)
+  const head = trimmedLines(lines.slice(0, firstSection))
+  const sections = trimmedLines(lines.slice(firstSection))
+  if (head.length === 0) return [...section, '', ...sections, ''].join(eol)
+  return [...head, '', ...section, '', ...sections, ''].join(eol)
 }
 
-const withRest = (section: string, rest: string): string => {
-  const kept = rest.trim()
-  if (kept === '') return section
-  return `${section}\n${kept}\n`
+const lineEndingOf = (text: string): string => {
+  if (text.includes('\r\n')) return '\r\n'
+  return '\n'
+}
+
+const trimmedLines = (lines: ReadonlyArray<string>): ReadonlyArray<string> => {
+  const text = lines.join('\n').trim()
+  if (text === '') return []
+  return text.split('\n')
 }
 
 export const releaseNotesOf = (
@@ -39,7 +50,7 @@ export const releaseNotesOf = (
   version: PackageVersion,
 ): string | undefined => {
   if (storage === 'registry') return changelog
-  const lines = changelog.split('\n')
+  const lines = changelog.replaceAll('\r\n', '\n').split('\n')
   const start = lines.findIndex((line) => line.trimEnd() === `## ${version}`)
   if (start === -1) return undefined
   const next = lines.findIndex((line, index) => index > start && line.startsWith('## '))
