@@ -73,7 +73,7 @@ jobs:
 
       - name: Open or update the release PR
         env:
-          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: nix develop --command github-release-management pr
 
       - name: Run the caller's CI on the release PR
