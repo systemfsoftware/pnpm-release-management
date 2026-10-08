@@ -1,4 +1,5 @@
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers'
+import { releaseToolSteps, workflowEnvOf } from './workflow-env.js'
 
 export const IMAGE = 'pnpm-release-management-e2e:local'
 export const BINS_DIR = '/opt/prm'
@@ -91,15 +92,20 @@ export const parseJson = (text: string): unknown => {
   return parsed
 }
 
-const DEFAULT_ENV: Readonly<Record<string, string>> = {
+const RUNNER_ENV: Readonly<Record<string, string>> = {
   NO_COLOR: '1',
   GITHUB_API_URL,
-  GITHUB_TOKEN,
   GITHUB_REPOSITORY,
 }
 
+const WORKFLOW_EXPRESSIONS: Readonly<Record<string, string>> = {
+  'github.token': GITHUB_TOKEN,
+}
+
+const RELEASE_TOOL_STEPS = await releaseToolSteps()
+
 const shellScript = (command: string, options: ExecOptions): string => {
-  const lines = Object.entries({ ...DEFAULT_ENV, ...options.env }).map(([name, value]) =>
+  const lines = Object.entries({ ...RUNNER_ENV, ...options.env }).map(([name, value]) =>
     `export ${name}=${quote(value)}`
   )
   if (options.cwd !== undefined) lines.push(`cd ${quote(options.cwd)}`)
@@ -160,6 +166,7 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
     return run(parts.join(' '), {
       cwd: FIXTURE,
       ...options,
+      env: { ...workflowEnvOf(RELEASE_TOOL_STEPS, WORKFLOW_EXPRESSIONS, app, subcommand, args), ...options.env },
     })
   }
 
