@@ -144,6 +144,8 @@ export const renderRefusal = (refusal: AppRefusal): Effect.Effect<void, never, R
       ManifestUnreadable: (unreadable) => refuse(fields('ManifestUnreadable', [['path', unreadable.path]])),
       ManifestInvalid: (invalid) =>
         refuse(fields('ManifestInvalid', [['path', invalid.path], ['reason', invalid.reason]])),
+      CommandUnstartable: (unstartable) =>
+        refuse(fields('CommandUnstartable', [['command', unstartable.command], ['reason', unstartable.reason]])),
       VersionIntentMalformed: (malformed) => refuse(fields('VersionIntentMalformed', [['path', malformed.path]])),
       VersionUnknownPackage: (unknown) => refuse(fields('VersionUnknownPackage', [['package', unknown.package]])),
       VersionSurfaceMissing: (missing) => refuse(fields('VersionSurfaceMissing', [['path', missing.path]])),

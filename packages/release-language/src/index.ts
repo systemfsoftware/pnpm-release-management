@@ -183,6 +183,7 @@ export {
 } from './Version.schema.js'
 export {
   ChangelogStorage,
+  CommandUnstartable,
   Count,
   FsPath,
   GitRef,

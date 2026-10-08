@@ -117,5 +117,11 @@ export const ManifestInvalid = S.TaggedStruct('ManifestInvalid', {
 })
 export type ManifestInvalid = S.Schema.Type<typeof ManifestInvalid>
 
-export const MemberRefusal = S.Union([ManifestUnreadable, ManifestInvalid])
+export const CommandUnstartable = S.TaggedStruct('CommandUnstartable', {
+  command: S.NonEmptyString,
+  reason: S.String,
+})
+export type CommandUnstartable = S.Schema.Type<typeof CommandUnstartable>
+
+export const MemberRefusal = S.Union([ManifestUnreadable, ManifestInvalid, CommandUnstartable])
 export type MemberRefusal = S.Schema.Type<typeof MemberRefusal>
