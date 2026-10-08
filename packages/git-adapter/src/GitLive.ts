@@ -281,7 +281,7 @@ const makeGitPort = (
       }),
     writeTag: (tag: ReleaseTag, message: string): Effect.Effect<ReleaseTag, TagRefusal> =>
       Effect.gen(function*() {
-        const args = ['tag', '-a', tag, '-m', message]
+        const args = [...RELEASE_BOT_IDENTITY, 'tag', '-a', tag, '-m', message]
         yield* run(args, tagGitFailed(args))
         return tag
       }),

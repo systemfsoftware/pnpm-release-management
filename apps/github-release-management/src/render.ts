@@ -24,6 +24,7 @@ import {
   type PullRequestRefusal,
   type ReleaseLedgerEntry,
   type ReleaseTag,
+  type TagAtOtherCommit,
   type TagRefusal,
   type TarballRefusal,
   type VersionBurned,
@@ -60,6 +61,7 @@ export type TagFailure =
   | LegacyTagUnverified
   | TarballRefusal
   | VersionBurned
+  | TagAtOtherCommit
 
 export type ReleaseFailure =
   | PlatformRefusal
@@ -189,6 +191,8 @@ export const renderTagRefusal = (refusal: TagFailure): Effect.Effect<void, never
           `refused: tarball-unreadable, path: ${unreadable.path}, reason: ${unreadable.reason}`,
         VersionBurned: (burned) =>
           `refused: version-burned, package: ${burned.package}@${burned.version}, url: ${burned.url}, status: ${burned.status}, fetchedAt: ${burned.fetchedAt}`,
+        TagAtOtherCommit: (other) =>
+          `refused: tag-at-other-commit, tag: ${other.tag} already exists on the remote at ${other.found}, this release tags ${other.expected}`,
       }),
     ),
   )

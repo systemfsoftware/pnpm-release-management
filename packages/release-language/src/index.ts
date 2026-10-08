@@ -171,6 +171,7 @@ export {
   TagGitFailed,
   TagRefusal,
 } from './Tag.schema.js'
+export { TagAtOtherCommit } from './TagAtOtherCommit.schema.js'
 export { TarballPort } from './TarballPort.js'
 export {
   ChangelogFile,
