@@ -16,6 +16,7 @@ export interface FakeGitState {
   readonly owner?: string
   readonly repo?: string
   readonly annotation?: string
+  readonly trackedChanges?: number
 }
 
 export interface FakeGitCalls {
@@ -42,7 +43,8 @@ export const makeFakeGit = (state: FakeGitState = {}) => {
     headSha: () => Effect.succeed(CommitSha.make('deadbeef')),
     changedPaths: () => Effect.succeed([]),
     remoteTags: () => Effect.succeed([...tags]),
-    commitAll: (message) => {
+    trackedChanges: () => Effect.succeed(Count.make(state.trackedChanges ?? 0)),
+    commitRelease: (message) => {
       calls.commits.push(message)
       return Effect.succeed(CommitSha.make('deadbeef'))
     },

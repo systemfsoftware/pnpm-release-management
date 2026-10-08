@@ -14,7 +14,6 @@
     "@systemfsoftware/process-adapter": "workspace:*",
     "@systemfsoftware/release-language": "workspace:*",
     "@systemfsoftware/tarball-adapter": "workspace:*",
-    "@systemfsoftware/version-engine": "workspace:*",
     "@systemfsoftware/workspace-adapter": "workspace:*",
     "effect": "^4.0.0-rc.112"
   },

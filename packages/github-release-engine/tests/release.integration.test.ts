@@ -1136,18 +1136,18 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const branch = GitRef.make('changeset-release/main')
     const base = GitRef.make('main')
     const title = PrTitle.make('chore(release): version packages')
-    const changesets = makeFakeChangesetStore([intentPath('bright-panda-runs')])
+    const changesets = makeFakeChangesetStore([])
     const workspace = makeFakeWorkspaceStore({ members: [], files: {} })
-    const git = makeFakeGit({})
+    const git = makeFakeGit({ trackedChanges: 3 })
     const forge = makeFakeForge()
     const live = Layer.mergeAll(changesets, workspace, git, forge.layer)
     scenario(
       'A dirty branch without a request opens one with the label',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
-        Given('pending intents with no open request')(
+        Given('a bumped tree with no open request')(
           'input',
-          () => Effect.succeed({ title, base, branch, labels: [releaseLabel] }),
+          () => Effect.succeed({ title, base, branch, labels: [releaseLabel], changelogDir }),
         ),
         When('syncing the release request')(
           'outcome',
@@ -1186,9 +1186,9 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const branch = GitRef.make('changeset-release/main')
     const base = GitRef.make('main')
     const title = PrTitle.make('chore(release): version packages')
-    const changesets = makeFakeChangesetStore([intentPath('bright-panda-runs')])
+    const changesets = makeFakeChangesetStore([])
     const workspace = makeFakeWorkspaceStore({ members: [], files: {} })
-    const git = makeFakeGit({})
+    const git = makeFakeGit({ trackedChanges: 3 })
     const forge = makeFakeForge({
       pullRequests: [{ number: 12, head: 'changeset-release/main', title: 'old' }],
     })
@@ -1197,9 +1197,9 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
       'A dirty branch with a request refreshes it with the label',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
-        Given('pending intents with an open request')(
+        Given('a bumped tree with an open request')(
           'input',
-          () => Effect.succeed({ title, base, branch, labels: [releaseLabel] }),
+          () => Effect.succeed({ title, base, branch, labels: [releaseLabel], changelogDir }),
         ),
         When('syncing the release request')(
           'outcome',
@@ -1247,9 +1247,9 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
       'A clean branch with a request closes it and deletes the branch',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
-        Given('no pending intents with an open request')(
+        Given('an unchanged tree with an open request')(
           'input',
-          () => Effect.succeed({ title, base, branch, labels: [releaseLabel] }),
+          () => Effect.succeed({ title, base, branch, labels: [releaseLabel], changelogDir }),
         ),
         When('syncing the release request')(
           'outcome',
@@ -1294,9 +1294,9 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
       'A clean branch without a request rests vacant',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
-        Given('no pending intents and no open request')(
+        Given('an unchanged tree and no open request')(
           'input',
-          () => Effect.succeed({ title, base, branch, labels: [releaseLabel] }),
+          () => Effect.succeed({ title, base, branch, labels: [releaseLabel], changelogDir }),
         ),
         When('syncing the release request')(
           'outcome',
@@ -1340,7 +1340,7 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
       Gherkin.Do.pipe(
         Given('pending intents with the branch set to the base')(
           'input',
-          () => Effect.succeed({ title, base, branch: base, labels: [releaseLabel] }),
+          () => Effect.succeed({ title, base, branch: base, labels: [releaseLabel], changelogDir }),
         ),
         When('syncing the release request')(
           'outcome',
@@ -1357,6 +1357,8 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
               Match.value(refusal).pipe(
                 Match.tag('PullRequestHeadInvalid', () => undefined),
                 Match.tag('PullRequestBodyUnreadable', () => failUnexpected('expected PullRequestHeadInvalid')),
+                Match.tag('PullRequestUnversioned', () => failUnexpected('expected PullRequestHeadInvalid')),
+                Match.tag('PullRequestTreeUnreadable', () => failUnexpected('expected PullRequestHeadInvalid')),
                 Match.exhaustive,
               )
             }),
@@ -1387,6 +1389,7 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
             base,
             branch,
             labels: [releaseLabel],
+            changelogDir,
             bodyFile: RelativePath.make('notes/missing.md'),
           })),
         When('syncing the release request')(
@@ -1406,6 +1409,8 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
                   expect(forge.calls.createdPullRequests.length).toEqual(0)
                 }),
                 Match.tag('PullRequestHeadInvalid', () => failUnexpected('expected PullRequestBodyUnreadable')),
+                Match.tag('PullRequestUnversioned', () => failUnexpected('expected PullRequestBodyUnreadable')),
+                Match.tag('PullRequestTreeUnreadable', () => failUnexpected('expected PullRequestBodyUnreadable')),
                 Match.exhaustive,
               )
             }),

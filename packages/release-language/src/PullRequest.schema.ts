@@ -1,5 +1,5 @@
 import * as S from 'effect/Schema'
-import { FsPath, GitRef } from './Workspace.schema.js'
+import { Count, FsPath, GitRef } from './Workspace.schema.js'
 
 export const ReleaseLabel = S.NonEmptyString.pipe(S.brand('ReleaseLabel'))
 export type ReleaseLabel = S.Schema.Type<typeof ReleaseLabel>
@@ -55,8 +55,20 @@ export type PullRequestHeadInvalid = S.Schema.Type<
   typeof PullRequestHeadInvalid
 >
 
+export const PullRequestUnversioned = S.TaggedStruct('PullRequestUnversioned', {
+  pending: Count,
+})
+export type PullRequestUnversioned = S.Schema.Type<typeof PullRequestUnversioned>
+
+export const PullRequestTreeUnreadable = S.TaggedStruct('PullRequestTreeUnreadable', {
+  reason: S.String,
+})
+export type PullRequestTreeUnreadable = S.Schema.Type<typeof PullRequestTreeUnreadable>
+
 export const PullRequestRefusal = S.Union([
   PullRequestBodyUnreadable,
   PullRequestHeadInvalid,
+  PullRequestUnversioned,
+  PullRequestTreeUnreadable,
 ])
 export type PullRequestRefusal = S.Schema.Type<typeof PullRequestRefusal>

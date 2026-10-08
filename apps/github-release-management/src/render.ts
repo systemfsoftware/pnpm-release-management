@@ -29,16 +29,9 @@ import {
   type VersionState,
   type VersionUnknownPackage,
 } from '@systemfsoftware/release-language'
-import type { VersionDecision } from '@systemfsoftware/version-engine'
 import { Effect, FileSystem } from 'effect'
 import * as Match from 'effect/Match'
-import {
-  type BoundaryRefusal,
-  type BumpRefusal,
-  OutputUnreadable,
-  OutputUnwritable,
-  type VersionStageRefused,
-} from './boundary.schema.js'
+import { type BoundaryRefusal, OutputUnreadable, OutputUnwritable } from './boundary.schema.js'
 
 type PlatformRefusal = ConfigRefusal | BoundaryRefusal | WorkspaceRootNotAbsolute
 
@@ -74,9 +67,9 @@ export type ReleaseFailure =
 export type PullRequestFailure =
   | PlatformRefusal
   | IntentRefusal
+  | MemberRefusal
   | TagRefusal
   | PullRequestRefusal
-  | VersionStageRefused
 
 const refuse = (text: string): Effect.Effect<void, never, Reporter> =>
   Effect.flatMap(Reporter, (reporter) => Effect.andThen(reporter.annotateError(text), () => reporter.exitCode(1)))
@@ -108,29 +101,6 @@ const appendFile = (
       Effect.mapError((cause) => OutputUnwritable.make({ path: FsPath.make(path), reason: cause.message })),
     )
   })
-
-export const versionStageText = (refusal: BumpRefusal): string =>
-  Match.value(refusal).pipe(
-    Match.tagsExhaustive({
-      ChangelogUnreadable: (unreadable) => `ChangelogUnreadable: path=${unreadable.path}`,
-      ChangelogUnwritable: (unwritable) => `ChangelogUnwritable: path=${unwritable.path} reason=${unwritable.reason}`,
-      IntentFrontmatterMalformed: (malformed) => `IntentFrontmatterMalformed: path=${malformed.path}`,
-      IntentUnknownPackage: (unknown) => `IntentUnknownPackage: package=${unknown.package}`,
-      IntentSlugTaken: (taken) => `IntentSlugTaken: slug=${taken.slug}`,
-      ManifestUnreadable: (unreadable) => `ManifestUnreadable: path=${unreadable.path}`,
-      ManifestInvalid: (invalid) => `ManifestInvalid: path=${invalid.path} reason=${invalid.reason}`,
-      CommandRefused: (refusedCommand) =>
-        `CommandRefused: command=${refusedCommand.command.program} ${
-          refusedCommand.command.args.join(' ')
-        } reason=${refusedCommand.reason}`,
-      RootManifestUnwritable: (unwritable) => `RootManifestUnwritable: path=${unwritable.path}`,
-      VersionIntentMalformed: (malformed) => `VersionIntentMalformed: path=${malformed.path}`,
-      VersionSurfaceMissing: (missing) => `VersionSurfaceMissing: path=${missing.path}`,
-      VersionLockStale: (stale) => `VersionLockStale: path=${stale.path}`,
-      VersionCargoPackageMissing: (missing) => `VersionCargoPackageMissing: path=${missing.path}`,
-      VersionUnknownPackage: (unknown) => `VersionUnknownPackage: package=${unknown.package}`,
-    }),
-  )
 
 export const renderPlanRefusal = (refusal: PlanFailure): Effect.Effect<void, never, Reporter> =>
   refuse(
@@ -251,12 +221,16 @@ export const renderPullRequestRefusal = (
         WorkspaceRootNotAbsolute: (notAbsolute) => `refused: workspace-root-not-absolute, path: ${notAbsolute.given}`,
         IntentFrontmatterMalformed: (malformed) => `refused: intent-frontmatter-malformed, path: ${malformed.path}`,
         IntentUnknownPackage: () => 'refused: intent-unknown-package',
+        ManifestUnreadable: (unreadable) => `refused: manifest-unreadable, path: ${unreadable.path}`,
+        ManifestInvalid: (invalid) => `refused: manifest-invalid, path: ${invalid.path}`,
         IntentSlugTaken: () => 'refused: intent-slug-taken',
         TagCapturedMalformed: (malformed) => `refused: tag-captured-malformed, path: ${malformed.path}`,
         TagExcludedMalformed: (malformed) => `refused: tag-excluded-malformed, path: ${malformed.path}`,
         PullRequestBodyUnreadable: (unreadable) => `cannot read body file: ${unreadable.path}`,
         PullRequestHeadInvalid: (invalid) => `invalid pull request head: ${invalid.branch}`,
-        VersionStageRefused: (stage) => versionStageText(stage.refusal),
+        PullRequestUnversioned: (unversioned) =>
+          `refused: pull-request-unversioned, pending intents: ${unversioned.pending}. Run \`version-management bump\` first: pr opens the release PR from the bumped tree`,
+        PullRequestTreeUnreadable: (unreadable) => `cannot read the working tree: ${unreadable.reason}`,
       }),
     ),
   )
@@ -481,22 +455,13 @@ export const renderPullRequest = (decision: PullRequestDecision): Effect.Effect<
       PullRequestUpdated: (updated) => emit(`updated release PR #${updated.number}`),
       PullRequestClosed: (closed) =>
         Effect.gen(function*() {
-          yield* emit('no pending change intents — nothing to release')
+          yield* emit('no version changes on the tree — nothing to release')
           if (closed.branch.deleted) {
             yield* note(`closed release PR #${closed.number} and deleted ${closed.branch.branch}`)
             return
           }
           yield* note(`closed release PR #${closed.number}; ${closed.branch.branch} was already gone`)
         }),
-      PullRequestVacant: () => emit('no pending change intents — nothing to release'),
-    }),
-  )
-
-export const renderVersion = (decision: VersionDecision): Effect.Effect<void, never, Reporter> =>
-  Match.value(decision).pipe(
-    Match.tagsExhaustive({
-      VersionBumped: () => emit('versioned packages'),
-      VersionConsumed: () => emit('consumed intents without a version bump'),
-      VersionIdle: () => note('no change intents; nothing to version'),
+      PullRequestVacant: () => emit('no version changes on the tree — nothing to release'),
     }),
   )
