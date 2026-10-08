@@ -21,6 +21,7 @@ export {
 } from './github-release.workflow.js'
 export { verifyIntegrity } from './integrity.js'
 export { IntegrityCheck } from './integrity.schema.js'
+export { compareVersions } from './legacy.js'
 export { PlanDeferredUnknown, PlanRelease, PlanSettled, PlanVersion } from './plan-release.workflow.js'
 export { planCell, PlanRequest } from './plan.js'
 export { PlanDecision, PlanReport } from './plan.schema.js'
