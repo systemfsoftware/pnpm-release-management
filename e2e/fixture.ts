@@ -26,7 +26,8 @@ const ROOT_MANIFEST = `{
   "name": "@e2e/root",
   "private": true,
   "version": "1.0.0",
-  "packageManager": "pnpm@11.27.0"
+  "packageManager": "pnpm@11.27.0",
+  "scripts": { "bootstrap": "pnpm install --frozen-lockfile" }
 }
 `
 

@@ -5,7 +5,7 @@ import * as S from 'effect/Schema'
 import { parse } from 'yaml'
 import { Workflow } from './workflow.schema.js'
 
-const RELEASE_WORKFLOW = new URL('../.github/workflows/release.yml', import.meta.url).pathname
+export type WorkflowFile = 'release.yml' | 'changeset-check.yml'
 
 const TOOL_COMMAND = /nix develop --command "?(?:\S*\/)?([\w-]+)"? (\S+)([^\n]*(?:\\\n[^\n]*)*)/g
 
@@ -21,6 +21,7 @@ export interface ToolStep {
 export interface RunStep {
   readonly id: string | undefined
   readonly label: string
+  readonly condition: string | undefined
   readonly run: string
   readonly env: Readonly<Record<string, string>>
 }
@@ -31,11 +32,11 @@ const flagsOf = (args: string): ReadonlyArray<string> =>
 const sameFlags = (left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean =>
   left.length === right.length && left.every((flag, index) => flag === right[index])
 
-export const releaseWorkflow = (): Promise<Workflow> =>
+export const readWorkflow = (file: WorkflowFile): Promise<Workflow> =>
   Effect.runPromise(
     Effect.gen(function*() {
       const fs = yield* FileSystem
-      const text = yield* fs.readFileString(RELEASE_WORKFLOW)
+      const text = yield* fs.readFileString(new URL(`../.github/workflows/${file}`, import.meta.url).pathname)
       return yield* S.decodeUnknownEffect(Workflow)(parse(text))
     }).pipe(Effect.provide(NodeServices.layer)),
   )
@@ -56,10 +57,16 @@ export const toolStepsOf = (workflow: Workflow): ReadonlyArray<ToolStep> =>
 
 export const runStepsOf = (workflow: Workflow, job: string): ReadonlyArray<RunStep> => {
   const steps = workflow.jobs[job]?.steps
-  if (steps === undefined) throw new Error(`release.yml has no job ${job}`)
+  if (steps === undefined) throw new Error(`the workflow has no job ${job}`)
   return steps.flatMap((step) => {
     if (step.run === undefined) return []
-    return [{ id: step.id, label: step.id ?? step.name ?? step.run, run: step.run, env: step.env ?? {} }]
+    return [{
+      id: step.id,
+      label: step.id ?? step.name ?? step.run,
+      condition: step.if,
+      run: step.run,
+      env: step.env ?? {},
+    }]
   })
 }
 
@@ -70,10 +77,42 @@ export const resolveExpressions = (
   value.replaceAll(/\$\{\{\s*([^}]+?)\s*\}\}/g, (_, expression: string) => {
     const resolved = lookup(expression)
     if (resolved === undefined) {
-      throw new Error(`release.yml uses \${{ ${expression} }}, which the e2e cannot resolve`)
+      throw new Error(`the workflow uses \${{ ${expression} }}, which the e2e cannot resolve`)
     }
     return resolved
   })
+
+const truthy = (value: string): boolean => value !== '' && value !== 'false' && value !== '0'
+
+const operandOf = (text: string, lookup: (expression: string) => string | undefined): string => {
+  const literal = text.match(/^'([^']*)'$/)
+  if (literal?.[1] !== undefined) return literal[1]
+  const resolved = lookup(text)
+  if (resolved === undefined) throw new Error(`the workflow's if: reads ${text}, which the e2e cannot resolve`)
+  return resolved
+}
+
+const termHolds = (term: string, lookup: (expression: string) => string | undefined): boolean => {
+  const comparison = term.match(/^(.+?)\s*(==|!=)\s*(.+)$/)
+  if (comparison?.[1] !== undefined && comparison[2] !== undefined && comparison[3] !== undefined) {
+    const same = operandOf(comparison[1], lookup) === operandOf(comparison[3], lookup)
+    return same === (comparison[2] === '==')
+  }
+  if (term.startsWith('!')) return !truthy(operandOf(term.slice(1).trim(), lookup))
+  return truthy(operandOf(term, lookup))
+}
+
+export const conditionHolds = (
+  condition: string | undefined,
+  lookup: (expression: string) => string | undefined,
+): boolean => {
+  if (condition === undefined) return true
+  const expression = condition.trim().replace(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/, '$1')
+  if (/\|\||[()]/.test(expression)) {
+    throw new Error(`the e2e evaluates only && of comparisons and negations in if:, got: ${condition}`)
+  }
+  return expression.split('&&').every((term) => termHolds(term.trim(), lookup))
+}
 
 const stepsRunning = (
   steps: ReadonlyArray<ToolStep>,

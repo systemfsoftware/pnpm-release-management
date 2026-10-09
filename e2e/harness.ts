@@ -1,5 +1,14 @@
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers'
-import { releaseWorkflow, resolveExpressions, runStepsOf, toolStepsOf, workflowEnvOf } from './workflow-env.js'
+import {
+  conditionHolds,
+  readWorkflow,
+  resolveExpressions,
+  runStepsOf,
+  toolStepsOf,
+  workflowEnvOf,
+  type WorkflowFile,
+} from './workflow-env.js'
+import type { Workflow } from './workflow.schema.js'
 
 export const IMAGE = 'pnpm-release-management-e2e:local'
 export const BINS_DIR = '/opt/prm'
@@ -76,6 +85,23 @@ echo "${app} at ${CALLER_LOCK_REV}, the revision the caller's flake.lock pins, r
 exit 1
 `
 
+const SANDBOX_STUB = `#!/bin/sh
+if [ "$1" = -- ]; then shift; fi
+case "$1" in
+  -*)
+    echo "sandbox stub: only 'sandbox [--] COMMAND' is modelled, got: sandbox $*" >&2
+    exit 2
+    ;;
+  /*)
+    if [ "$(realpath -m "$1")" != "$1" ]; then
+      echo "bwrap: execvp $1: No such file or directory (the sandbox binds the store paths a command resolves to, not the symlinks naming it)" >&2
+      exit 1
+    fi
+    ;;
+esac
+exec "$@"
+`
+
 export const REDIRECTED_HOSTS = [
   { host: 'api.github.com', ipAddress: '127.0.0.1' },
   { host: 'registry.npmjs.org', ipAddress: '127.0.0.1' },
@@ -144,7 +170,11 @@ export interface World {
   must(command: string, options?: ExecOptions): Promise<ExecResult>
   fails(command: string, options?: ExecOptions): Promise<ExecResult>
   tool(app: string, subcommand: string, args?: string, options?: ExecOptions): Promise<ExecResult>
-  job(name: string): Promise<ReadonlyArray<StepResult>>
+  job(
+    name: string,
+    workflow?: WorkflowFile,
+    inputs?: Readonly<Record<string, string>>,
+  ): Promise<ReadonlyArray<StepResult>>
   write(path: string, content: string): Promise<void>
   read(path: string): Promise<string>
   github<T>(path: string, decode: (input: unknown) => T): Promise<GitHubResponse<T>>
@@ -173,10 +203,14 @@ const WORKFLOW_EXPRESSIONS: Readonly<Record<string, string>> = {
   'inputs.artifacts-dir': ARTIFACTS_DIR,
   'job.workflow_repository': WORKFLOW_REPOSITORY,
   'job.workflow_sha': WORKFLOW_SHA,
+  'runner.environment': 'self-hosted',
 }
 
-const RELEASE_WORKFLOW = await releaseWorkflow()
-const RELEASE_TOOL_STEPS = toolStepsOf(RELEASE_WORKFLOW)
+const WORKFLOWS: Readonly<Record<WorkflowFile, Workflow>> = {
+  'release.yml': await readWorkflow('release.yml'),
+  'changeset-check.yml': await readWorkflow('changeset-check.yml'),
+}
+const RELEASE_TOOL_STEPS = toolStepsOf(WORKFLOWS['release.yml'])
 
 const outputsOf = (text: string): Record<string, string> =>
   Object.fromEntries(
@@ -205,6 +239,7 @@ const RUNNER_SETUP = [
   installScript(`${RUNNER_BIN}/gh`, GH_STUB),
   installScript(`${RUNNER_BIN}/nix`, NIX_STUB),
   ...RELEASE_APPS.map((app) => installScript(`${CALLER_DEVSHELL_BIN}/${app}`, callerLockTool(app))),
+  installScript(`${CALLER_DEVSHELL_BIN}/sandbox`, SANDBOX_STUB),
 ].join('\n')
 
 export const makeWorld = (container: StartedTestContainer, listener: Listener): World => {
@@ -264,19 +299,34 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
     })
   }
 
-  const job = async (name: string): Promise<ReadonlyArray<StepResult>> => {
+  const job = async (
+    name: string,
+    workflow: WorkflowFile = 'release.yml',
+    inputs: Readonly<Record<string, string>> = {},
+  ): Promise<ReadonlyArray<StepResult>> => {
     await must(RUNNER_SETUP)
     const githubEnv = `${STEP_DIR}/${name}.env`
     await must(`: > ${quote(githubEnv)}`)
     let jobEnv: Record<string, string> = {}
     const outputs: Record<string, Record<string, string>> = {}
-    const lookup = (expression: string): string | undefined => {
+    const operand = (expression: string): string | undefined => {
       const step = expression.match(/^steps\.([\w-]+)\.outputs\.([\w-]+)$/)
       if (step?.[1] !== undefined && step[2] !== undefined) return outputs[step[1]]?.[step[2]] ?? ''
+      const input = expression.match(/^inputs\.([\w-]+)$/)
+      if (input?.[1] !== undefined && inputs[input[1]] !== undefined) return inputs[input[1]]
       return WORKFLOW_EXPRESSIONS[expression]
     }
+    const lookup = (expression: string): string | undefined => {
+      for (const alternative of expression.split('||').map((part) => part.trim())) {
+        const value = operand(alternative)
+        if (value === undefined) return undefined
+        if (value !== '') return value
+      }
+      return ''
+    }
     const results: Array<StepResult> = []
-    for (const [index, step] of runStepsOf(RELEASE_WORKFLOW, name).entries()) {
+    for (const [index, step] of runStepsOf(WORKFLOWS[workflow], name).entries()) {
+      if (!conditionHolds(step.condition, lookup)) continue
       const script = `${STEP_DIR}/${name}-${index}.sh`
       const output = `${STEP_DIR}/${name}-${index}.output`
       await writeFile(script, resolveExpressions(step.run, lookup))
