@@ -12,7 +12,8 @@
         "tsconfig.json",
         "tsconfig.*.json",
         "package.json",
-        "tsdown.config.*"
+        "tsdown.config.*",
+        "$TURBO_ROOT$/config/**"
       ],
       "outputs": [
         "dist/**"
@@ -40,6 +41,7 @@
         "$TURBO_DEFAULT$",
         "tsconfig.json",
         "tsconfig.*.json",
+        "$TURBO_ROOT$/config/**",
         "!**/*.md"
       ],
       "outputs": [],
@@ -52,6 +54,7 @@
       "outputLogs": "errors-only",
       "inputs": [
         "tsconfig.node.json",
+        "config/**",
         "commitlint.config.ts",
         ".lintstagedrc.js"
       ],
@@ -62,6 +65,7 @@
       "inputs": [
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/vitest.fast-check.setup.ts",
+        "$TURBO_ROOT$/config/**",
         "vitest.config.ts",
         "vitest.config.*",
         "src/**/*.test.ts",
@@ -96,6 +100,7 @@
         "oxlint.config.ts",
         "tsconfig.json",
         "tsconfig.*.json",
+        "$TURBO_ROOT$/config/**",
         "!**/*.md"
       ],
       "outputs": [],
