@@ -5,6 +5,6 @@
     "customConditions": ["@systemfsoftware/source"],
     "plugins": [{ "name": "@effect/language-service" }]
   },
-  "extends": "@systemfsoftware/tsconfig/tsc/no-dom/library-monorepo",
+  "extends": "../../config/tsconfig.library.json",
   "include": ["src", "tests"]
 }

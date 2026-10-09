@@ -1,4 +1,4 @@
 {
-  "extends": "@systemfsoftware/tsconfig/node",
+  "extends": "./config/tsconfig.node.json",
   "include": ["commitlint.config.ts", ".lintstagedrc.js"]
 }

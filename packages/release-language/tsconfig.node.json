@@ -1,4 +1,4 @@
 {
-  "extends": "@systemfsoftware/tsconfig/node",
+  "extends": "../../config/tsconfig.node.json",
   "include": ["tsdown.config.ts", "vitest.config.ts"]
 }

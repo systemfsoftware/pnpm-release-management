@@ -54,6 +54,7 @@ COPY package.json pnpm-workspace.yaml pnpm-lock.yaml turbo.json /build/
 COPY tsconfig.json tsconfig.node.json /build/
 COPY apps/ /build/apps/
 COPY packages/ /build/packages/
+COPY config/ /build/config/
 RUN cd /build && pnpm install --frozen-lockfile && pnpm build && pnpm exec turbo run package
 
 RUN mkdir -p /opt/prm \
