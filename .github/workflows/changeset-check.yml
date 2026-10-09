@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       tools-ref:
-        description: ignored; the check runs the release tools at this workflow's own revision (README, CI)
+        description: ignored; the check runs the release tools at this workflow's own revision
         required: false
         type: string
         default: ""

@@ -147,6 +147,11 @@ export interface StepResult extends ExecResult {
   readonly outputs: Readonly<Record<string, string>>
 }
 
+export interface JobOptions {
+  readonly workflow?: WorkflowFile
+  readonly inputs?: Readonly<Record<string, string>>
+}
+
 export interface Listener {
   command(record: CommandRecord): void
 }
@@ -172,8 +177,7 @@ export interface World {
   tool(app: string, subcommand: string, args?: string, options?: ExecOptions): Promise<ExecResult>
   job(
     name: string,
-    workflow?: WorkflowFile,
-    inputs?: Readonly<Record<string, string>>,
+    options?: JobOptions,
   ): Promise<ReadonlyArray<StepResult>>
   write(path: string, content: string): Promise<void>
   read(path: string): Promise<string>
@@ -301,8 +305,7 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
 
   const job = async (
     name: string,
-    workflow: WorkflowFile = 'release.yml',
-    inputs: Readonly<Record<string, string>> = {},
+    { workflow = 'release.yml', inputs = {} }: JobOptions = {},
   ): Promise<ReadonlyArray<StepResult>> => {
     await must(RUNNER_SETUP)
     const githubEnv = `${STEP_DIR}/${name}.env`

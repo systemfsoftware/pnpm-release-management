@@ -30,9 +30,9 @@ Apps are Node programs built with tsdown into self-contained ESM bundles, then
 compiled with `deno compile` into one binary each. The flake exports them, and
 `packages.<system>.release-tools` joins the three release apps. A repository
 takes this flake as an input, pinned by its `flake.lock`, and puts
-`release-tools` in its dev shell to run the apps locally. `release.yml` does not
-use that pin: it builds the `release-tools` of its own commit and runs them in
-the caller's dev shell (see [CI](#ci)). Each job sets `WORKFLOW_REPOSITORY` and
+`release-tools` in its dev shell to run the apps locally. `release.yml` and
+`changeset-check.yml` do not use that pin: they build the `release-tools` of
+their own commit (see [CI](#ci)). Each job sets `WORKFLOW_REPOSITORY` and
 `WORKFLOW_SHA` from the `job.workflow_repository` and `job.workflow_sha`
 contexts and fails when either is empty:
 
@@ -297,13 +297,13 @@ they install it on hosted runners, and a self-hosted runner must provide it.
 
 Without `devshell`, the changeset check installs the caller's workspace with
 plain pnpm and runs `"$RELEASE_TOOLS/changeset-management" check` against it.
+It still builds that binary with Nix, so a self-hosted runner needs Nix in this
+mode too.
 
-`tools-ref` is accepted and ignored, so callers that still pass it keep
-working. It used to pick the revision of this repository the check ran; the
-workflow's own revision decides that now. It can be removed once no caller
-passes it: stryker-js-effect's `changeset-check.yml` still passes
-`tools-ref: main`. Removing an input a caller passes fails that caller's
-workflow, so drop it from the callers first.
+`tools-ref` is accepted and ignored. It can be removed once no caller passes it:
+stryker-js-effect's `changeset-check.yml` still passes `tools-ref: main`, and
+removing an input a caller passes fails that caller's workflow, so drop it from
+the callers first.
 
 `devshell: true` makes the changeset check run the caller's own `bootstrap`
 script inside its `nix develop` shell

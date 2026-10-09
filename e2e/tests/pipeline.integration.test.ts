@@ -143,35 +143,36 @@ const runPhases = async (session: Session): Promise<void> => {
     expect(`${passed.stdout}${passed.stderr}`).toContain('@e2e/alpha')
   })
 
-  await session.phase(
-    'changeset check job runs its own revision of the tools inside a caller dev shell whose lock pins an older one',
-    async (world) => {
-      const steps = await world.job('require-intent', 'changeset-check.yml', { 'base-sha': base, devshell: 'true' })
+  for (
+    const { phase, devshell, install } of [
+      {
+        phase:
+          'changeset check job runs its own revision of the tools inside a caller dev shell whose lock pins an older one',
+        devshell: 'true',
+        install: "Install the caller's workspace through its own bootstrap script",
+      },
+      {
+        phase: 'changeset check job without a dev shell runs its own revision of the tools too',
+        devshell: 'false',
+        install: "Install the caller's workspace",
+      },
+    ]
+  ) {
+    await session.phase(phase, async (world) => {
+      const steps = await world.job('require-intent', {
+        workflow: 'changeset-check.yml',
+        inputs: { 'base-sha': base, devshell },
+      })
       expect(steps.filter((step) => step.code !== 0)).toEqual([])
       expect(steps.map((step) => step.step)).toEqual([
         "Build the release tools at this workflow's own revision",
-        "Install the caller's workspace through its own bootstrap script",
+        install,
         'Require an intent for every publishable-package change',
       ])
       const checked = steps.at(-1)
       expect(`${checked?.stdout}${checked?.stderr}`).toContain('@e2e/alpha')
-    },
-  )
-
-  await session.phase(
-    'changeset check job without a dev shell runs its own revision of the tools too',
-    async (world) => {
-      const steps = await world.job('require-intent', 'changeset-check.yml', { 'base-sha': base, devshell: 'false' })
-      expect(steps.filter((step) => step.code !== 0)).toEqual([])
-      expect(steps.map((step) => step.step)).toEqual([
-        "Build the release tools at this workflow's own revision",
-        "Install the caller's workspace",
-        'Require an intent for every publishable-package change',
-      ])
-      const checked = steps.at(-1)
-      expect(`${checked?.stdout}${checked?.stderr}`).toContain('@e2e/alpha')
-    },
-  )
+    })
+  }
 
   await session.phase('plan asks for a version step', async (world) => {
     const tarballs = await packTarballs(world)
