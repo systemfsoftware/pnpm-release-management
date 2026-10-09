@@ -30,9 +30,9 @@ Apps are Node programs built with tsdown into self-contained ESM bundles, then
 compiled with `deno compile` into one binary each. The flake exports them, and
 `packages.<system>.release-tools` joins the three release apps. A repository
 takes this flake as an input, pinned by its `flake.lock`, and puts
-`release-tools` in its dev shell to run the apps locally. `release.yml` does not
-use that pin: it builds the `release-tools` of its own commit and runs them in
-the caller's dev shell (see [CI](#ci)). Each job sets `WORKFLOW_REPOSITORY` and
+`release-tools` in its dev shell to run the apps locally. `release.yml` and
+`changeset-check.yml` do not use that pin: they build the `release-tools` of
+their own commit (see [CI](#ci)). Each job sets `WORKFLOW_REPOSITORY` and
 `WORKFLOW_SHA` from the `job.workflow_repository` and `job.workflow_sha`
 contexts and fails when either is empty:
 
@@ -263,10 +263,10 @@ agree on what this cycle owns.
 
 ## CI
 
-| Workflow              | Inputs                                              | Caller must grant                                           |
-| --------------------- | --------------------------------------------------- | ----------------------------------------------------------- |
-| `release.yml`         | `ci-workflow` (required), `artifacts-dir`           | `contents: write`, `pull-requests: write`, `actions: write` |
-| `changeset-check.yml` | `tools-ref`, `base-sha`, `node-version`, `devshell` | `contents: read`, `pull-requests: read`                     |
+| Workflow              | Inputs                                                        | Caller must grant                                           |
+| --------------------- | ------------------------------------------------------------- | ----------------------------------------------------------- |
+| `release.yml`         | `ci-workflow` (required), `artifacts-dir`                     | `contents: write`, `pull-requests: write`, `actions: write` |
+| `changeset-check.yml` | `base-sha`, `node-version`, `devshell`, `tools-ref` (ignored) | `contents: read`, `pull-requests: read`                     |
 
 The `pull_request` runs of a pull request opened or updated with the workflow
 token wait for a maintainer's approval, so they never run on their own.
@@ -277,28 +277,36 @@ the caller's CI workflow (`ci-workflow`, which must accept `workflow_dispatch`)
 on that branch. A failed dispatch fails the job. That gives the release PR the
 checks the branch protection requires.
 
-`release.yml` runs the apps built from its own commit, not the caller's. Each
-job builds `github:${{ job.workflow_repository }}/${{ job.workflow_sha }}#release-tools`,
+`release.yml` and `changeset-check.yml` run the apps built from their own
+commit, not the caller's. Each job builds
+`github:${{ job.workflow_repository }}/${{ job.workflow_sha }}#release-tools`,
 the `release-tools` of the exact revision of this repository the caller's
-`uses:` resolved to, and runs those binaries by path inside the caller's dev
-shell (`nix develop --command "$RELEASE_TOOLS/<app>" …`). A caller on
-`release.yml@main` therefore always gets the flags `release.yml@main` passes,
-whatever revision its `flake.lock` pins for its `pnpm-release-management`
-input; that pin still decides the `release-tools` in its dev shell for local
-use, and `nix flake update pnpm-release-management` still moves it. The
-caller's `devShells.<system>.default` must provide pnpm, the `sandbox` and
+`uses:` resolved to, and runs those binaries by path (`"$RELEASE_TOOLS/<app>"`).
+`release.yml` runs them inside the caller's dev shell
+(`nix develop --command "$RELEASE_TOOLS/<app>" …`). A caller on `@main`
+therefore always gets the flags `@main` passes, whatever revision its
+`flake.lock` pins for its `pnpm-release-management` input; that pin still
+decides the `release-tools` in its dev shell for local use, and
+`nix flake update pnpm-release-management` still moves it. The caller's
+`devShells.<system>.default` must provide pnpm, the `sandbox` and
 `SANDBOX_PNPM_STORE` (see [Distribution through Nix](#distribution-through-nix)).
 The job needs the `job.workflow_*` context: github.com provides it (self-hosted
 runners from actions/runner v2.334.0), GitHub Enterprise Server does not. A job
-that cannot read it fails before running any tool.
+that cannot read it fails before running any tool. Both workflows need Nix:
+they install it on hosted runners, and a self-hosted runner must provide it.
 
-`tools-ref` pins the revision of this repository that a release runs from;
-`@main` tracks the tip. Without `devshell`, the changeset check checks this
-repository out into `.release-tools`, builds it with pnpm, and runs its
-`dist/main.js` bundles against the caller's workspace.
+Without `devshell`, the changeset check installs the caller's workspace with
+plain pnpm and runs `"$RELEASE_TOOLS/changeset-management" check` against it.
+It still builds that binary with Nix, so a self-hosted runner needs Nix in this
+mode too.
 
-`devshell: true` makes the changeset check install Nix and run the caller's
-own `bootstrap` script inside its `nix develop` shell
+`tools-ref` is accepted and ignored. It can be removed once no caller passes it:
+stryker-js-effect's `changeset-check.yml` still passes `tools-ref: main`, and
+removing an input a caller passes fails that caller's workflow, so drop it from
+the callers first.
+
+`devshell: true` makes the changeset check run the caller's own `bootstrap`
+script inside its `nix develop` shell
 (`nix develop --command pnpm run bootstrap`) instead of a plain
 `pnpm install`, then run the check in that shell. The bootstrap script is
 where the caller installs its workspace inside its own sandbox, so no
@@ -309,10 +317,13 @@ bubblewrap sandbox can start. A caller needs this mode when its lockfile points
 at tarballs its flake builds, such as `file:.sfs-deps/<name>-<version>.tgz`; a
 plain install cannot read those. With `devshell: true`, `node-version` is
 ignored for the caller's install and check: they use the dev shell's node, and
-the check runs as `nix develop --command sandbox -- changeset-management check`
-from the `release-tools` in that dev shell, so `tools-ref` is ignored too. The
-default, `false`, installs with plain pnpm as before. This repository's own CI
-calls the check with `devshell: true` on every pull request.
+the check runs the workflow's own binary inside the caller's sandbox,
+`nix develop --command sandbox -- "$(realpath "$RELEASE_TOOLS/changeset-management")" check`.
+The `realpath` matters: the sandbox binds only the store paths its command
+resolves to, and `release-tools` holds symlinks into the per-app store paths,
+so the unresolved path does not exist inside it. The default, `false`,
+installs with plain pnpm. This repository's own CI calls the check with
+`devshell: true` on every pull request.
 
 ## Distribution through Nix
 

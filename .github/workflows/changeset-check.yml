@@ -4,10 +4,10 @@ on:
   workflow_call:
     inputs:
       tools-ref:
-        description: ref of systemfsoftware/pnpm-release-management to run
+        description: ignored; the check runs the release tools at this workflow's own revision
         required: false
         type: string
-        default: main
+        default: ""
       base-sha:
         description: commit the pull request is compared against
         required: false
@@ -44,13 +44,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/checkout@v7
-        if: ${{ !inputs.devshell }}
-        with:
-          repository: systemfsoftware/pnpm-release-management
-          ref: ${{ inputs.tools-ref }}
-          path: .release-tools
-
       # Hosted runners get node + pnpm from the official actions.
       - uses: pnpm/action-setup@v6
         if: runner.environment == 'github-hosted'
@@ -68,13 +61,16 @@ jobs:
           runtime: node@${{ inputs.node-version }}
 
       - uses: cachix/install-nix-action@v31
-        if: inputs.devshell && runner.environment == 'github-hosted'
+        if: runner.environment == 'github-hosted'
 
-      - name: Build the release tools
-        if: ${{ !inputs.devshell }}
+      - name: Build the release tools at this workflow's own revision
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
         run: |
-          pnpm --dir .release-tools install --frozen-lockfile
-          pnpm --dir .release-tools build
+          tools=$(nix build --no-link --print-out-paths \
+            "github:${WORKFLOW_REPOSITORY:?job.workflow_repository is empty}/${WORKFLOW_SHA:?job.workflow_sha is empty}#release-tools")
+          echo "RELEASE_TOOLS=$tools/bin" >> "$GITHUB_ENV"
 
       - name: Install the caller's workspace
         if: ${{ !inputs.devshell }}
@@ -98,8 +94,11 @@ jobs:
           BASE_SHA: ${{ inputs.base-sha || github.event.pull_request.base.sha }}
           DEVSHELL: ${{ inputs.devshell }}
         run: |
+          # The caller's sandbox binds only the store paths its arguments resolve
+          # to, so it gets the binary itself, not the release-tools symlink to it.
+          check=$(realpath "$RELEASE_TOOLS/changeset-management")
           if [ "$DEVSHELL" = true ]; then
-            nix develop --command sandbox -- changeset-management check "$BASE_SHA"
+            nix develop --command sandbox -- "$check" check "$BASE_SHA"
           else
-            node .release-tools/apps/changeset-management/dist/main.js check "$BASE_SHA"
+            "$check" check "$BASE_SHA"
           fi

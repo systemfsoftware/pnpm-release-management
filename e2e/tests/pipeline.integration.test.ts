@@ -143,6 +143,37 @@ const runPhases = async (session: Session): Promise<void> => {
     expect(`${passed.stdout}${passed.stderr}`).toContain('@e2e/alpha')
   })
 
+  for (
+    const { phase, devshell, install } of [
+      {
+        phase:
+          'changeset check job runs its own revision of the tools inside a caller dev shell whose lock pins an older one',
+        devshell: 'true',
+        install: "Install the caller's workspace through its own bootstrap script",
+      },
+      {
+        phase: 'changeset check job without a dev shell runs its own revision of the tools too',
+        devshell: 'false',
+        install: "Install the caller's workspace",
+      },
+    ]
+  ) {
+    await session.phase(phase, async (world) => {
+      const steps = await world.job('require-intent', {
+        workflow: 'changeset-check.yml',
+        inputs: { 'base-sha': base, devshell },
+      })
+      expect(steps.filter((step) => step.code !== 0)).toEqual([])
+      expect(steps.map((step) => step.step)).toEqual([
+        "Build the release tools at this workflow's own revision",
+        install,
+        'Require an intent for every publishable-package change',
+      ])
+      const checked = steps.at(-1)
+      expect(`${checked?.stdout}${checked?.stderr}`).toContain('@e2e/alpha')
+    })
+  }
+
   await session.phase('plan asks for a version step', async (world) => {
     const tarballs = await packTarballs(world)
     const planned = await world.tool('github-release-management', 'plan', `--tarballs ${tarballs}`)
