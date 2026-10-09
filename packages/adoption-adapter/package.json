@@ -15,6 +15,7 @@
     "@systemfsoftware/git-adapter": "workspace:*",
     "@systemfsoftware/github-release-engine": "workspace:*",
     "@systemfsoftware/tarball-adapter": "workspace:*",
+    "@systemfsoftware/tsconfig": "^1.3.3",
     "@systemfsoftware/workspace-adapter": "workspace:*",
     "@types/node": "^24",
     "rimraf": "^6.1.3",

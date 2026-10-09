@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
-  "extends": ["./config/tsconfig.bundler.json", "./config/tsconfig.effect.json"],
+  "extends": ["@systemfsoftware/tsconfig/bundler/no-dom/library-monorepo", "@systemfsoftware/tsconfig/effect"],
   "compilerOptions": {
     "noEmit": true
   },

@@ -11,6 +11,7 @@
     "@systemfsoftware/effect-gherkin-spec": "^4.0.1",
     "@systemfsoftware/git-adapter": "workspace:*",
     "@systemfsoftware/github-release-engine": "workspace:*",
+    "@systemfsoftware/tsconfig": "^1.3.3",
     "@types/node": "^24",
     "rimraf": "^6.1.3",
     "tsdown": "^0.23.0",
