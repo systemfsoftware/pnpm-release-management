@@ -1,4 +1,4 @@
 {
-  "extends": "../config/tsconfig.node.json",
+  "extends": "@systemfsoftware/tsconfig/node",
   "include": ["vitest.config.ts", "oxlint.config.ts"]
 }

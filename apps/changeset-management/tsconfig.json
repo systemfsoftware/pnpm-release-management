@@ -5,6 +5,6 @@
     "plugins": [{ "name": "@effect/language-service" }],
     "types": ["node"]
   },
-  "extends": "../../config/tsconfig.library.json",
+  "extends": "@systemfsoftware/tsconfig/tsc/no-dom/library-monorepo",
   "include": ["src"]
 }
