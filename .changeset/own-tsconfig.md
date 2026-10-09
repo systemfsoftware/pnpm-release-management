@@ -14,4 +14,4 @@
 "@systemfsoftware/workspace-adapter": none
 ---
 
-Extend repo-owned TypeScript bases under `config/` instead of the `@systemfsoftware/tsconfig` package (toolchain only; compiler options unchanged, no consumer-facing change).
+Extend repo-owned TypeScript bases under `config/` instead of a shared config package (toolchain only; compiler options unchanged, no consumer-facing change).
