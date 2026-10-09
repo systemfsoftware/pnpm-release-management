@@ -4,7 +4,6 @@
     "@effect/platform-node": "^4.0.0-rc.112",
     "@effect/vitest": "^4.0.0-rc.112",
     "@systemfsoftware/effect-gherkin-spec": "^4.0.1",
-    "@systemfsoftware/tsconfig": "^1.3.3",
     "@types/node": "^24",
     "effect": "^4.0.0-rc.112",
     "testcontainers": "^12.1.0",
