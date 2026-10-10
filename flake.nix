@@ -200,6 +200,31 @@
               jq -e '. == [{ name: "@fixture/app", file: "app-1.0.0.tgz" }]' ${tarballs}/index.json
               touch $out
             '';
+
+          # A build from a lockfile cut down to some members installs only that
+          # lockfile's importers with the dependencies it records, builds, and
+          # packs only the members asked for, each with its manifest from src.
+          # The full lockfile needs a tarball this build is never given. pnpm
+          # 11 reinstalls before `pnpm run` when a manifest differs from the
+          # install, which offline fails.
+          workspace-lockfile-members =
+            let
+              tarballs = (self.lib.mkPnpmWorkspacePackages {
+                inherit pkgs;
+                src = ./nix/lib/fixtures/lockfile-members;
+                pname = "lockfile-members";
+                pnpm = pkgs.pnpm_11;
+                members = [ "@fixture/wanted" ];
+                lockFile = ./nix/lib/fixtures/lockfile-members/cut/pnpm-lock.yaml;
+              }).workspace-tarballs;
+            in
+            pkgs.runCommand "workspace-lockfile-members" { nativeBuildInputs = [ pkgs.jq ]; } ''
+              jq -e '. == [{ name: "@fixture/wanted", file: "wanted-1.0.0.tgz" }]' ${tarballs}/index.json
+              [ "$(ls ${tarballs})" = "$(printf 'index.json\nwanted-1.0.0.tgz')" ]
+              tar -xOzf ${tarballs}/wanted-1.0.0.tgz package/package.json \
+                | jq -e '.devDependencies == { "@sandbox-proof/tiny-lib": "file:../../.deps/tiny-lib-1.0.0.tgz" }'
+              touch $out
+            '';
         });
 
       devShells = forEachSystem (pkgs: {
