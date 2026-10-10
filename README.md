@@ -372,8 +372,9 @@ every tarball plus an `index.json` of `{ name, file }`.
   only those members, the workspace packages they reach and the dependencies
   their builds use; starting from `pnpm-lock.yaml`, pnpm keeps every version it
   pins. The build drops the workspace projects that lockfile has no importer
-  for, installs each importer with exactly the dependencies it records, then
-  restores the manifests, so each tarball packs its own `package.json`.
+  for, installs each importer with exactly the dependencies it records and
+  builds, then restores the manifests, so each tarball packs its own
+  `package.json`.
   `pnpm-store` still installs the whole workspace from `pnpm-lock.yaml`. Check
   the cut lockfile in CI by writing it again and diffing, or it drifts.
 

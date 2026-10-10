@@ -9,5 +9,8 @@
   },
   "devDependencies": {
     "@sandbox-proof/tiny-lib": "file:../../.deps/tiny-lib-1.0.0.tgz"
+  },
+  "scripts": {
+    "build": "node -e \"require('ms')\""
   }
 }

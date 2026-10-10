@@ -103,8 +103,9 @@ let
 
   # Projects the lockfile has no importer for leave the workspace, and every
   # importer's manifest is given exactly the dependencies the lockfile records
-  # for it, so the frozen install accepts the lockfile. The manifests come back
-  # before the build, so the tarballs pack src's.
+  # for it, so the frozen install accepts the lockfile. The build runs against
+  # those manifests, since `pnpm run` reinstalls on any other; the manifests come
+  # back before packing, so the tarballs pack src's.
   restrictToLockFile = ''
     cp ${lockFile} pnpm-lock.yaml
     yq -o=json '.importers' pnpm-lock.yaml > "$NIX_BUILD_TOP/importers.json"
@@ -148,7 +149,7 @@ let
       inherit src;
       inherit (buildDeps) mitmCache;
       postPatch = buildDeps.copyFiles + lib.optionalString (lockFile != null) restrictToLockFile;
-      preBuild = lib.optionalString (lockFile != null) restoreManifests;
+      preInstall = lib.optionalString (lockFile != null) restoreManifests;
       prePnpmInstall = import ./pnpm-mitm-replay.nix;
 
       nativeBuildInputs = [ nodejs pnpm iplConfigHook pkgs.jq ] ++ lib.optional (lockFile != null) pkgs.yq-go ++ nativeBuildInputs;
