@@ -1,0 +1,13 @@
+{
+  "name": "@fixture/wanted",
+  "version": "1.0.0",
+  "files": [
+    "index.js"
+  ],
+  "dependencies": {
+    "ms": "2.1.3"
+  },
+  "devDependencies": {
+    "@sandbox-proof/tiny-lib": "file:../../.deps/tiny-lib-1.0.0.tgz"
+  }
+}

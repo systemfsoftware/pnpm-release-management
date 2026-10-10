@@ -364,6 +364,18 @@ every tarball plus an `index.json` of `{ name, file }`.
   that version, or evaluation fails: one pnpm resolves everywhere.
 - `packages.<system>.pnpm-store` is that store directory, in the layout
   `sandbox --pnpm-store` consumes.
+- `members` (package names) limits the build and the packed tarballs to those
+  public members; an unknown or private name fails evaluation.
+- `lockFile` builds the tarballs from a lockfile cut down from the workspace's,
+  so a cold build fetches only what the packed members need. Write it with
+  `pnpm install --lockfile-only` in a copy of the workspace whose manifests keep
+  only those members, the workspace packages they reach and the dependencies
+  their builds use; starting from `pnpm-lock.yaml`, pnpm keeps every version it
+  pins. The build drops the workspace projects that lockfile has no importer
+  for, installs each importer with exactly the dependencies it records, then
+  restores the manifests, so each tarball packs its own `package.json`.
+  `pnpm-store` still installs the whole workspace from `pnpm-lock.yaml`. Check
+  the cut lockfile in CI by writing it again and diffing, or it drifts.
 
 A consumer takes the flake as an input pinned by `flake.lock`. A pull
 request's head revision is a snapshot, and a release tag is a stable version.
