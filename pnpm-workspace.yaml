@@ -5,7 +5,14 @@ allowBuilds:
   protobufjs: false
   sharp: false
   ssh2: false
+minimumReleaseAgeExclude:
+  - effect
+  - "@effect/*"
 packages:
   - packages/*
   - apps/*
   - e2e
+supportedArchitectures:
+  os: [linux]
+  cpu: [x64, arm64]
+  libc: [glibc]

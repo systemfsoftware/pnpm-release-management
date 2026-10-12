@@ -32,8 +32,15 @@ export class TagExcludedMalformed extends S.TaggedError<TagExcludedMalformed>()(
   { path: FsPath },
 ) {}
 
+export const TagAnnotation = S.Struct({
+  tag: ReleaseTag,
+  message: S.String,
+})
+export type TagAnnotation = S.Schema.Type<typeof TagAnnotation>
+
 export class TagCommand extends S.TaggedClass<TagCommand>()('TagCommand', {
   cycle: S.Array(CycleEntry),
+  annotations: S.Array(TagAnnotation),
   preview: S.Boolean,
   capturedIssue: S.optional(FsPath),
   excludedIssue: S.optional(FsPath),

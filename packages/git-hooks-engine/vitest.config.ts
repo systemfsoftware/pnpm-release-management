@@ -7,6 +7,7 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['src/**/*.test.ts', 'tests/**/*.test.ts'],
+    setupFiles: ['../../vitest.fast-check.setup.ts'],
   },
   resolve: {
     alias: [{ find: /^@systemfsoftware\/git-hooks-engine$/, replacement: srcUrl('index.ts') }],

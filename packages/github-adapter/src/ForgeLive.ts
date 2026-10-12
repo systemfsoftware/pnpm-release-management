@@ -20,8 +20,8 @@ import { Octokit } from 'octokit'
 import {
   DefaultBranchAnswer,
   LabelAnswers,
+  OpenPullAnswers,
   PullRequestAnswer,
-  PullRequestAnswers,
   PullSummaryAnswers,
   ReleaseAnswer,
 } from './ForgeWire.schema.js'
@@ -163,21 +163,26 @@ const makeForge = (config: ForgeConfig): ForgePort => {
       Effect.map(
         ask(
           `looking up pull request for ${head} in ${repo.owner}/${repo.repo}`,
-          PullRequestAnswers,
+          OpenPullAnswers,
           () =>
             client.rest.pulls.list({
               owner: repo.owner,
               repo: repo.repo,
-              head,
+              head: `${repo.owner}:${head}`,
               state: 'open',
               per_page: 100,
             }),
         ),
         (pulls) =>
-          Option.match(Array.head(pulls), {
-            onNone: (): PullRequestLookup => PullRequestAbsent.make({ head }),
-            onSome: (pull): PullRequestLookup => PullRequestFound.make({ number: pull.number }),
-          }),
+          Option.match(
+            Array.findFirst(pulls, (pull) =>
+              pull.head.ref === head &&
+              pull.head.repo?.owner.login.toLowerCase() === repo.owner.toLowerCase()),
+            {
+              onNone: (): PullRequestLookup => PullRequestAbsent.make({ head }),
+              onSome: (pull): PullRequestLookup => PullRequestFound.make({ number: pull.number }),
+            },
+          ),
       ),
     listPullRequests: (repo) =>
       Effect.map(

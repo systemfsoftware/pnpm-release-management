@@ -56,10 +56,11 @@ const parseCommand = (
       Result.flatMap(
         S.decodeUnknownResult(S.Record(S.String, S.Unknown))(parsed),
         (manifest) =>
-          Result.map(
+          Result.flatMap(
             S.decodeUnknownResult(PinnedManifest)(manifest),
             (pinned) =>
-              PinRootManifestCommand.make({
+              S.decodeUnknownResult(PinRootManifestCommand)({
+                _tag: 'PinRootManifestCommand',
                 manifestText: text,
                 manifest,
                 path: request.manifest,
@@ -110,7 +111,12 @@ const write = (
   )
 }
 
-export const pinRootManifestCell = Cell.layer({
+export const pinRootManifestCell: Cell.Cell<
+  PinRootManifestInput,
+  PinDecision,
+  MemberRefusal | PinManifestInvalid | S.SchemaError | PinRefusal | VersionRefusal,
+  WorkspaceStore | SurfaceStore
+> = Cell.layer({
   read,
   decide: pinRootManifest,
   write,

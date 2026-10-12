@@ -1,0 +1,74 @@
+name: Sandbox
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  proofs:
+    name: sandbox proofs
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+
+      - name: Allow unprivileged user namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Boundary proofs
+        run: nix build .#sandbox-proofs && ./result/bin/sandbox-proofs
+
+      - name: A tampered lockfile integrity fails red
+        run: |
+          status=0
+          out="$(nix build .#sandbox-proofs-tampered-store 2>&1)" || status=$?
+          printf '%s\n' "$out"
+          if [ "$status" -eq 0 ]; then
+            echo "::error::a store built from a wrong lockfile integrity"
+            exit 1
+          fi
+          if ! printf '%s\n' "$out" | grep -q 'hash mismatch'; then
+            echo "::error::the tampered store failed without a hash mismatch"
+            exit 1
+          fi
+
+      - name: A lockfile package with no resolution is refused; workspace globs resolve as pnpm's do; a workspace packs with file tarball dependencies; a cut lockfile builds only its members
+        run: |
+          system="$(nix eval --impure --raw --expr builtins.currentSystem)"
+          nix build -L ".#checks.$system.pnpm-lock-parser" ".#checks.$system.workspace-globs" ".#checks.$system.workspace-file-deps" ".#checks.$system.workspace-lockfile-members"
+
+      - name: Install through the sandbox, offline from the Nix pnpm store
+        run: nix develop --command sandbox -- pnpm install
+
+      - name: Build through the sandbox, no network
+        run: nix develop --command sandbox -- pnpm build
+
+      - name: Test through the sandbox, no network
+        run: nix develop --command sandbox -- pnpm --filter "./packages/*" test
+
+      - name: No build wrote to nix's placeholder HOME
+        run: |
+          if [ -e /homeless-shelter ]; then
+            find /homeless-shelter -maxdepth 3
+            echo "::error::a derivation built without a sandbox wrote to /homeless-shelter; set HOME inside its build"
+            exit 1
+          fi
+
+  reproducible:
+    name: tarballs rebuild bit-for-bit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      - run: nix build .#workspace-tarballs
+      - run: nix build --rebuild .#workspace-tarballs

@@ -1,4 +1,4 @@
-# The publish phase is never triggered by the release PR merging: closing it
+# The release phase is never triggered by the release PR merging: closing it
 # destroys refs/pull/<n>/merge and cancels the queued run with zero jobs, so a
 # release triggered that way can vanish silently. Phase comes from repository
 # state instead, which also lets a half-finished release resume on the next push.
@@ -7,28 +7,27 @@ name: Release
 on:
   workflow_call:
     inputs:
-      tools-ref:
-        description: ref of systemfsoftware/pnpm-release-management to run
-        required: false
-        type: string
-        default: main
       artifacts-dir:
         description: directory the captured cycle is written to
         required: false
         type: string
         default: .release
-      node-version:
-        description: node version used for pnpm
+      ci-workflow:
+        description: the caller's CI workflow file, dispatched on the release PR branch
+        required: true
+        type: string
+      runs-on:
+        description: JSON-encoded runner selector for every job (default keeps hosted ubuntu-latest)
         required: false
         type: string
-        default: "24"
+        default: '"ubuntu-latest"'
 
 permissions: {}
 
 jobs:
   plan:
     name: plan · derive phase
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     permissions:
       contents: read
     outputs:
@@ -40,72 +39,75 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+      - uses: cachix/install-nix-action@v31
+        if: runner.environment == 'github-hosted'
 
-      - uses: actions/checkout@v7
-        with:
-          repository: systemfsoftware/pnpm-release-management
-          ref: ${{ inputs.tools-ref }}
-          path: .release-tools
-
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
-        with:
-          node-version: ${{ inputs.node-version }}
-
-      - name: Build the release tools
+      - &release-tools
+        name: Build the release tools at this workflow's own revision
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
         run: |
-          pnpm --dir .release-tools install --frozen-lockfile
-          pnpm --dir .release-tools build
+          tools=$(nix build --no-link --print-out-paths \
+            "github:${WORKFLOW_REPOSITORY:?job.workflow_repository is empty}/${WORKFLOW_SHA:?job.workflow_sha is empty}#release-tools")
+          echo "RELEASE_TOOLS=$tools/bin" >> "$GITHUB_ENV"
+
+      - &workspace-tarballs
+        name: Pack the workspace through the caller's flake
+        run: echo "TARBALLS=$(nix build --no-link --print-out-paths .#workspace-tarballs)" >> "$GITHUB_ENV"
 
       - id: plan
         name: Decide release phase from repository state
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: node .release-tools/apps/github-release-management/dist/main.js plan --output "$GITHUB_OUTPUT"
+        run: nix develop --command "$RELEASE_TOOLS/github-release-management" plan --tarballs "$TARBALLS" --output "$GITHUB_OUTPUT"
 
   version:
     name: version · open release PR
     needs: plan
     if: needs.plan.outputs.phase == 'version'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     permissions:
       contents: write
       pull-requests: write
+      actions: write
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: true
+      - uses: cachix/install-nix-action@v31
+        if: runner.environment == 'github-hosted'
 
-      - uses: actions/checkout@v7
-        with:
-          repository: systemfsoftware/pnpm-release-management
-          ref: ${{ inputs.tools-ref }}
-          path: .release-tools
+      - *release-tools
 
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
-        with:
-          node-version: ${{ inputs.node-version }}
+      - name: Bump every package and version surface, consuming the intents
+        run: nix develop --command "$RELEASE_TOOLS/version-management" bump
 
-      - name: Build the release tools
-        run: |
-          pnpm --dir .release-tools install --frozen-lockfile
-          pnpm --dir .release-tools build
+      - id: pr
+        name: Open or update the release PR
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: nix develop --command "$RELEASE_TOOLS/github-release-management" pr --output "$GITHUB_OUTPUT"
 
-      - name: Bump every version surface and consume the intents
-        run: node .release-tools/apps/version-management/dist/main.js bump
-
-      - name: Open or update the release PR
+      - name: Run the caller's CI on the release PR
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node .release-tools/apps/github-release-management/dist/main.js pr
+          CI_WORKFLOW: ${{ inputs.ci-workflow }}
+          PR_OUTCOME: ${{ steps.pr.outputs.outcome }}
+          PR_BRANCH: ${{ steps.pr.outputs.branch }}
+        run: |
+          case "$PR_OUTCOME" in
+            created | updated) gh workflow run "$CI_WORKFLOW" --ref "${PR_BRANCH:?pr reported no branch}" ;;
+            closed | vacant) echo "no open release PR ($PR_OUTCOME); nothing to dispatch" ;;
+            *) echo "::error::pr reported no outcome; cannot tell whether a release PR needs CI"; exit 1 ;;
+          esac
 
   release:
     name: release · tag · GitHub releases
     needs: plan
     if: needs.plan.outputs.phase == 'release'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     permissions:
       contents: write
     steps:
@@ -114,42 +116,29 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: true
+      - uses: cachix/install-nix-action@v31
+        if: runner.environment == 'github-hosted'
 
-      - uses: actions/checkout@v7
-        with:
-          repository: systemfsoftware/pnpm-release-management
-          ref: ${{ inputs.tools-ref }}
-          path: .release-tools
+      - *release-tools
 
-      - uses: pnpm/action-setup@v6
-      - uses: actions/setup-node@v7
-        with:
-          node-version: ${{ inputs.node-version }}
-
-      - name: Build the release tools
-        run: |
-          pnpm --dir .release-tools install --frozen-lockfile
-          pnpm --dir .release-tools build
-
-      - name: Install
-        run: pnpm install --frozen-lockfile
+      - *workspace-tarballs
 
       - name: Capture this cycle
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           mkdir -p "${{ inputs.artifacts-dir }}"
-          node .release-tools/apps/github-release-management/dist/main.js tag \
+          nix develop --command "$RELEASE_TOOLS/github-release-management" tag --tarballs "$TARBALLS" \
             --output "${{ inputs.artifacts-dir }}/captured.json"
 
-      - name: Tag released versions
+      - name: Tag released versions, recording each tarball's integrity
         run: |
-          node .release-tools/apps/github-release-management/dist/main.js tag \
+          nix develop --command "$RELEASE_TOOLS/github-release-management" tag --tarballs "$TARBALLS" \
             --captured "${{ inputs.artifacts-dir }}/captured.json"
 
       - name: GitHub Releases from the authored changelogs
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          node .release-tools/apps/github-release-management/dist/main.js release \
+          nix develop --command "$RELEASE_TOOLS/github-release-management" release \
             --captured "${{ inputs.artifacts-dir }}/captured.json"

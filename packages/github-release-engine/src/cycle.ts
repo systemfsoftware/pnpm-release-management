@@ -1,28 +1,32 @@
-import type { Member, PackageName, PackageVersion } from '@systemfsoftware/release-language'
-import { CycleEntry, RelativePath, ReleaseTag } from '@systemfsoftware/release-language'
+import type {
+  ChangelogStorage,
+  LegacyRelease,
+  Member,
+  PackageName,
+  PackageVersion,
+  RelativePath,
+} from '@systemfsoftware/release-language'
+import { CycleEntry, memberChangelogPathOf, ReleaseTag } from '@systemfsoftware/release-language'
 
 export const tagOf = (name: PackageName, version: PackageVersion): ReleaseTag => ReleaseTag.make(`${name}@v${version}`)
-
-export const changelogOf = (
-  changelogDir: RelativePath,
-  name: PackageName,
-  version: PackageVersion,
-): RelativePath => RelativePath.make(`${changelogDir}/${name.replace('/', '!')}@${version}.md`)
 
 export const cycleOf = (
   members: ReadonlyArray<Member>,
   remoteTags: ReadonlyArray<ReleaseTag>,
+  legacyReleased: ReadonlyArray<LegacyRelease>,
   changelogDir: RelativePath,
+  storage: ChangelogStorage,
 ): ReadonlyArray<CycleEntry> =>
   members
     .filter((member) => member.publishable)
     .filter((member) => remoteTags.includes(tagOf(member.name, member.manifest.version)) === false)
+    .filter((member) => legacyReleased.some((release) => release.package === member.name) === false)
     .map((member) =>
       CycleEntry.make({
         name: member.name,
         version: member.manifest.version,
         tag: tagOf(member.name, member.manifest.version),
-        changelog: changelogOf(changelogDir, member.name, member.manifest.version),
+        changelog: memberChangelogPathOf(storage, changelogDir, member, member.manifest.version),
       })
     )
 

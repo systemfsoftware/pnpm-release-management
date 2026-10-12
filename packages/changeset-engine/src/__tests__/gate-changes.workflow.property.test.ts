@@ -15,6 +15,7 @@ import { Effect, Layer } from 'effect'
 import * as fc from 'effect/testing/FastCheck'
 import { fakeChangeEvidencePort } from '../../tests/__fixtures__/FakeChangeEvidencePort.js'
 import { fakeChangesetStore } from '../../tests/__fixtures__/FakeChangesetStore.js'
+import { fakeLedgerPort } from '../../tests/__fixtures__/FakeLedgerPort.js'
 import { fakeWorkspaceStore } from '../../tests/__fixtures__/FakeWorkspaceStore.js'
 
 const nameArb = fc.stringMatching(/^[a-z][a-z0-9-]{0,9}$/)
@@ -69,7 +70,10 @@ const touchedArbFrom = (members: ReadonlyArray<Member>): fc.Arbitrary<ReadonlyAr
 const scenarioArb = membersArb.chain((members) =>
   fc.tuple(
     touchedArbFrom(members),
-    fc.array(intentArbFrom(members.map((m) => m.name)), { maxLength: 3 }),
+    fc.uniqueArray(intentArbFrom(members.map((m) => m.name)), {
+      selector: (intent) => intent.path,
+      maxLength: 3,
+    }),
     fc.boolean(),
   ).map(([touched, intents, skipLiveness]) => ({ members, touched, intents, skipLiveness }))
 )
@@ -113,9 +117,11 @@ const gateEffect = (scenario: {
     fakeChangeEvidencePort({
       members: scenario.members,
       touched: scenario.touched,
+      deleted: [],
       raw: null,
     }),
     fakeChangesetStore({ intents: scenario.intents }).layer,
+    fakeLedgerPort(),
   ))(gateChangesCell)
   return Effect.map(
     Cell.run(program, {

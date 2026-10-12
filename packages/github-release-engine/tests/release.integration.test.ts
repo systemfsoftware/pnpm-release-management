@@ -1,11 +1,18 @@
 import { Cell } from '@systemfsoftware/effect-cell-types'
 import { Gherkin, Given, it, layer, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
-import { githubReleaseCell, planCell, pullRequestCell, tagCell } from '@systemfsoftware/github-release-engine'
+import {
+  githubReleaseCell,
+  planCell,
+  pullRequestCell,
+  tagCell,
+  verifyIntegrity,
+} from '@systemfsoftware/github-release-engine'
 import {
   Count,
   FsPath,
   GithubReleaseRefusal,
   GitRef,
+  IntegrityFilesEmpty,
   type Member,
   PackageName,
   PackageVersion,
@@ -17,15 +24,19 @@ import {
   ReleaseLabel,
   ReleaseTag,
   RemoteName,
+  TagIntegrityMismatch,
   TagRefusal,
 } from '@systemfsoftware/release-language'
 import { Effect, Layer, Result, Schema as S } from 'effect'
 import * as Match from 'effect/Match'
 import { expect } from 'vitest'
+import { makeFakeChangesetsPort } from './__fixtures__/FakeChangesetsPort.js'
 import { makeFakeChangesetStore } from './__fixtures__/FakeChangesetStore.js'
 import { makeFakeCycleStore } from './__fixtures__/FakeCycleStore.js'
 import { makeFakeForge } from './__fixtures__/FakeForge.js'
 import { makeFakeGit } from './__fixtures__/FakeGit.js'
+import { makeFakeLedger } from './__fixtures__/FakeLedger.js'
+import { FAKE_INTEGRITY, makeFakeTarball } from './__fixtures__/FakeTarball.js'
 import { makeFakeWorkspaceStore } from './__fixtures__/FakeWorkspaceStore.js'
 
 const Feature = makeFeature({ it, layer })
@@ -40,6 +51,11 @@ const member = (name: string, version: string): Member => ({
 })
 
 const tagOf = (name: string, version: string): ReleaseTag => ReleaseTag.make(`${name}@v${version}`)
+
+const privateMember = (name: string, version: string): Member => ({
+  ...member(name, version),
+  publishable: false,
+})
 
 const intentPath = (slug: string): RelativePath => RelativePath.make(`${slug}.md`)
 
@@ -64,12 +80,23 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
     const git = makeFakeGit({ tags: [tagOf('alpha', '1.0.0')] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer)
+    const live = Layer.mergeAll(
+      changesets,
+      workspace,
+      git,
+      cycles.layer,
+      makeFakeTarball(),
+      makeFakeChangesetsPort(),
+      makeFakeLedger(),
+    )
     scenario(
       'Pending work with nothing owed starts versioning',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
-        Given('one pending intent and no owed tags')('input', () => Effect.succeed({ changelogDir })),
+        Given('one pending intent and no owed tags')(
+          'input',
+          () => Effect.succeed({ tarballs: FsPath.make('tarballs'), changelogDir }),
+        ),
         When('planning the release')('outcome', (s) =>
           Effect.match(Cell.run(Cell.provide(planCell, live), s.input), {
             onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
@@ -104,12 +131,23 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
     const git = makeFakeGit({ tags: [] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer)
+    const live = Layer.mergeAll(
+      changesets,
+      workspace,
+      git,
+      cycles.layer,
+      makeFakeTarball(),
+      makeFakeChangesetsPort(),
+      makeFakeLedger(),
+    )
     scenario(
       'Owed tags drain before pending work',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
-        Given('one pending intent and one owed tag')('input', () => Effect.succeed({ changelogDir })),
+        Given('one pending intent and one owed tag')(
+          'input',
+          () => Effect.succeed({ tarballs: FsPath.make('tarballs'), changelogDir }),
+        ),
         When('planning the release')('outcome', (s) =>
           Effect.match(Cell.run(Cell.provide(planCell, live), s.input), {
             onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
@@ -143,12 +181,23 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
     const git = makeFakeGit({ tags: [tagOf('alpha', '1.0.0')] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer)
+    const live = Layer.mergeAll(
+      changesets,
+      workspace,
+      git,
+      cycles.layer,
+      makeFakeTarball(),
+      makeFakeChangesetsPort(),
+      makeFakeLedger(),
+    )
     scenario(
       'A quiet repository settles with no work',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
-        Given('no pending intents and nothing owed')('input', () => Effect.succeed({ changelogDir })),
+        Given('no pending intents and nothing owed')(
+          'input',
+          () => Effect.succeed({ tarballs: FsPath.make('tarballs'), changelogDir }),
+        ),
         When('planning the release')('outcome', (s) =>
           Effect.match(Cell.run(Cell.provide(planCell, live), s.input), {
             onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
@@ -174,18 +223,72 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
   }
 
   {
+    const members = [privateMember('gritlint', '0.1.0')]
+    const changesets = makeFakeChangesetStore([])
+    const workspace = makeFakeWorkspaceStore({ members, files: {} })
+    const git = makeFakeGit({ tags: [tagOf('gritlint', '0.1.0')] })
+    const cycles = makeFakeCycleStore()
+    const live = Layer.mergeAll(
+      changesets,
+      workspace,
+      git,
+      cycles.layer,
+      makeFakeTarball(),
+      makeFakeChangesetsPort(),
+      makeFakeLedger(),
+    )
+    scenario(
+      'A tagged private member with no tarball does not refuse the plan',
+      { scenarioLayer: live },
+      Gherkin.Do.pipe(
+        Given('a private member whose version is already tagged and never packed')(
+          'input',
+          () => Effect.succeed({ tarballs: FsPath.make('tarballs'), changelogDir }),
+        ),
+        When('planning the release')('outcome', (s) =>
+          Effect.match(Cell.run(Cell.provide(planCell, live), s.input), {
+            onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
+            onSuccess: (value) => ({ _tag: 'decided' as const, value }),
+          })),
+        Then('the plan settles without a tarball-missing refusal')((s) => {
+          Match.value(s.outcome).pipe(
+            Match.tag('decided', (decided) => {
+              expect(decided.value.decision._tag).toEqual('PlanSettled')
+            }),
+            Match.tag(
+              'refused',
+              (refused) =>
+                failUnexpected(`expected the private member to be skipped, got ${JSON.stringify(refused.refusal)}`),
+            ),
+            Match.exhaustive,
+          )
+        }),
+      ),
+    )
+  }
+
+  {
     const changesets = makeFakeChangesetStore([])
     const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
     const git = makeFakeGit({ tags: [tagOf('alpha', '1.0.0')] })
     const cycles = makeFakeCycleStore({ deferredFiles: { 'deferred.txt': 'ghost\n' } })
-    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer)
+    const live = Layer.mergeAll(
+      changesets,
+      workspace,
+      git,
+      cycles.layer,
+      makeFakeTarball(),
+      makeFakeChangesetsPort(),
+      makeFakeLedger(),
+    )
     scenario(
       'Unknown deferred names warn without failing the plan',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
         Given('a deferred file naming a package outside the workspace')(
           'input',
-          () => Effect.succeed({ changelogDir, deferred: FsPath.make('deferred.txt') }),
+          () =>
+            Effect.succeed({ tarballs: FsPath.make('tarballs'), changelogDir, deferred: FsPath.make('deferred.txt') }),
         ),
         When('planning the release')('outcome', (s) =>
           Effect.match(Cell.run(Cell.provide(planCell, live), s.input), {
@@ -227,14 +330,22 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
     const git = makeFakeGit({ tags: [tagOf('alpha', '1.0.0')] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(changesets, workspace, git, cycles.layer)
+    const live = Layer.mergeAll(
+      changesets,
+      workspace,
+      git,
+      cycles.layer,
+      makeFakeTarball(),
+      makeFakeChangesetsPort(),
+      makeFakeLedger(),
+    )
     scenario(
       'A missing deferred file refuses the plan at the read',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
         Given('a deferred path with no file behind it')(
           'input',
-          () => Effect.succeed({ changelogDir, deferred: FsPath.make('nope.txt') }),
+          () => Effect.succeed({ tarballs: FsPath.make('tarballs'), changelogDir, deferred: FsPath.make('nope.txt') }),
         ),
         When('planning the release')('outcome', (s) =>
           Effect.match(Cell.run(Cell.provide(planCell, live), s.input), {
@@ -266,14 +377,14 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members, files: {} })
     const git = makeFakeGit({ tags: [] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(workspace, git, cycles.layer)
+    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball(), makeFakeLedger())
     scenario(
       'Owed packages are tagged and pushed',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
         Given('two owed packages with no tags on the remote')(
           'input',
-          () => Effect.succeed({ dryRun: false, json: false, changelogDir }),
+          () => Effect.succeed({ tarballs: FsPath.make('tarballs'), dryRun: false, json: false, changelogDir }),
         ),
         When('tagging the cycle')('outcome', (s) =>
           Effect.match(Cell.run(Cell.provide(tagCell, live), s.input), {
@@ -307,14 +418,14 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members, files: {} })
     const git = makeFakeGit({ tags: [] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(workspace, git, cycles.layer)
+    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball(), makeFakeLedger())
     scenario(
       'A dry run previews tags without touching the remote',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
         Given('two owed packages with a dry run requested')(
           'input',
-          () => Effect.succeed({ dryRun: true, json: false, changelogDir }),
+          () => Effect.succeed({ tarballs: FsPath.make('tarballs'), dryRun: true, json: false, changelogDir }),
         ),
         When('tagging the cycle')('outcome', (s) =>
           Effect.match(Cell.run(Cell.provide(tagCell, live), s.input), {
@@ -347,14 +458,14 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members, files: {} })
     const git = makeFakeGit({ tags: [tagOf('alpha', '1.0.0'), tagOf('beta', '2.0.0')] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(workspace, git, cycles.layer)
+    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball(), makeFakeLedger())
     scenario(
       'A fully tagged workspace reports up to date',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
         Given('every package already tagged on the remote')(
           'input',
-          () => Effect.succeed({ dryRun: false, json: false, changelogDir }),
+          () => Effect.succeed({ tarballs: FsPath.make('tarballs'), dryRun: false, json: false, changelogDir }),
         ),
         When('tagging the cycle')('outcome', (s) =>
           Effect.match(Cell.run(Cell.provide(tagCell, live), s.input), {
@@ -385,14 +496,21 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members, files: {} })
     const git = makeFakeGit({ tags: [] })
     const cycles = makeFakeCycleStore({ capturedFiles: { 'cap.json': ['alpha@v9.9.9'] } })
-    const live = Layer.mergeAll(workspace, git, cycles.layer)
+    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball(), makeFakeLedger())
     scenario(
       'A captured file reuses the prior cycle',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
         Given('a captured file holding a prior cycle')(
           'input',
-          () => Effect.succeed({ dryRun: false, json: false, changelogDir, captured: FsPath.make('cap.json') }),
+          () =>
+            Effect.succeed({
+              tarballs: FsPath.make('tarballs'),
+              dryRun: false,
+              json: false,
+              changelogDir,
+              captured: FsPath.make('cap.json'),
+            }),
         ),
         When('tagging the captured cycle')(
           'outcome',
@@ -428,14 +546,21 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const cycles = makeFakeCycleStore({
       capturedFiles: { 'cap.json': ['alpha@v1.0.0', 'beta@v2.0.0'] },
     })
-    const live = Layer.mergeAll(workspace, git, cycles.layer)
+    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball(), makeFakeLedger())
     scenario(
       'Re-tagging a captured cycle over pushed tags stays idempotent',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
         Given('a captured cycle whose tags already sit on the remote')(
           'input',
-          () => Effect.succeed({ dryRun: false, json: false, changelogDir, captured: FsPath.make('cap.json') }),
+          () =>
+            Effect.succeed({
+              tarballs: FsPath.make('tarballs'),
+              dryRun: false,
+              json: false,
+              changelogDir,
+              captured: FsPath.make('cap.json'),
+            }),
         ),
         When('tagging the captured cycle')(
           'outcome',
@@ -470,14 +595,21 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members, files: {} })
     const git = makeFakeGit({ tags: [] })
     const cycles = makeFakeCycleStore({ capturedFiles: { 'cap.json': 'nope' } })
-    const live = Layer.mergeAll(workspace, git, cycles.layer)
+    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball(), makeFakeLedger())
     scenario(
       'A malformed captured file refuses tagging',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
         Given('a captured file holding malformed text')(
           'input',
-          () => Effect.succeed({ dryRun: false, json: false, changelogDir, captured: FsPath.make('cap.json') }),
+          () =>
+            Effect.succeed({
+              tarballs: FsPath.make('tarballs'),
+              dryRun: false,
+              json: false,
+              changelogDir,
+              captured: FsPath.make('cap.json'),
+            }),
         ),
         When('tagging the captured cycle')(
           'outcome',
@@ -497,6 +629,7 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
                   expect(git.calls.pushed.length).toEqual(0)
                 }),
                 Match.tag('TagExcludedMalformed', () => failUnexpected('expected TagCapturedMalformed')),
+                Match.tag('TagGitFailed', () => failUnexpected('expected TagCapturedMalformed')),
                 Match.exhaustive,
               )
             }),
@@ -513,14 +646,21 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const workspace = makeFakeWorkspaceStore({ members, files: {} })
     const git = makeFakeGit({ tags: [] })
     const cycles = makeFakeCycleStore()
-    const live = Layer.mergeAll(workspace, git, cycles.layer)
+    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball(), makeFakeLedger())
     scenario(
       'A preview with an output file captures the full entries',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
         Given('two owed packages with an output file requested')(
           'input',
-          () => Effect.succeed({ dryRun: false, json: false, changelogDir, output: FsPath.make('out.json') }),
+          () =>
+            Effect.succeed({
+              tarballs: FsPath.make('tarballs'),
+              dryRun: false,
+              json: false,
+              changelogDir,
+              output: FsPath.make('out.json'),
+            }),
         ),
         When('tagging the cycle')('outcome', (s) =>
           Effect.match(Cell.run(Cell.provide(tagCell, live), s.input), {
@@ -596,6 +736,126 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
               )),
             Match.tag('refused', () => failUnexpected('expected a release decision')),
             Match.exhaustive,
+          )
+        }),
+      ),
+    )
+  }
+
+  {
+    const members = [member('alpha', '1.1.0')]
+    const changelog = {
+      'packages/alpha/CHANGELOG.md': '# alpha\n\n## 1.1.0\n\n- new\n\n## 1.0.0\n\n- old\n',
+    }
+    const workspace = makeFakeWorkspaceStore({ members, files: changelog, storage: 'repository' })
+    const git = makeFakeGit({ tags: [] })
+    const cycles = makeFakeCycleStore()
+    const forge = makeFakeForge()
+    const live = Layer.mergeAll(workspace, git, cycles.layer, forge.layer)
+    scenario(
+      'Under repository storage the release body is the version section of the package changelog',
+      { scenarioLayer: live },
+      Gherkin.Do.pipe(
+        Given('a package whose own CHANGELOG.md holds this version and an older one')(
+          'input',
+          () => Effect.succeed({ assert: false, dryRun: false, changelogDir }),
+        ),
+        When('creating the releases')(
+          'outcome',
+          (s) =>
+            Effect.match(Cell.run(Cell.provide(githubReleaseCell, live), s.input), {
+              onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
+              onSuccess: (value) => ({ _tag: 'decided' as const, value }),
+            }),
+        ),
+        Then('the release body is that version section alone')((s) => {
+          Match.value(s.outcome).pipe(
+            Match.tag('decided', () => {
+              expect(forge.calls.created.length).toEqual(1)
+              expect(forge.calls.created[0]?.body).toEqual('## 1.1.0\n\n- new')
+            }),
+            Match.tag('refused', () => failUnexpected('expected a release decision')),
+            Match.exhaustive,
+          )
+        }),
+      ),
+    )
+  }
+
+  {
+    const members = [member('alpha', '1.1.0')]
+    const changelog = { 'packages/alpha/CHANGELOG.md': '# alpha\n\n## 1.0.0\n\n- old\n' }
+    const workspace = makeFakeWorkspaceStore({ members, files: changelog, storage: 'repository' })
+    const git = makeFakeGit({ tags: [] })
+    const cycles = makeFakeCycleStore()
+    const forge = makeFakeForge()
+    const live = Layer.mergeAll(workspace, git, cycles.layer, forge.layer)
+    scenario(
+      'Under repository storage a changelog without the version section refuses the release',
+      { scenarioLayer: live },
+      Gherkin.Do.pipe(
+        Given('a package whose CHANGELOG.md has no section for its version')(
+          'input',
+          () => Effect.succeed({ assert: false, dryRun: false, changelogDir }),
+        ),
+        When('creating the releases')(
+          'outcome',
+          (s) =>
+            Effect.match(Cell.run(Cell.provide(githubReleaseCell, live), s.input), {
+              onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
+              onSuccess: (value) => ({ _tag: 'decided' as const, value }),
+            }),
+        ),
+        Then('the refusal names the package, version and changelog, and nothing is created')((s) => {
+          Match.value(s.outcome).pipe(
+            Match.tag('refused', (refused) => {
+              Match.value(refused.refusal).pipe(
+                Match.tag('ReleaseChangelogMissing', (missing) => {
+                  expect(missing.package).toEqual(PackageName.make('alpha'))
+                  expect(missing.version).toEqual(PackageVersion.make('1.1.0'))
+                  expect(missing.changelog).toEqual(RelativePath.make('packages/alpha/CHANGELOG.md'))
+                }),
+                Match.orElse((other) => failUnexpected(`expected ReleaseChangelogMissing, got ${other._tag}`)),
+              )
+              expect(forge.calls.created.length).toEqual(0)
+            }),
+            Match.tag('decided', () => failUnexpected('expected refused')),
+            Match.exhaustive,
+          )
+        }),
+      ),
+    )
+  }
+
+  {
+    const members = [member('alpha', '1.0.0')]
+    const workspace = makeFakeWorkspaceStore({ members, files: {}, storage: 'repository' })
+    const git = makeFakeGit({ tags: [] })
+    const cycles = makeFakeCycleStore()
+    const live = Layer.mergeAll(workspace, git, cycles.layer, makeFakeTarball(), makeFakeLedger())
+    scenario(
+      'Under repository storage the captured cycle points at the package changelog',
+      { scenarioLayer: live },
+      Gherkin.Do.pipe(
+        Given('an owed package with an output file requested')(
+          'input',
+          () =>
+            Effect.succeed({
+              tarballs: FsPath.make('tarballs'),
+              dryRun: false,
+              json: false,
+              changelogDir,
+              output: FsPath.make('out.json'),
+            }),
+        ),
+        When('tagging the cycle')('outcome', (s) =>
+          Effect.match(Cell.run(Cell.provide(tagCell, live), s.input), {
+            onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
+            onSuccess: (value) => ({ _tag: 'decided' as const, value }),
+          })),
+        Then('the captured entry names packages/alpha/CHANGELOG.md, not a parked file')(() => {
+          expect(cycles.written.captured[0]?.entries.map((entry) => entry.changelog)).toEqual(
+            [RelativePath.make('packages/alpha/CHANGELOG.md')],
           )
         }),
       ),
@@ -877,18 +1137,18 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const branch = GitRef.make('changeset-release/main')
     const base = GitRef.make('main')
     const title = PrTitle.make('chore(release): version packages')
-    const changesets = makeFakeChangesetStore([intentPath('bright-panda-runs')])
+    const changesets = makeFakeChangesetStore([])
     const workspace = makeFakeWorkspaceStore({ members: [], files: {} })
-    const git = makeFakeGit({})
+    const git = makeFakeGit({ trackedChanges: 3 })
     const forge = makeFakeForge()
     const live = Layer.mergeAll(changesets, workspace, git, forge.layer)
     scenario(
       'A dirty branch without a request opens one with the label',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
-        Given('pending intents with no open request')(
+        Given('a bumped tree with no open request')(
           'input',
-          () => Effect.succeed({ title, base, branch, labels: [releaseLabel] }),
+          () => Effect.succeed({ title, base, branch, labels: [releaseLabel], changelogDir }),
         ),
         When('syncing the release request')(
           'outcome',
@@ -927,9 +1187,9 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
     const branch = GitRef.make('changeset-release/main')
     const base = GitRef.make('main')
     const title = PrTitle.make('chore(release): version packages')
-    const changesets = makeFakeChangesetStore([intentPath('bright-panda-runs')])
+    const changesets = makeFakeChangesetStore([])
     const workspace = makeFakeWorkspaceStore({ members: [], files: {} })
-    const git = makeFakeGit({})
+    const git = makeFakeGit({ trackedChanges: 3 })
     const forge = makeFakeForge({
       pullRequests: [{ number: 12, head: 'changeset-release/main', title: 'old' }],
     })
@@ -938,9 +1198,9 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
       'A dirty branch with a request refreshes it with the label',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
-        Given('pending intents with an open request')(
+        Given('a bumped tree with an open request')(
           'input',
-          () => Effect.succeed({ title, base, branch, labels: [releaseLabel] }),
+          () => Effect.succeed({ title, base, branch, labels: [releaseLabel], changelogDir }),
         ),
         When('syncing the release request')(
           'outcome',
@@ -988,9 +1248,9 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
       'A clean branch with a request closes it and deletes the branch',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
-        Given('no pending intents with an open request')(
+        Given('an unchanged tree with an open request')(
           'input',
-          () => Effect.succeed({ title, base, branch, labels: [releaseLabel] }),
+          () => Effect.succeed({ title, base, branch, labels: [releaseLabel], changelogDir }),
         ),
         When('syncing the release request')(
           'outcome',
@@ -1035,9 +1295,9 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
       'A clean branch without a request rests vacant',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
-        Given('no pending intents and no open request')(
+        Given('an unchanged tree and no open request')(
           'input',
-          () => Effect.succeed({ title, base, branch, labels: [releaseLabel] }),
+          () => Effect.succeed({ title, base, branch, labels: [releaseLabel], changelogDir }),
         ),
         When('syncing the release request')(
           'outcome',
@@ -1081,7 +1341,7 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
       Gherkin.Do.pipe(
         Given('pending intents with the branch set to the base')(
           'input',
-          () => Effect.succeed({ title, base, branch: base, labels: [releaseLabel] }),
+          () => Effect.succeed({ title, base, branch: base, labels: [releaseLabel], changelogDir }),
         ),
         When('syncing the release request')(
           'outcome',
@@ -1098,6 +1358,9 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
               Match.value(refusal).pipe(
                 Match.tag('PullRequestHeadInvalid', () => undefined),
                 Match.tag('PullRequestBodyUnreadable', () => failUnexpected('expected PullRequestHeadInvalid')),
+                Match.tag('PullRequestUnversioned', () => failUnexpected('expected PullRequestHeadInvalid')),
+                Match.tag('PullRequestTreeUnreadable', () => failUnexpected('expected PullRequestHeadInvalid')),
+                Match.tag('PullRequestGitFailed', () => failUnexpected('expected PullRequestHeadInvalid')),
                 Match.exhaustive,
               )
             }),
@@ -1128,6 +1391,7 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
             base,
             branch,
             labels: [releaseLabel],
+            changelogDir,
             bodyFile: RelativePath.make('notes/missing.md'),
           })),
         When('syncing the release request')(
@@ -1147,10 +1411,192 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
                   expect(forge.calls.createdPullRequests.length).toEqual(0)
                 }),
                 Match.tag('PullRequestHeadInvalid', () => failUnexpected('expected PullRequestBodyUnreadable')),
+                Match.tag('PullRequestUnversioned', () => failUnexpected('expected PullRequestBodyUnreadable')),
+                Match.tag('PullRequestTreeUnreadable', () => failUnexpected('expected PullRequestBodyUnreadable')),
+                Match.tag('PullRequestGitFailed', () => failUnexpected('expected PullRequestBodyUnreadable')),
                 Match.exhaustive,
               )
             }),
             Match.tag('decided', () => failUnexpected('expected refused')),
+            Match.exhaustive,
+          )
+        }),
+      ),
+    )
+  }
+
+  {
+    const changesets = makeFakeChangesetStore([])
+    const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
+    const git = makeFakeGit({ tags: [tagOf('alpha', '1.0.0')] })
+    const cycles = makeFakeCycleStore()
+    const live = Layer.mergeAll(
+      changesets,
+      workspace,
+      git,
+      cycles.layer,
+      makeFakeTarball(),
+      makeFakeChangesetsPort(),
+      makeFakeLedger(),
+    )
+    scenario(
+      'A recorded annotation that matches the packed tarball verifies',
+      { scenarioLayer: live },
+      Gherkin.Do.pipe(
+        Given('a tagged member whose annotation records the packed files')(
+          'input',
+          () => Effect.succeed({ tarballs: FsPath.make('tarballs'), changelogDir }),
+        ),
+        When('planning the release')('outcome', (s) =>
+          Effect.match(Cell.run(Cell.provide(planCell, live), s.input), {
+            onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
+            onSuccess: (value) => ({ _tag: 'decided' as const, value }),
+          })),
+        Then('the plan proceeds with no integrity refusal')((s) => {
+          Match.value(s.outcome).pipe(
+            Match.tag('decided', (decided) => {
+              expect(decided.value.phase).toEqual('none')
+            }),
+            Match.tag(
+              'refused',
+              (refused) => failUnexpected(`expected verified, got ${JSON.stringify(refused.refusal)}`),
+            ),
+            Match.exhaustive,
+          )
+        }),
+      ),
+    )
+  }
+
+  {
+    const changesets = makeFakeChangesetStore([])
+    const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
+    const git = makeFakeGit({
+      tags: [tagOf('alpha', '1.0.0')],
+      annotation: JSON.stringify({ integrity: FAKE_INTEGRITY, files: { 'package/package.json': 'sha512-changed' } }),
+    })
+    const cycles = makeFakeCycleStore()
+    const live = Layer.mergeAll(
+      changesets,
+      workspace,
+      git,
+      cycles.layer,
+      makeFakeTarball(),
+      makeFakeChangesetsPort(),
+      makeFakeLedger(),
+    )
+    scenario(
+      'A recorded annotation whose tarball changed refuses the plan',
+      { scenarioLayer: live },
+      Gherkin.Do.pipe(
+        Given('a tagged member whose annotation records a different file hash')(
+          'input',
+          () => Effect.succeed({ tarballs: FsPath.make('tarballs'), changelogDir }),
+        ),
+        When('planning the release')('outcome', (s) =>
+          Effect.match(Cell.run(Cell.provide(planCell, live), s.input), {
+            onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
+            onSuccess: (value) => ({ _tag: 'decided' as const, value }),
+          })),
+        Then('the plan refuses naming the package, version and file')((s) => {
+          Match.value(s.outcome).pipe(
+            Match.tag('refused', (refused) => {
+              const mismatch = S.decodeUnknownResult(TagIntegrityMismatch)(refused.refusal)
+              if (Result.isFailure(mismatch)) {
+                failUnexpected('expected a tag-integrity-mismatch refusal')
+                return
+              }
+              expect(mismatch.success.package).toEqual(PackageName.make('alpha'))
+              expect(mismatch.success.version).toEqual(PackageVersion.make('1.0.0'))
+              expect(mismatch.success.file).toEqual('package/package.json')
+            }),
+            Match.tag('decided', () => failUnexpected('expected a tag-integrity-mismatch refusal')),
+            Match.exhaustive,
+          )
+        }),
+      ),
+    )
+  }
+
+  {
+    const changesets = makeFakeChangesetStore([])
+    const workspace = makeFakeWorkspaceStore({ members: [member('alpha', '1.0.0')], files: {} })
+    const git = makeFakeGit({
+      tags: [tagOf('alpha', '1.0.0')],
+      annotation: JSON.stringify({ integrity: FAKE_INTEGRITY, files: {} }),
+    })
+    const cycles = makeFakeCycleStore()
+    const live = Layer.mergeAll(
+      changesets,
+      workspace,
+      git,
+      cycles.layer,
+      makeFakeTarball([{
+        name: PackageName.make('alpha'),
+        version: PackageVersion.make('1.0.0'),
+        integrity: FAKE_INTEGRITY,
+        files: {},
+      }]),
+      makeFakeChangesetsPort(),
+      makeFakeLedger(),
+    )
+    scenario(
+      'A recorded annotation with empty files refuses the plan',
+      { scenarioLayer: live },
+      Gherkin.Do.pipe(
+        Given('a tagged member whose annotation records no files')(
+          'input',
+          () => Effect.succeed({ tarballs: FsPath.make('tarballs'), changelogDir }),
+        ),
+        When('planning the release')('outcome', (s) =>
+          Effect.match(Cell.run(Cell.provide(planCell, live), s.input), {
+            onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
+            onSuccess: (value) => ({ _tag: 'decided' as const, value }),
+          })),
+        Then('the plan refuses naming the package, version and empty side')((s) => {
+          Match.value(s.outcome).pipe(
+            Match.tag('refused', (refused) => {
+              const empty = S.decodeUnknownResult(IntegrityFilesEmpty)(refused.refusal)
+              if (Result.isFailure(empty)) {
+                failUnexpected('expected an integrity-files-empty refusal')
+                return
+              }
+              expect(empty.success.package).toEqual(PackageName.make('alpha'))
+              expect(empty.success.version).toEqual(PackageVersion.make('1.0.0'))
+              expect(empty.success.side).toEqual('recorded')
+            }),
+            Match.tag('decided', () => failUnexpected('expected an integrity-files-empty refusal')),
+            Match.exhaustive,
+          )
+        }),
+      ),
+    )
+  }
+
+  {
+    const live = Layer.mergeAll(
+      makeFakeChangesetStore([]),
+      makeFakeWorkspaceStore({ members: [], files: {} }),
+      makeFakeGit({}),
+      makeFakeCycleStore().layer,
+      makeFakeTarball(),
+      makeFakeChangesetsPort(),
+    )
+    scenario(
+      'Verifying zero integrity checks refuses',
+      { scenarioLayer: live },
+      Gherkin.Do.pipe(
+        Given('an integrity verification with no checks')('input', () => Effect.succeed(undefined)),
+        When('verifying integrity')('outcome', () => Effect.succeed(verifyIntegrity([]))),
+        Then('the verification refuses as nothing to verify')((s) => {
+          if (Result.isSuccess(s.outcome)) {
+            failUnexpected('expected an integrity-nothing-to-verify refusal')
+            return
+          }
+          Match.value(s.outcome.failure).pipe(
+            Match.tag('IntegrityNothingToVerify', () => undefined),
+            Match.tag('IntegrityFilesEmpty', () => failUnexpected('expected IntegrityNothingToVerify')),
+            Match.tag('TagIntegrityMismatch', () => failUnexpected('expected IntegrityNothingToVerify')),
             Match.exhaustive,
           )
         }),

@@ -1,0 +1,42 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .: {}
+
+  packages/unwanted:
+    dependencies:
+      '@sandbox-proof/tiny-lib':
+        specifier: file:../../.deps/tiny-lib-1.0.0.tgz
+        version: file:.deps/tiny-lib-1.0.0.tgz
+
+  packages/wanted:
+    dependencies:
+      ms:
+        specifier: 2.1.3
+        version: 2.1.3
+    devDependencies:
+      '@sandbox-proof/tiny-lib':
+        specifier: file:../../.deps/tiny-lib-1.0.0.tgz
+        version: file:.deps/tiny-lib-1.0.0.tgz
+
+packages:
+
+  '@sandbox-proof/tiny-lib@file:.deps/tiny-lib-1.0.0.tgz':
+    resolution: {integrity: sha512-N0VZRFCAcYZuo4HkQOeETcg+qAN9L69GL3gPlKUJk4VPWiuzpAGmZ7WMEZ1gOP9nJCmEGZ6WzgmBBqWDZxsK4w==, tarball: file:.deps/tiny-lib-1.0.0.tgz}
+    version: 1.0.0
+
+  ms@2.1.3:
+    resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
+
+snapshots:
+
+  '@sandbox-proof/tiny-lib@file:.deps/tiny-lib-1.0.0.tgz':
+    dependencies:
+      ms: 2.1.3
+
+  ms@2.1.3: {}

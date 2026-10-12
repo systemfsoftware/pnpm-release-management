@@ -97,6 +97,9 @@ export const Member = S.Struct({
 })
 export type Member = S.Schema.Type<typeof Member>
 
+export const ChangelogStorage = S.Literals(['registry', 'repository'])
+export type ChangelogStorage = S.Schema.Type<typeof ChangelogStorage>
+
 export const RootFile = S.Struct({
   path: RelativePath,
   text: S.String,
@@ -114,5 +117,11 @@ export const ManifestInvalid = S.TaggedStruct('ManifestInvalid', {
 })
 export type ManifestInvalid = S.Schema.Type<typeof ManifestInvalid>
 
-export const MemberRefusal = S.Union([ManifestUnreadable, ManifestInvalid])
+export const CommandUnstartable = S.TaggedStruct('CommandUnstartable', {
+  command: S.NonEmptyString,
+  reason: S.String,
+})
+export type CommandUnstartable = S.Schema.Type<typeof CommandUnstartable>
+
+export const MemberRefusal = S.Union([ManifestUnreadable, ManifestInvalid, CommandUnstartable])
 export type MemberRefusal = S.Schema.Type<typeof MemberRefusal>

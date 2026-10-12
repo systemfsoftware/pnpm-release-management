@@ -1,4 +1,14 @@
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers'
+import {
+  conditionHolds,
+  readWorkflow,
+  resolveExpressions,
+  runStepsOf,
+  toolStepsOf,
+  workflowEnvOf,
+  type WorkflowFile,
+} from './workflow-env.js'
+import type { Workflow } from './workflow.schema.js'
 
 export const IMAGE = 'pnpm-release-management-e2e:local'
 export const BINS_DIR = '/opt/prm'
@@ -8,12 +18,97 @@ export const ORIGIN = '/srv/origin.git'
 export const GITHUB_API_URL = 'https://api.github.com'
 export const GITHUB_TOKEN = 'test_token_admin'
 export const GITHUB_REPOSITORY = 'admin/fixture'
+export const REGISTRY = 'https://registry.npmjs.org'
+export const REGISTRY_LOG = '/tmp/verdaccio/verdaccio.log'
+export const REGISTRY_STORAGE = '/tmp/verdaccio/storage'
+export const CI_WORKFLOW = 'ci.yml'
+export const GH_DISPATCHES = '/tmp/gh-dispatches.log'
+export const WORKSPACE_TARBALLS = '/tmp/workspace-tarballs'
+const ARTIFACTS_DIR = '.release'
+const WORKFLOW_REPOSITORY = 'systemfsoftware/pnpm-release-management'
+const WORKFLOW_SHA = 'feedfacefeedfacefeedfacefeedfacefeedface'
+const CALLER_LOCK_REV = '0449f15b2db9602a1dfe58bee2598adca2a726ed'
+
+const RUNNER_BIN = '/opt/runner-bin'
+const STEP_DIR = '/tmp/steps'
+const WORKFLOW_RELEASE_TOOLS = '/tmp/workflow-release-tools'
+const CALLER_DEVSHELL_BIN = '/tmp/caller-devshell/bin'
+const RELEASE_APPS = ['changeset-management', 'version-management', 'github-release-management'] as const
+
+const GH_STUB = `#!/bin/sh
+if [ -z "$GH_TOKEN" ]; then
+  echo 'gh: To use GitHub CLI in a GitHub Actions workflow, set the GH_TOKEN environment variable.' >&2
+  exit 4
+fi
+if [ "$1 $2" = "workflow run" ]; then
+  printf '%s\\n' "$*" >> ${GH_DISPATCHES}
+  exit 0
+fi
+echo "gh stub: only 'gh workflow run' is modelled, got: gh $*" >&2
+exit 2
+`
+
+const NIX_STUB = `#!/bin/sh
+case "$1" in
+  develop)
+    if [ "$2" != --command ]; then
+      echo "nix stub: only 'nix develop --command' is modelled, got: nix $*" >&2
+      exit 2
+    fi
+    shift 2
+    PATH="${CALLER_DEVSHELL_BIN}:$PATH" exec "$@"
+    ;;
+  build)
+    shift
+    if [ $# -ne 3 ] || [ "$1" != --no-link ] || [ "$2" != --print-out-paths ]; then
+      echo "nix stub: only 'nix build --no-link --print-out-paths <ref>' is modelled, got: nix build $*" >&2
+      exit 2
+    fi
+    case "$3" in
+      "github:${WORKFLOW_REPOSITORY}/${WORKFLOW_SHA}#release-tools") echo ${WORKFLOW_RELEASE_TOOLS} ;;
+      .#workspace-tarballs) echo ${WORKSPACE_TARBALLS} ;;
+      *)
+        echo "nix stub: no flake output for $3" >&2
+        exit 1
+        ;;
+    esac
+    exit 0
+    ;;
+esac
+echo "nix stub: only develop and build are modelled, got: nix $*" >&2
+exit 2
+`
+
+const callerLockTool = (app: string): string =>
+  `#!/bin/sh
+echo "${app} at ${CALLER_LOCK_REV}, the revision the caller's flake.lock pins, ran instead of the workflow's: $*" >&2
+exit 1
+`
+
+const SANDBOX_STUB = `#!/bin/sh
+if [ "$1" = -- ]; then shift; fi
+case "$1" in
+  -*)
+    echo "sandbox stub: only 'sandbox [--] COMMAND' is modelled, got: sandbox $*" >&2
+    exit 2
+    ;;
+  /*)
+    if [ "$(realpath -m "$1")" != "$1" ]; then
+      echo "bwrap: execvp $1: No such file or directory (the sandbox binds the store paths a command resolves to, not the symlinks naming it)" >&2
+      exit 1
+    fi
+    ;;
+esac
+exec "$@"
+`
 
 export const REDIRECTED_HOSTS = [
   { host: 'api.github.com', ipAddress: '127.0.0.1' },
+  { host: 'registry.npmjs.org', ipAddress: '127.0.0.1' },
 ]
 
-const READY = 'curl -fsS https://api.github.com/meta > /dev/null'
+const READY = 'curl -fsS https://api.github.com/meta > /dev/null && ' +
+  'curl -fsS https://registry.npmjs.org/-/ping > /dev/null'
 
 const GITHUB_HEADERS: ReadonlyArray<string> = [
   `Authorization: Bearer ${GITHUB_TOKEN}`,
@@ -47,6 +142,16 @@ export interface CommandRecord {
   stderr: string
 }
 
+export interface StepResult extends ExecResult {
+  readonly step: string
+  readonly outputs: Readonly<Record<string, string>>
+}
+
+export interface JobOptions {
+  readonly workflow?: WorkflowFile
+  readonly inputs?: Readonly<Record<string, string>>
+}
+
 export interface Listener {
   command(record: CommandRecord): void
 }
@@ -60,6 +165,7 @@ export interface Snapshot {
   files: string
   releases: unknown
   pulls: unknown
+  registry: Record<string, unknown>
 }
 
 export interface World {
@@ -69,6 +175,10 @@ export interface World {
   must(command: string, options?: ExecOptions): Promise<ExecResult>
   fails(command: string, options?: ExecOptions): Promise<ExecResult>
   tool(app: string, subcommand: string, args?: string, options?: ExecOptions): Promise<ExecResult>
+  job(
+    name: string,
+    options?: JobOptions,
+  ): Promise<ReadonlyArray<StepResult>>
   write(path: string, content: string): Promise<void>
   read(path: string): Promise<string>
   github<T>(path: string, decode: (input: unknown) => T): Promise<GitHubResponse<T>>
@@ -85,21 +195,56 @@ export const parseJson = (text: string): unknown => {
   return parsed
 }
 
-const DEFAULT_ENV: Readonly<Record<string, string>> = {
+const RUNNER_ENV: Readonly<Record<string, string>> = {
   NO_COLOR: '1',
   GITHUB_API_URL,
-  GITHUB_TOKEN,
   GITHUB_REPOSITORY,
 }
 
+const WORKFLOW_EXPRESSIONS: Readonly<Record<string, string>> = {
+  'github.token': GITHUB_TOKEN,
+  'inputs.ci-workflow': CI_WORKFLOW,
+  'inputs.artifacts-dir': ARTIFACTS_DIR,
+  'job.workflow_repository': WORKFLOW_REPOSITORY,
+  'job.workflow_sha': WORKFLOW_SHA,
+  'runner.environment': 'self-hosted',
+}
+
+const WORKFLOWS: Readonly<Record<WorkflowFile, Workflow>> = {
+  'release.yml': await readWorkflow('release.yml'),
+  'changeset-check.yml': await readWorkflow('changeset-check.yml'),
+}
+const RELEASE_TOOL_STEPS = toolStepsOf(WORKFLOWS['release.yml'])
+
+const outputsOf = (text: string): Record<string, string> =>
+  Object.fromEntries(
+    text.split('\n').flatMap((line) => {
+      const at = line.indexOf('=')
+      if (at <= 0) return []
+      return [[line.slice(0, at), line.slice(at + 1)]]
+    }),
+  )
+
 const shellScript = (command: string, options: ExecOptions): string => {
-  const lines = Object.entries({ ...DEFAULT_ENV, ...options.env }).map(([name, value]) =>
+  const lines = Object.entries({ ...RUNNER_ENV, ...options.env }).map(([name, value]) =>
     `export ${name}=${quote(value)}`
   )
   if (options.cwd !== undefined) lines.push(`cd ${quote(options.cwd)}`)
   lines.push(command)
   return lines.join('\n')
 }
+
+const installScript = (path: string, content: string): string =>
+  `cat > ${path} <<'STUB_EOF'\n${content}STUB_EOF\nchmod 0755 ${path}`
+
+const RUNNER_SETUP = [
+  `mkdir -p ${RUNNER_BIN} ${STEP_DIR} ${CALLER_DEVSHELL_BIN} ${WORKFLOW_RELEASE_TOOLS} && touch ${GH_DISPATCHES}`,
+  `ln -sfn ${BINS_DIR} ${WORKFLOW_RELEASE_TOOLS}/bin`,
+  installScript(`${RUNNER_BIN}/gh`, GH_STUB),
+  installScript(`${RUNNER_BIN}/nix`, NIX_STUB),
+  ...RELEASE_APPS.map((app) => installScript(`${CALLER_DEVSHELL_BIN}/${app}`, callerLockTool(app))),
+  installScript(`${CALLER_DEVSHELL_BIN}/sandbox`, SANDBOX_STUB),
+].join('\n')
 
 export const makeWorld = (container: StartedTestContainer, listener: Listener): World => {
   const state = { phase: 'setup', kept: false }
@@ -154,7 +299,55 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
     return run(parts.join(' '), {
       cwd: FIXTURE,
       ...options,
+      env: { ...workflowEnvOf(RELEASE_TOOL_STEPS, WORKFLOW_EXPRESSIONS, app, subcommand, args), ...options.env },
     })
+  }
+
+  const job = async (
+    name: string,
+    { workflow = 'release.yml', inputs = {} }: JobOptions = {},
+  ): Promise<ReadonlyArray<StepResult>> => {
+    await must(RUNNER_SETUP)
+    const githubEnv = `${STEP_DIR}/${name}.env`
+    await must(`: > ${quote(githubEnv)}`)
+    let jobEnv: Record<string, string> = {}
+    const outputs: Record<string, Record<string, string>> = {}
+    const operand = (expression: string): string | undefined => {
+      const step = expression.match(/^steps\.([\w-]+)\.outputs\.([\w-]+)$/)
+      if (step?.[1] !== undefined && step[2] !== undefined) return outputs[step[1]]?.[step[2]] ?? ''
+      const input = expression.match(/^inputs\.([\w-]+)$/)
+      if (input?.[1] !== undefined && inputs[input[1]] !== undefined) return inputs[input[1]]
+      return WORKFLOW_EXPRESSIONS[expression]
+    }
+    const lookup = (expression: string): string | undefined => {
+      for (const alternative of expression.split('||').map((part) => part.trim())) {
+        const value = operand(alternative)
+        if (value === undefined) return undefined
+        if (value !== '') return value
+      }
+      return ''
+    }
+    const results: Array<StepResult> = []
+    for (const [index, step] of runStepsOf(WORKFLOWS[workflow], name).entries()) {
+      if (!conditionHolds(step.condition, lookup)) continue
+      const script = `${STEP_DIR}/${name}-${index}.sh`
+      const output = `${STEP_DIR}/${name}-${index}.output`
+      await writeFile(script, resolveExpressions(step.run, lookup))
+      await must(`: > ${quote(output)}`)
+      const env = Object.fromEntries(
+        Object.entries(step.env).map(([variable, value]) => [variable, resolveExpressions(value, lookup)]),
+      )
+      const result = await run(
+        `PATH=${RUNNER_BIN}:$PATH bash --noprofile --norc -eo pipefail ${quote(script)}`,
+        { cwd: FIXTURE, env: { ...jobEnv, ...env, GITHUB_OUTPUT: output, GITHUB_ENV: githubEnv } },
+      )
+      const stepOutputs = outputsOf((await must(`cat ${quote(output)}`)).stdout)
+      results.push({ step: step.label, outputs: stepOutputs, ...result })
+      if (result.code !== 0) return results
+      if (step.id !== undefined) outputs[step.id] = stepOutputs
+      jobEnv = outputsOf((await must(`cat ${quote(githubEnv)}`)).stdout)
+    }
+    return results
   }
 
   const curlJson = async (
@@ -194,6 +387,11 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
       'for p in packages/*/package.json; do printf "%s " "$p"; grep -m1 \'"version"\' "$p"; done',
     )
 
+    const registry: Record<string, unknown> = {}
+    for (const name of ['@e2e/alpha', '@e2e/beta']) {
+      registry[name] = await tolerant(async () => (await curlJson(`${REGISTRY}/${encodeURIComponent(name)}`)).body)
+    }
+
     const versions: Record<string, string> = {}
     for (const line of versionsRaw.split('\n')) {
       if (!line.includes('"version"')) continue
@@ -215,6 +413,7 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
       pulls: await tolerant(async () =>
         (await curlJson(`${GITHUB_API_URL}/repos/admin/fixture/pulls?state=all&per_page=100`, GITHUB_HEADERS)).body
       ),
+      registry,
     }
   }
 
@@ -246,6 +445,7 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
     must,
     fails,
     tool,
+    job,
     write: writeFile,
     read: async (path: string): Promise<string> => (await must(`cat ${quote(path)}`)).stdout,
     github,

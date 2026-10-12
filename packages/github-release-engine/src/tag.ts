@@ -1,25 +1,42 @@
 import { Cell, Wire } from '@systemfsoftware/effect-cell-types'
 import type {
+  CommitSha,
   CycleEntry,
+  LegacyTagUnverified,
   MemberRefusal,
   PackageName,
   PlanDeferredUnknown,
+  ReleaseTag,
   TagRefusal,
+  TarballRefusal,
 } from '@systemfsoftware/release-language'
 import {
   CycleStore,
   FsPath,
   GitPort,
+  LEDGER_PATH,
+  LedgerPort,
+  type LedgerRefusal,
+  LegacyTags,
   RelativePath,
+  ReleaseLedger,
   RemoteName,
+  TagAtOtherCommit,
+  type TarballDigest,
+  TarballMissing,
+  TarballPort,
+  type VersionBurned,
   WorkspaceStore,
 } from '@systemfsoftware/release-language'
-import { Effect } from 'effect'
+import { Effect, Option } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import { cycleOf, dropExcluded } from './cycle.js'
+import { burnedOf, stateForVersion } from './integrity.js'
+import { legacyReleased } from './legacy.js'
 import {
+  type TagAnnotation,
   TagCapturedMalformed,
   TagCommand,
   type TagDecision,
@@ -33,9 +50,11 @@ export const TagRequest = Wire.wire({
   exclude: Wire.mint(S.optional(FsPath)),
   output: Wire.mint(S.optional(FsPath)),
   remote: Wire.mint(S.optional(RemoteName)),
+  tarballs: Wire.mint(FsPath),
   dryRun: Wire.mint(S.Boolean),
   json: Wire.mint(S.Boolean),
   changelogDir: Wire.mint(RelativePath),
+  legacyTags: Wire.mint(S.optional(LegacyTags)),
 })
 
 interface ExclusionScan {
@@ -83,12 +102,21 @@ const readLive = (input: {
   readonly remote: RemoteName
   readonly changelogDir: RelativePath
   readonly excluded: ReadonlyArray<PackageName>
-}): Effect.Effect<CycleScan, MemberRefusal | TagRefusal, never> =>
+  readonly legacyTags: LegacyTags | undefined
+}): Effect.Effect<CycleScan, MemberRefusal | TagRefusal | LegacyTagUnverified, never> =>
   Effect.gen(function*() {
     const members = yield* input.workspace.listMembers()
     const tags = yield* input.git.remoteTags(input.remote)
+    const legacy = yield* legacyReleased({
+      git: input.git,
+      remote: input.remote,
+      members,
+      remoteTags: tags,
+      legacy: input.legacyTags,
+    })
+    const storage = yield* input.workspace.changelogStorage()
     return {
-      entries: dropExcluded(cycleOf(members, tags, input.changelogDir), input.excluded),
+      entries: dropExcluded(cycleOf(members, tags, legacy, input.changelogDir, storage), input.excluded),
       issue: undefined,
     }
   })
@@ -101,7 +129,8 @@ const readCycle = (input: {
   readonly capturedPath: FsPath | undefined
   readonly changelogDir: RelativePath
   readonly excluded: ReadonlyArray<PackageName>
-}): Effect.Effect<CycleScan, MemberRefusal | TagRefusal | PlanDeferredUnknown, never> => {
+  readonly legacyTags: LegacyTags | undefined
+}): Effect.Effect<CycleScan, MemberRefusal | TagRefusal | LegacyTagUnverified | PlanDeferredUnknown, never> => {
   const capturedPath = input.capturedPath
   if (capturedPath !== undefined) {
     return readCaptured(input.cycles, capturedPath, input.excluded)
@@ -109,18 +138,44 @@ const readCycle = (input: {
   return readLive(input)
 }
 
+const annotationsOf = (
+  entries: ReadonlyArray<CycleEntry>,
+  digests: ReadonlyArray<TarballDigest>,
+): Result.Result<ReadonlyArray<TagAnnotation>, TarballRefusal> => {
+  const annotations: Array<TagAnnotation> = []
+  for (const entry of entries) {
+    const digest = digests.find((candidate) => candidate.name === entry.name && candidate.version === entry.version)
+    if (digest === undefined) {
+      return Result.fail(TarballMissing.make({ package: entry.name, version: entry.version }))
+    }
+    annotations.push({
+      tag: entry.tag,
+      message: JSON.stringify({ integrity: digest.integrity, files: digest.files }),
+    })
+  }
+  return Result.succeed(annotations)
+}
+
 const read = (
   request: S.Schema.Type<typeof TagRequest>,
 ): Effect.Effect<
   TagCommand,
-  MemberRefusal | TagRefusal | PlanDeferredUnknown,
-  WorkspaceStore | GitPort | CycleStore
+  | MemberRefusal
+  | TagRefusal
+  | LegacyTagUnverified
+  | PlanDeferredUnknown
+  | TarballRefusal
+  | VersionBurned
+  | LedgerRefusal,
+  WorkspaceStore | GitPort | CycleStore | TarballPort | LedgerPort
 > =>
   Effect.gen(function*() {
     const remote = request.remote ?? RemoteName.make('origin')
     const workspace = yield* WorkspaceStore
     const git = yield* GitPort
     const cycles = yield* CycleStore
+    const tarballs = yield* TarballPort
+    const ledgerPort = yield* LedgerPort
     const exclusion = yield* readExclusion(cycles, request.exclude)
     const scan = yield* readCycle({
       cycles,
@@ -130,9 +185,27 @@ const read = (
       capturedPath: request.captured ?? request.capturedFile,
       changelogDir: request.changelogDir,
       excluded: exclusion.names,
+      legacyTags: request.legacyTags,
     })
+    let digests: ReadonlyArray<TarballDigest> = []
+    if (scan.entries.length > 0) {
+      digests = yield* tarballs.read(request.tarballs)
+    }
+    const ledger = yield* ledgerPort.read(LEDGER_PATH)
+    const ledgerEntries = Option.getOrElse(ledger, () => ReleaseLedger.make({ entries: [] })).entries
+    for (const entry of scan.entries) {
+      const state = stateForVersion(ledgerEntries, entry.name, entry.version)
+      if (state !== undefined) {
+        const burned = burnedOf(entry.name, entry.version, state)
+        if (burned !== undefined) {
+          return yield* Effect.fail(burned)
+        }
+      }
+    }
+    const annotations = yield* Effect.fromResult(annotationsOf(scan.entries, digests))
     return TagCommand.make({
       cycle: [...scan.entries],
+      annotations: [...annotations],
       preview: request.dryRun || request.json || request.output !== undefined,
       capturedIssue: scan.issue,
       excludedIssue: exclusion.issue,
@@ -159,23 +232,50 @@ const captureCycle = (
   })
 }
 
-const pushTags = (raw: TagCommand, pushed: TagPushed): Effect.Effect<TagPushed, TagRefusal, GitPort> =>
+const requireTaggedAt = (
+  remote: RemoteName,
+  head: CommitSha,
+) =>
+(tag: ReleaseTag): Effect.Effect<void, TagRefusal | TagAtOtherCommit, GitPort> =>
+  Effect.gen(function*() {
+    const found = yield* (yield* GitPort).tagCommit(remote, tag)
+    if (Option.isSome(found) && found.value === head) {
+      return
+    }
+    return yield* Effect.fail(TagAtOtherCommit.make({
+      tag,
+      expected: head,
+      found: Option.getOrElse(found, () => 'no commit'),
+    }))
+  })
+
+const pushTags = (
+  raw: TagCommand,
+  pushed: TagPushed,
+): Effect.Effect<TagPushed, TagRefusal | TagAtOtherCommit, GitPort> =>
   Effect.gen(function*() {
     const git = yield* GitPort
     const remote = yield* git.remoteTags(raw.remote)
+    const head = yield* git.headSha()
     yield* Effect.forEach(
-      pushed.tags.filter((tag) => remote.includes(tag) === false),
-      (tag) => git.writeTag(tag),
+      pushed.tags.filter((tag) => remote.includes(tag)),
+      requireTaggedAt(raw.remote, head),
       { discard: true },
     )
-    yield* git.pushTags([...pushed.tags], raw.remote)
+    const unpushed = raw.annotations.filter((annotation) =>
+      pushed.tags.includes(annotation.tag) && remote.includes(annotation.tag) === false
+    )
+    yield* Effect.forEach(unpushed, (annotation) => git.writeTag(annotation.tag, annotation.message), {
+      discard: true,
+    })
+    yield* git.pushTags(unpushed.map((annotation) => annotation.tag), raw.remote)
     return pushed
   })
 
 const write = (
   outcome: Result.Result<TagDecision, TagRefusal>,
   raw: TagCommand,
-): Effect.Effect<TagDecision, TagRefusal | PlanDeferredUnknown, GitPort | CycleStore> => {
+): Effect.Effect<TagDecision, TagRefusal | TagAtOtherCommit | PlanDeferredUnknown, GitPort | CycleStore> => {
   if (Result.isFailure(outcome)) {
     return Effect.fail(outcome.failure)
   }
@@ -194,8 +294,15 @@ const write = (
 export const tagCell: Cell.Cell<
   S.Schema.Type<typeof TagRequest>,
   TagDecision,
-  MemberRefusal | TagRefusal | PlanDeferredUnknown,
-  WorkspaceStore | GitPort | CycleStore
+  | MemberRefusal
+  | TagRefusal
+  | TagAtOtherCommit
+  | LegacyTagUnverified
+  | PlanDeferredUnknown
+  | TarballRefusal
+  | VersionBurned
+  | LedgerRefusal,
+  WorkspaceStore | GitPort | CycleStore | TarballPort | LedgerPort
 > = Cell.layer({
   read,
   decide: tagPackages,

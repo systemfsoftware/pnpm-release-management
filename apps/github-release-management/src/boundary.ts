@@ -1,5 +1,6 @@
 import { resolveWorkspaceRoot, type WorkspaceRootNotAbsolute } from '@systemfsoftware/cli-adapter'
 import {
+  AdoptionRequest,
   GithubReleaseRequest,
   PlanRequest,
   PullRequestRequest,
@@ -11,9 +12,7 @@ import {
   type ReleaseConfig,
   ReleaseConfigStore,
   type RepoRoot,
-  type VersionSurface,
 } from '@systemfsoftware/release-language'
-import type { BumpInput } from '@systemfsoftware/version-engine'
 import { Effect, type FileSystem, Option, Path } from 'effect'
 import * as S from 'effect/Schema'
 import { InvalidFlags } from './boundary.schema.js'
@@ -47,6 +46,7 @@ const decodeFlags = <A, E extends { readonly message: string }>(
 export interface PlanFlags {
   readonly deferred: string | undefined
   readonly remote: string | undefined
+  readonly tarballs: string
 }
 
 export const planRequestOf = (workspace: Workspace, flags: PlanFlags) =>
@@ -54,7 +54,24 @@ export const planRequestOf = (workspace: Workspace, flags: PlanFlags) =>
     S.decodeUnknownEffect(PlanRequest)({
       deferred: flags.deferred,
       remote: flags.remote,
+      tarballs: flags.tarballs,
       changelogDir: workspace.config.changelogDir,
+      legacyTags: workspace.config.legacyTags,
+    }),
+  )
+
+export interface AdoptFlags {
+  readonly registry: string
+  readonly output: string
+  readonly remote: string | undefined
+}
+
+export const adoptRequestOf = (flags: AdoptFlags) =>
+  decodeFlags(
+    S.decodeUnknownEffect(AdoptionRequest)({
+      registry: flags.registry,
+      output: flags.output,
+      remote: flags.remote,
     }),
   )
 
@@ -64,6 +81,7 @@ export interface TagFlags {
   readonly exclude: string | undefined
   readonly output: string | undefined
   readonly remote: string | undefined
+  readonly tarballs: string
   readonly dryRun: boolean
   readonly json: boolean
 }
@@ -76,9 +94,11 @@ export const tagRequestOf = (workspace: Workspace, flags: TagFlags) =>
       exclude: flags.exclude,
       output: flags.output,
       remote: flags.remote,
+      tarballs: flags.tarballs,
       dryRun: flags.dryRun,
       json: flags.json,
       changelogDir: workspace.config.changelogDir,
+      legacyTags: workspace.config.legacyTags,
     }),
   )
 
@@ -97,6 +117,7 @@ export const releaseRequestOf = (workspace: Workspace, flags: ReleaseFlags) =>
       assert: flags.assert,
       dryRun: flags.dryRun,
       changelogDir: workspace.config.changelogDir,
+      legacyTags: workspace.config.legacyTags,
     }),
   )
 
@@ -106,6 +127,11 @@ export interface PullRequestFlags {
   readonly bodyFile: string | undefined
   readonly base: string | undefined
   readonly branch: string | undefined
+}
+
+const rootChangelogOf = (versioning: ReleaseConfig['versioning']): RelativePath | undefined => {
+  if (versioning.strategy === 'surfaces') return versioning.changelog
+  return undefined
 }
 
 export const pullRequestRequestOf = (workspace: Workspace, flags: PullRequestFlags) =>
@@ -133,41 +159,8 @@ export const pullRequestRequestOf = (workspace: Workspace, flags: PullRequestFla
         branch: flags.branch ?? workspace.config.branch,
         remote: undefined,
         labels: ['release'],
+        changelogDir: workspace.config.changelogDir,
+        rootChangelog: rootChangelogOf(workspace.config.versioning),
       }),
     )
   })
-
-const surfaceEntryOf = (
-  surface: VersionSurface,
-): ReadonlyArray<BumpInput['surfaces'][number]> => {
-  if (surface.kind !== 'toml') return [{ file: surface.path, surface }]
-  if (surface.path === undefined) return []
-  return [{ file: surface.path, surface }]
-}
-
-export const bumpInput = (
-  changelogDir: RelativePath,
-  versioning: ReleaseConfig['versioning'],
-): BumpInput => {
-  if (versioning.strategy === 'pnpm') {
-    return {
-      strategy: 'pnpm',
-      changelogDir,
-      manifest: {
-        file: RelativePath.make('package.json'),
-        surface: { kind: 'json', path: RelativePath.make('package.json') },
-      },
-      surfaces: [],
-    }
-  }
-  return {
-    strategy: 'surfaces',
-    changelogDir,
-    rootChangelog: versioning.changelog,
-    manifest: {
-      file: versioning.manifest,
-      surface: { kind: 'json', path: versioning.manifest },
-    },
-    surfaces: versioning.surfaces.flatMap(surfaceEntryOf),
-  }
-}

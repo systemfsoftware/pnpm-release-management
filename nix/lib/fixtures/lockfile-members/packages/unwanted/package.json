@@ -1,0 +1,10 @@
+{
+  "name": "@fixture/unwanted",
+  "version": "1.0.0",
+  "files": [
+    "index.js"
+  ],
+  "dependencies": {
+    "@sandbox-proof/tiny-lib": "file:../../.deps/tiny-lib-1.0.0.tgz"
+  }
+}

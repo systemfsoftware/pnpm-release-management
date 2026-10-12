@@ -1,6 +1,7 @@
 {
   "$schema": "https://v2-10-1.turborepo.dev/schema.json",
   "globalPassThroughEnv": [
+    "TMPDIR",
     "XDG_CACHE_HOME"
   ],
   "tasks": {
@@ -60,6 +61,7 @@
     "test": {
       "inputs": [
         "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/vitest.fast-check.setup.ts",
         "vitest.config.ts",
         "vitest.config.*",
         "src/**/*.test.ts",
@@ -77,7 +79,9 @@
       "env": [
         "NODE_ENV",
         "CI",
-        "AGENT"
+        "AGENT",
+        "FC_SEED",
+        "FC_PATH"
       ],
       "passThroughEnv": [
         "DOCKER_HOST",

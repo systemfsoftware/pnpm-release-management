@@ -41,7 +41,7 @@ const toCommand = (input: {
 
 const nonSurfacesArb = fc.stringMatching(/^[a-z]{1,10}$/).map((strategy) => {
   if (strategy === 'surfaces') {
-    return 'pnpm'
+    return 'changesets'
   }
   return strategy
 })

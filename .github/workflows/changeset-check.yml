@@ -4,10 +4,10 @@ on:
   workflow_call:
     inputs:
       tools-ref:
-        description: ref of systemfsoftware/pnpm-release-management to run
+        description: ignored; the check runs the release tools at this workflow's own revision
         required: false
         type: string
-        default: main
+        default: ""
       base-sha:
         description: commit the pull request is compared against
         required: false
@@ -18,6 +18,16 @@ on:
         required: false
         type: string
         default: "24"
+      devshell:
+        description: install the workspace and run the check inside the caller's `nix develop` shell
+        required: false
+        type: boolean
+        default: false
+      runs-on:
+        description: JSON-encoded runner selector for every job (default keeps hosted ubuntu-latest)
+        required: false
+        type: string
+        default: '"ubuntu-latest"'
 
 permissions: {}
 
@@ -25,7 +35,7 @@ jobs:
   require-intent:
     name: a publishable-package change needs an intent
     if: github.head_ref != 'changeset-release/main'
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     permissions:
       contents: read
       pull-requests: read
@@ -34,26 +44,61 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/checkout@v7
-        with:
-          repository: systemfsoftware/pnpm-release-management
-          ref: ${{ inputs.tools-ref }}
-          path: .release-tools
-
+      # Hosted runners get node + pnpm from the official actions.
       - uses: pnpm/action-setup@v6
+        if: runner.environment == 'github-hosted'
       - uses: actions/setup-node@v7
+        if: runner.environment == 'github-hosted'
         with:
           node-version: ${{ inputs.node-version }}
 
-      - name: Build the release tools
+      # Self-hosted (bare-NixOS fleet) runners get node + pnpm from the image's
+      # toolchain instead: actions/setup-node downloads a glibc binary that will
+      # not run there. pnpm/setup replaces action-setup + setup-node for pnpm v11+.
+      - uses: pnpm/setup@v3
+        if: runner.environment != 'github-hosted'
+        with:
+          runtime: node@${{ inputs.node-version }}
+
+      - uses: cachix/install-nix-action@v31
+        if: runner.environment == 'github-hosted'
+
+      - name: Build the release tools at this workflow's own revision
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
         run: |
-          pnpm --dir .release-tools install --frozen-lockfile
-          pnpm --dir .release-tools build
+          tools=$(nix build --no-link --print-out-paths \
+            "github:${WORKFLOW_REPOSITORY:?job.workflow_repository is empty}/${WORKFLOW_SHA:?job.workflow_sha is empty}#release-tools")
+          echo "RELEASE_TOOLS=$tools/bin" >> "$GITHUB_ENV"
 
       - name: Install the caller's workspace
+        if: ${{ !inputs.devshell }}
         run: pnpm install --frozen-lockfile
 
-      - name: Require an intent for every publishable-package change
+      - name: Allow unprivileged user namespaces for the caller's sandbox
+        if: inputs.devshell && runner.environment == 'github-hosted'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Install the caller's workspace through its own bootstrap script
+        if: inputs.devshell
         run: |
-          node .release-tools/apps/changeset-management/dist/main.js check \
-            "${{ inputs.base-sha || github.event.pull_request.base.sha }}"
+          if ! jq -e '.scripts.bootstrap | strings' package.json >/dev/null; then
+            echo "::error file=package.json::devshell: true runs the caller's \"bootstrap\" script inside its nix develop shell, and package.json defines none. Add a bootstrap script that installs the workspace in its sandbox, for example \"sandbox -- pnpm install\"."
+            exit 1
+          fi
+          nix develop --command pnpm run bootstrap
+
+      - name: Require an intent for every publishable-package change
+        env:
+          BASE_SHA: ${{ inputs.base-sha || github.event.pull_request.base.sha }}
+          DEVSHELL: ${{ inputs.devshell }}
+        run: |
+          # The caller's sandbox binds only the store paths its arguments resolve
+          # to, so it gets the binary itself, not the release-tools symlink to it.
+          check=$(realpath "$RELEASE_TOOLS/changeset-management")
+          if [ "$DEVSHELL" = true ]; then
+            nix develop --command sandbox -- "$check" check "$BASE_SHA"
+          else
+            "$check" check "$BASE_SHA"
+          fi

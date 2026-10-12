@@ -1,5 +1,5 @@
 import * as S from 'effect/Schema'
-import { PackageName, PackageVersion, RelativePath } from './Workspace.schema.js'
+import { ChangelogStorage, PackageName, PackageVersion, RelativePath } from './Workspace.schema.js'
 
 export const VersionIntentMalformed = S.TaggedStruct('VersionIntentMalformed', {
   path: RelativePath,
@@ -18,6 +18,21 @@ export const VersionSurfaceMissing = S.TaggedStruct('VersionSurfaceMissing', {
 })
 export type VersionSurfaceMissing = S.Schema.Type<typeof VersionSurfaceMissing>
 
+export const VersionLockStale = S.TaggedStruct('VersionLockStale', {
+  path: RelativePath,
+})
+export type VersionLockStale = S.Schema.Type<typeof VersionLockStale>
+
+export const VersionCargoPackageMissing = S.TaggedStruct(
+  'VersionCargoPackageMissing',
+  {
+    path: RelativePath,
+  },
+)
+export type VersionCargoPackageMissing = S.Schema.Type<
+  typeof VersionCargoPackageMissing
+>
+
 export const RootManifestUnwritable = S.TaggedStruct(
   'RootManifestUnwritable',
   {
@@ -32,6 +47,8 @@ export const VersionRefusal = S.Union([
   VersionIntentMalformed,
   VersionUnknownPackage,
   VersionSurfaceMissing,
+  VersionLockStale,
+  VersionCargoPackageMissing,
   RootManifestUnwritable,
 ])
 export type VersionRefusal = S.Schema.Type<typeof VersionRefusal>
@@ -43,7 +60,8 @@ export const ChangelogFile = S.Struct({
 export type ChangelogFile = S.Schema.Type<typeof ChangelogFile>
 
 export const MemberChangelogEntry = S.Struct({
-  changelogDir: RelativePath,
+  storage: ChangelogStorage,
+  path: RelativePath,
   name: PackageName,
   version: PackageVersion,
   summary: S.String,

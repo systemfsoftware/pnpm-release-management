@@ -1,27 +1,20 @@
 import { NodeRuntime, NodeServices } from '@effect/platform-node'
+import { LedgerLive, RegistryLive } from '@systemfsoftware/adoption-adapter'
+import { ChangesetsPortLive } from '@systemfsoftware/changesets-adapter'
 import { program, ReporterLive } from '@systemfsoftware/cli-adapter'
 import { Cell } from '@systemfsoftware/effect-cell-types'
 import { GitLive } from '@systemfsoftware/git-adapter'
 import { ForgeConfig, ForgeLive } from '@systemfsoftware/github-adapter'
 import {
+  adoptCell,
   githubReleaseCell,
   planCell,
   pullRequestCell,
-  type PullRequestDecision,
   tagCell,
 } from '@systemfsoftware/github-release-engine'
 import { ProcessLive } from '@systemfsoftware/process-adapter'
-import {
-  GitPort,
-  type GitRef,
-  type PrTitle,
-  type PullRequestRefusal,
-  type ReleaseConfig,
-  ReleaseConfigStore,
-  RemoteName,
-  RepoRoot,
-} from '@systemfsoftware/release-language'
-import { bumpCell } from '@systemfsoftware/version-engine'
+import { ReleaseConfigStore, RepoRoot } from '@systemfsoftware/release-language'
+import { TarballLive } from '@systemfsoftware/tarball-adapter'
 import {
   ChangelogStoreLive,
   ChangesetStoreLive,
@@ -31,11 +24,11 @@ import {
   WorkspaceStoreLive,
 } from '@systemfsoftware/workspace-adapter'
 import { Effect, Layer, Option } from 'effect'
-import * as Match from 'effect/Match'
 import * as S from 'effect/Schema'
 import { Command, Flag } from 'effect/unstable/cli'
+import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 import {
-  bumpInput,
+  adoptRequestOf,
   CHANGESET_FALLBACK,
   planRequestOf,
   pullRequestRequestOf,
@@ -43,8 +36,9 @@ import {
   tagRequestOf,
   workspaceOf,
 } from './boundary.js'
-import { VersionStageRefused } from './boundary.schema.js'
 import {
+  renderAdoption,
+  renderAdoptRefusal,
   renderPlan,
   renderPlanRefusal,
   renderPullRequest,
@@ -53,12 +47,9 @@ import {
   renderReleaseRefusal,
   renderTag,
   renderTagRefusal,
-  renderVersion,
 } from './render.js'
 
 const VERSION = '0.0.0'
-
-const DEFAULT_REMOTE: RemoteName = RemoteName.make('origin')
 
 const workspaceAtEdge = Effect.gen(function*() {
   const cwd = yield* Effect.sync(() => process.cwd())
@@ -93,6 +84,7 @@ const MainLive = Layer.unwrap(
         ChangelogStoreLive(root),
         ChangesetStoreLive({ root, changesetDir }),
         CycleStoreLive,
+        LedgerLive(root),
         ReleaseConfigStoreLive,
         SurfaceStoreLive(root),
         WorkspaceStoreLive(root),
@@ -100,30 +92,30 @@ const MainLive = Layer.unwrap(
   ),
 )
 
-const landVersion = (
-  decision: PullRequestDecision,
-  branch: GitRef,
-  title: PrTitle,
-): Effect.Effect<void, PullRequestRefusal, GitPort> => {
-  const land: Effect.Effect<void, PullRequestRefusal, GitPort> = Effect.gen(function*() {
-    const git = yield* GitPort
-    yield* git.commitAll(title)
-    yield* git.pushBranch(branch, DEFAULT_REMOTE)
-  })
-  return Match.value(decision).pipe(
-    Match.tagsExhaustive({
-      PullRequestCreated: () => land,
-      PullRequestUpdated: () => land,
-      PullRequestClosed: () => Effect.void,
-      PullRequestVacant: () => Effect.void,
-    }),
-  )
-}
+const adopt = Command.make('adopt', {
+  registry: Flag.string('registry'),
+  output: Flag.string('output'),
+  remote: Flag.string('remote').pipe(Flag.optional),
+  config: Flag.string('config').pipe(Flag.optional),
+}, (flags) =>
+  Effect.gen(function*() {
+    const request = yield* adoptRequestOf({
+      registry: flags.registry,
+      output: flags.output,
+      remote: Option.getOrUndefined(flags.remote),
+    })
+    const report = yield* Cell.run(adoptCell, request).pipe(
+      Effect.provide(TarballLive),
+      Effect.provide(RegistryLive.pipe(Layer.provide(FetchHttpClient.layer))),
+    )
+    yield* renderAdoption(report)
+  }).pipe(Effect.catch(renderAdoptRefusal)))
 
 const plan = Command.make('plan', {
   deferred: Flag.string('deferred').pipe(Flag.optional),
   output: Flag.string('output').pipe(Flag.optional),
   remote: Flag.string('remote').pipe(Flag.optional),
+  tarballs: Flag.string('tarballs'),
   config: Flag.string('config').pipe(Flag.optional),
 }, (flags) =>
   Effect.gen(function*() {
@@ -131,8 +123,12 @@ const plan = Command.make('plan', {
     const request = yield* planRequestOf(workspace, {
       deferred: Option.getOrUndefined(flags.deferred),
       remote: Option.getOrUndefined(flags.remote),
+      tarballs: flags.tarballs,
     })
-    const report = yield* Cell.run(planCell, request)
+    const report = yield* Cell.run(planCell, request).pipe(
+      Effect.provide(TarballLive),
+      Effect.provide(ChangesetsPortLive({ root: workspace.root, base: workspace.config.base })),
+    )
     yield* renderPlan(report, Option.getOrUndefined(flags.output))
   }).pipe(Effect.catch(renderPlanRefusal)))
 
@@ -144,6 +140,7 @@ const tag = Command.make('tag', {
   exclude: Flag.string('exclude').pipe(Flag.optional),
   output: Flag.string('output').pipe(Flag.optional),
   remote: Flag.string('remote').pipe(Flag.optional),
+  tarballs: Flag.string('tarballs'),
   config: Flag.string('config').pipe(Flag.optional),
 }, (flags) =>
   Effect.gen(function*() {
@@ -155,10 +152,11 @@ const tag = Command.make('tag', {
       exclude: Option.getOrUndefined(flags.exclude),
       output,
       remote: Option.getOrUndefined(flags.remote),
+      tarballs: flags.tarballs,
       dryRun: flags.dryRun,
       json: flags.json,
     })
-    const decision = yield* Cell.run(tagCell, request)
+    const decision = yield* Cell.run(tagCell, request).pipe(Effect.provide(TarballLive))
     yield* renderTag(decision, { output, json: flags.json, dryRun: flags.dryRun })
   }).pipe(Effect.catch(renderTagRefusal)))
 
@@ -188,6 +186,7 @@ const pr = Command.make('pr', {
   base: Flag.string('base').pipe(Flag.optional),
   branch: Flag.string('branch').pipe(Flag.optional),
   config: Flag.string('config').pipe(Flag.optional),
+  output: Flag.string('output').pipe(Flag.optional),
 }, (flags) =>
   Effect.gen(function*() {
     const workspace = yield* workspaceOf(flags.config)
@@ -199,18 +198,12 @@ const pr = Command.make('pr', {
       branch: Option.getOrUndefined(flags.branch),
     })
     const decision = yield* Cell.run(pullRequestCell, request)
-    const config: ReleaseConfig = workspace.config
-    yield* Cell.run(bumpCell, bumpInput(config.changelogDir, config.versioning)).pipe(
-      Effect.mapError((refusal): VersionStageRefused => VersionStageRefused.make({ refusal })),
-      Effect.flatMap((versioned) => renderVersion(versioned)),
-    )
-    yield* renderPullRequest(decision)
-    yield* landVersion(decision, request.branch, request.title)
+    yield* renderPullRequest(decision, { branch: request.branch, output: Option.getOrUndefined(flags.output) })
   }).pipe(Effect.catch(renderPullRequestRefusal)))
 
 const release = Command.make('release').pipe(
   Command.withDescription('Plan release phases, open release PRs, tag and publish GitHub releases'),
-  Command.withSubcommands([plan, pr, tag, releaseCommand]),
+  Command.withSubcommands([adopt, plan, pr, tag, releaseCommand]),
 )
 
 NodeRuntime.runMain(

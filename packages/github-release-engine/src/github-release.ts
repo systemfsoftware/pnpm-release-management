@@ -1,7 +1,9 @@
 import { Cell, Wire } from '@systemfsoftware/effect-cell-types'
 import type {
+  ChangelogStorage,
   CycleEntry,
   GithubReleaseRefusal,
+  LegacyTagUnverified,
   MemberRefusal,
   PlanRefusal,
   TagRefusal,
@@ -12,7 +14,9 @@ import {
   ForgePort,
   FsPath,
   GitPort,
+  LegacyTags,
   RelativePath,
+  releaseNotesOf,
   ReleaseTag,
   RemoteName,
   WorkspaceStore,
@@ -31,6 +35,7 @@ import {
   GithubReleasePreview,
   GithubReleaseSkipped,
 } from './github-release.workflow.js'
+import { legacyReleased } from './legacy.js'
 
 export const GithubReleaseRequest = Wire.wire({
   captured: Wire.mint(S.optional(FsPath)),
@@ -38,6 +43,7 @@ export const GithubReleaseRequest = Wire.wire({
   assert: Wire.mint(S.Boolean),
   dryRun: Wire.mint(S.Boolean),
   changelogDir: Wire.mint(RelativePath),
+  legacyTags: Wire.mint(S.optional(LegacyTags)),
 })
 
 const readCycle = (
@@ -46,14 +52,18 @@ const readCycle = (
   git: GitPort,
   capturedPath: FsPath | undefined,
   changelogDir: RelativePath,
-): Effect.Effect<ReadonlyArray<CycleEntry>, PlanRefusal | MemberRefusal | TagRefusal, never> => {
+  storage: ChangelogStorage,
+  legacyTags: LegacyTags | undefined,
+): Effect.Effect<ReadonlyArray<CycleEntry>, PlanRefusal | MemberRefusal | TagRefusal | LegacyTagUnverified, never> => {
   if (capturedPath !== undefined) {
     return cycles.readCaptured(capturedPath)
   }
   return Effect.gen(function*() {
+    const remote = RemoteName.make('origin')
     const members = yield* workspace.listMembers()
-    const tags = yield* git.remoteTags(RemoteName.make('origin'))
-    return cycleOf(members, tags, changelogDir)
+    const tags = yield* git.remoteTags(remote)
+    const legacy = yield* legacyReleased({ git, remote, members, remoteTags: tags, legacy: legacyTags })
+    return cycleOf(members, tags, legacy, changelogDir, storage)
   })
 }
 
@@ -61,7 +71,7 @@ const read = (
   request: S.Schema.Type<typeof GithubReleaseRequest>,
 ): Effect.Effect<
   GithubReleaseCommand,
-  MemberRefusal | TagRefusal | PlanRefusal | GithubReleaseRefusal,
+  MemberRefusal | TagRefusal | LegacyTagUnverified | PlanRefusal | GithubReleaseRefusal,
   WorkspaceStore | GitPort | CycleStore | ForgePort
 > =>
   Effect.gen(function*() {
@@ -69,19 +79,22 @@ const read = (
     const git = yield* GitPort
     const cycles = yield* CycleStore
     const forge = yield* ForgePort
+    const storage = yield* workspace.changelogStorage()
     const cycle = yield* readCycle(
       cycles,
       workspace,
       git,
       request.captured ?? request.capturedFile,
       request.changelogDir,
+      storage,
+      request.legacyTags,
     )
     const slug = yield* git.repoSlug()
     const items = yield* Effect.forEach(cycle, (entry) =>
       Effect.map(
         Effect.match(workspace.readFileFromRoot(entry.changelog), {
           onFailure: () => undefined,
-          onSuccess: (file) => file.text,
+          onSuccess: (file) => releaseNotesOf(storage, file.text, entry.version),
         }),
         (body) => ({ entry, body }),
       ))
@@ -174,7 +187,7 @@ const write = (
 export const githubReleaseCell: Cell.Cell<
   S.Schema.Type<typeof GithubReleaseRequest>,
   GithubReleaseDecision,
-  MemberRefusal | TagRefusal | PlanRefusal | GithubReleaseRefusal,
+  MemberRefusal | TagRefusal | LegacyTagUnverified | PlanRefusal | GithubReleaseRefusal,
   WorkspaceStore | GitPort | CycleStore | ForgePort
 > = Cell.layer({
   read,

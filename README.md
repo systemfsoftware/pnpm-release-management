@@ -26,13 +26,22 @@ apps/*/dist/main.js           the tsdown bundles the workflows and the e2e image
 e2e/                          the containerised pipeline test (vitest)
 ```
 
-Apps are Node programs built with tsdown into self-contained ESM bundles, so a
-workflow builds the tools once and runs one directly:
+Apps are Node programs built with tsdown into self-contained ESM bundles, then
+compiled with `deno compile` into one binary each. The flake exports them, and
+`packages.<system>.release-tools` joins the three release apps. A repository
+takes this flake as an input, pinned by its `flake.lock`, and puts
+`release-tools` in its dev shell to run the apps locally. `release.yml` and
+`changeset-check.yml` do not use that pin: they build the `release-tools` of
+their own commit (see [CI](#ci)). Each job sets `WORKFLOW_REPOSITORY` and
+`WORKFLOW_SHA` from the `job.workflow_repository` and `job.workflow_sha`
+contexts and fails when either is empty:
 
 ```bash
-pnpm --dir .release-tools install --frozen-lockfile
-pnpm --dir .release-tools build
-node .release-tools/apps/github-release-management/dist/main.js plan --output "$GITHUB_OUTPUT"
+tools=$(nix build --no-link --print-out-paths \
+  "github:${WORKFLOW_REPOSITORY:?job.workflow_repository is empty}/${WORKFLOW_SHA:?job.workflow_sha is empty}#release-tools")
+nix develop --command "$tools/bin/github-release-management" plan \
+  --tarballs "$(nix build --no-link --print-out-paths .#workspace-tarballs)" \
+  --output "$GITHUB_OUTPUT"
 ```
 
 Each app is a composition root: `main.ts` declares the `Flag`/`Argument`
@@ -84,10 +93,13 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write
 
 jobs:
   release:
     uses: systemfsoftware/pnpm-release-management/.github/workflows/release.yml@main
+    with:
+      ci-workflow: ci.yml
 ```
 
 `.github/workflows/changeset-check.yml`:
@@ -132,33 +144,50 @@ Then add a `release.jsonc`:
 
 `release.jsonc` at the repository root. Every path is relative to the root.
 
-| Key                             | Default                     | Meaning                                                          |
-| ------------------------------- | --------------------------- | ---------------------------------------------------------------- |
-| `base`                          | required                    | branch the release PR targets                                    |
-| `branch`                        | required                    | branch the release PR is opened from                             |
-| `changesetDir`                  | `.changeset`                | where pending intents live                                       |
-| `changelogDir`                  | `<changesetDir>/changelogs` | where generated per-package changelogs are written               |
-| `versioning.strategy`           | required                    | `surfaces` or `pnpm`                                             |
-| `versioning.manifest`           | —                           | `surfaces`: the JSON manifest that owns the version              |
-| `versioning.changelog`          | —                           | `surfaces`: the root changelog that receives the release summary |
-| `versioning.surfaces[]`         | —                           | `surfaces`: additional files rewritten on every bump             |
-| `gate.strategy`                 | required                    | `turbo` (a task graph decides what a change touches) or `paths`  |
-| `gate.task`                     | `build`                     | `turbo`: the task whose inputs decide the changed packages       |
-| `distribution.launcherManifest` | —                           | required only for repositories that ship platform packages       |
-| `distribution.targets[]`        | —                           | `{ target, suffix, os, cpu, libc?, runner, bin }`                |
-| `pr.title` / `pr.body`          | built-in copy               | release PR copy                                                  |
+| Key                             | Default                     | Meaning                                                               |
+| ------------------------------- | --------------------------- | --------------------------------------------------------------------- |
+| `base`                          | required                    | branch the release PR targets                                         |
+| `branch`                        | required                    | branch the release PR is opened from                                  |
+| `changesetDir`                  | `.changeset`                | where pending intents live                                            |
+| `changelogDir`                  | `<changesetDir>/changelogs` | `registry` storage: where generated per-package changelogs are parked |
+| `versioning.strategy`           | required                    | `surfaces` or `changesets`                                            |
+| `versioning.manifest`           | —                           | `surfaces`: the JSON manifest that owns the version                   |
+| `versioning.changelog`          | —                           | `surfaces`: the root changelog that receives the release summary      |
+| `versioning.surfaces[]`         | —                           | `surfaces`: additional files rewritten on every bump                  |
+| `gate.strategy`                 | required                    | `turbo` (a task graph decides what a change touches) or `paths`       |
+| `gate.task`                     | `build`                     | `turbo`: the task whose inputs decide the changed packages            |
+| `distribution.launcherManifest` | —                           | required only for repositories that ship platform packages            |
+| `distribution.targets[]`        | —                           | `{ target, suffix, os, cpu, libc?, runner, bin }`                     |
+| `legacyTags.tag` / `.through`   | —                           | release tags cut before adoption; see [Legacy tags](#legacy-tags)     |
+| `pr.title` / `pr.body`          | built-in copy               | release PR copy                                                       |
+
+Member changelogs follow `versioning.changelog.storage` in `pnpm-workspace.yaml`, read with
+`pnpm config get`. Under `repository`, `bump` adds a `## <version>` section to each moved member's
+`CHANGELOG.md`, above its earlier sections, and the release phase reads that section back. Under
+`registry` or unset, `bump` parks one file per moved member under `changelogDir`, and the release
+phase reads that file.
 
 A surface is one of:
 
-| `kind` | Fields                                                          | Example           |
-| ------ | --------------------------------------------------------------- | ----------------- |
-| `json` | `path`                                                          | `package.json`    |
-| `toml` | `path` or `glob`, `header` (`[package]`, `[workspace.package]`) | `Cargo.toml`      |
-| `nix`  | `path`                                                          | `nix/version.nix` |
+| `kind`  | Fields                                                          | Example           |
+| ------- | --------------------------------------------------------------- | ----------------- |
+| `json`  | `path`                                                          | `package.json`    |
+| `toml`  | `path` or `glob`, `header` (`[package]`, `[workspace.package]`) | `Cargo.toml`      |
+| `cargo` | `path`, optional `package`                                      | `Cargo.toml`      |
+| `nix`   | `path`                                                          | `nix/version.nix` |
 
 `surfaces` versioning bumps the manifest, rewrites the version in every declared
-surface, and appends the release summary to the root changelog. `pnpm`
-versioning delegates to `pnpm version -r`.
+surface, and appends the release summary to the root changelog. `changesets`
+versioning drives the changesets libraries per package: the assembled release
+plan decides each member's bump, workspace dependents move with it, and the
+consumed intents are removed.
+
+A `cargo` surface rewrites `[workspace.package] version` in the named manifest,
+any workspace member that pins a literal `[package] version`, and every
+workspace-member entry in the sibling `Cargo.lock` (registry and git
+dependencies carry a `source` line and are left alone). Its optional `package`
+names the workspace package whose bumped version the Cargo workspace follows;
+it is required under `changesets` versioning, where there is no single version.
 
 ## Change intents
 
@@ -183,23 +212,34 @@ node apps/changeset-management/dist/main.js new @scope/alpha --bump minor \
 
 `none` consumes an intent without moving a version — use it for work that must
 be recorded but does not ship. `version bump` deletes every intent it consumes,
-so the release PR diff _is_ the set of notes that shipped.
+so the release PR diff _is_ the set of notes that shipped. `release pr` runs
+after `version bump` and commits the tree bump left: changes to tracked files
+open or refresh the release PR, an unchanged tree closes it, and an intent still
+on disk means bump has not run, so `pr` refuses instead of reporting nothing to
+release. The release commit holds the tracked changes plus the changelogs bump
+created; any other untracked file, such as a `.release/` artifacts directory,
+neither opens the release PR nor rides into its commit. The release commit is
+authored and committed as `github-actions[bot]
+<41898282+github-actions[bot]@users.noreply.github.com>`, passed to that one
+`git commit` with `-c`, so `pr` needs no git identity on the runner and changes
+no git config.
 
 ## Capabilities
 
-| App subcommand      | What it does                                                             |
-| ------------------- | ------------------------------------------------------------------------ |
-| `changeset check`   | Fails when a publishable package changed without an intent naming it     |
-| `changeset new`     | Writes an intent file                                                    |
-| `version bump`      | Consumes intents, bumps every surface, writes per-package changelogs     |
-| `version sync`      | `check` or `bump <version>` across every declared surface                |
-| `version sync-root` | Stamps the launcher manifest with the released version                   |
-| `release pr`        | Commits the release branch, opens, refreshes, or closes the release PR   |
-| `release plan`      | Derives the release phase from repository state                          |
-| `release tag`       | Captures the cycle, then pushes one tag per released package             |
-| `release release`   | Creates GitHub Releases from the generated changelogs                    |
-| `hooks pre-commit`  | Formats and checks the staged set before a commit lands                  |
-| `hooks commit-msg`  | Enforces the conventional-commit header and strips AI co-author trailers |
+| App subcommand      | What it does                                                                                                  |
+| ------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `changeset check`   | Fails when a publishable package changed without an intent naming it; lists deleted packages, which need none |
+| `changeset new`     | Writes an intent file                                                                                         |
+| `version bump`      | Consumes intents, bumps every surface, writes per-package changelogs                                          |
+| `version sync`      | `check` or `bump <version>` across every declared surface                                                     |
+| `version sync-root` | Stamps the launcher manifest with the released version                                                        |
+| `release pr`        | Commits the bumped tree to the release branch, opens, refreshes, or closes the release PR                     |
+| `release adopt`     | Records every pre-adoption release tag's bytes in the adoption ledger                                         |
+| `release plan`      | Derives the release phase from repository state                                                               |
+| `release tag`       | Captures the cycle, then pushes one tag per released package                                                  |
+| `release release`   | Creates GitHub Releases from the generated changelogs                                                         |
+| `hooks pre-commit`  | Formats and checks the staged set before a commit lands                                                       |
+| `hooks commit-msg`  | Enforces the conventional-commit header and strips AI co-author trailers                                      |
 
 Every subcommand takes `--config <path>` and otherwise loads `release.jsonc` from
 the directory it is run in. The flag may name either the workspace root or a file
@@ -211,6 +251,7 @@ Flags worth knowing:
 | ------------------- | --------------------------------------------------------------------------------------------- |
 | `changeset check`   | `<base-sha-or-ref>`, `--base`, `--skip-liveness`                                              |
 | `release plan`      | `--output <file>`, `--deferred <file>`, `--remote <name>`                                     |
+| `release adopt`     | `--registry <url>`, `--output <file>`, `--remote <name>`                                      |
 | `release tag`       | `--captured <file>`, `--output <file>`, `--exclude`, `--json`, `--dry-run`, `--remote <name>` |
 | `release release`   | `--captured <file>`, `--assert`, `--dry-run`                                                  |
 | `version sync`      | `check \| bump <version>`                                                                     |
@@ -222,15 +263,402 @@ agree on what this cycle owns.
 
 ## CI
 
-| Workflow              | Inputs                                       | Caller must grant                         |
-| --------------------- | -------------------------------------------- | ----------------------------------------- |
-| `release.yml`         | `tools-ref`, `artifacts-dir`, `node-version` | `contents: write`, `pull-requests: write` |
-| `changeset-check.yml` | `tools-ref`, `base-sha`, `node-version`      | `contents: read`, `pull-requests: read`   |
+| Workflow              | Inputs                                                        | Caller must grant                                           |
+| --------------------- | ------------------------------------------------------------- | ----------------------------------------------------------- |
+| `release.yml`         | `ci-workflow` (required), `artifacts-dir`                     | `contents: write`, `pull-requests: write`, `actions: write` |
+| `changeset-check.yml` | `base-sha`, `node-version`, `devshell`, `tools-ref` (ignored) | `contents: read`, `pull-requests: read`                     |
 
-`tools-ref` pins the revision of this repository that a release runs from;
-`@main` tracks the tip. Both workflows check this repository out into
-`.release-tools`, build it with pnpm, and run its `dist/main.js` bundles
-against the caller's workspace.
+The `pull_request` runs of a pull request opened or updated with the workflow
+token wait for a maintainer's approval, so they never run on their own.
+`release pr --output <file>` appends `outcome` (`created`, `updated`, `closed`
+or `vacant`), `number` and `branch` to the file. `release.yml` passes
+`$GITHUB_OUTPUT`, and when the outcome is `created` or `updated` it dispatches
+the caller's CI workflow (`ci-workflow`, which must accept `workflow_dispatch`)
+on that branch. A failed dispatch fails the job. That gives the release PR the
+checks the branch protection requires.
+
+`release.yml` and `changeset-check.yml` run the apps built from their own
+commit, not the caller's. Each job builds
+`github:${{ job.workflow_repository }}/${{ job.workflow_sha }}#release-tools`,
+the `release-tools` of the exact revision of this repository the caller's
+`uses:` resolved to, and runs those binaries by path (`"$RELEASE_TOOLS/<app>"`).
+`release.yml` runs them inside the caller's dev shell
+(`nix develop --command "$RELEASE_TOOLS/<app>" …`). A caller on `@main`
+therefore always gets the flags `@main` passes, whatever revision its
+`flake.lock` pins for its `pnpm-release-management` input; that pin still
+decides the `release-tools` in its dev shell for local use, and
+`nix flake update pnpm-release-management` still moves it. The caller's
+`devShells.<system>.default` must provide pnpm, the `sandbox` and
+`SANDBOX_PNPM_STORE` (see [Distribution through Nix](#distribution-through-nix)).
+The job needs the `job.workflow_*` context: github.com provides it (self-hosted
+runners from actions/runner v2.334.0), GitHub Enterprise Server does not. A job
+that cannot read it fails before running any tool. Both workflows need Nix:
+they install it on hosted runners, and a self-hosted runner must provide it.
+
+Without `devshell`, the changeset check installs the caller's workspace with
+plain pnpm and runs `"$RELEASE_TOOLS/changeset-management" check` against it.
+It still builds that binary with Nix, so a self-hosted runner needs Nix in this
+mode too.
+
+`tools-ref` is accepted and ignored. It can be removed once no caller passes it:
+stryker-js-effect's `changeset-check.yml` still passes `tools-ref: main`, and
+removing an input a caller passes fails that caller's workflow, so drop it from
+the callers first.
+
+`devshell: true` makes the changeset check run the caller's own `bootstrap`
+script inside its `nix develop` shell
+(`nix develop --command pnpm run bootstrap`) instead of a plain
+`pnpm install`, then run the check in that shell. The bootstrap script is
+where the caller installs its workspace inside its own sandbox, so no
+dependency code runs outside it; a caller without a `bootstrap` script is
+refused with an error naming the missing script. The workflow takes no
+install command of its own. The job allows unprivileged user namespaces so a
+bubblewrap sandbox can start. A caller needs this mode when its lockfile points
+at tarballs its flake builds, such as `file:.sfs-deps/<name>-<version>.tgz`; a
+plain install cannot read those. With `devshell: true`, `node-version` is
+ignored for the caller's install and check: they use the dev shell's node, and
+the check runs the workflow's own binary inside the caller's sandbox,
+`nix develop --command sandbox -- "$(realpath "$RELEASE_TOOLS/changeset-management")" check`.
+The `realpath` matters: the sandbox binds only the store paths its command
+resolves to, and `release-tools` holds symlinks into the per-app store paths,
+so the unresolved path does not exist inside it. The default, `false`,
+installs with plain pnpm. This repository's own CI calls the check with
+`devshell: true` on every pull request.
+
+## Distribution through Nix
+
+A repository ships its public workspace packages as flake outputs. Nothing goes
+to a registry. One call in `flake.nix`:
+
+```nix
+packages = forEachSystem (pkgs:
+  pnpm-release-management.lib.mkPnpmWorkspacePackages {
+    inherit pkgs;
+    src = self;
+  });
+```
+
+For every member of `pnpm-workspace.yaml` that is not `private`, this gives
+`packages.<system>.<name>`: the member's `pnpm pack` tarball, with the scope
+dropped from the name. It also gives `packages.<system>.workspace-tarballs`:
+every tarball plus an `index.json` of `{ name, file }`.
+
+- Third-party tarballs enter as one fixed-output fetch per tarball, keyed by the
+  `integrity` the lockfile already records, so a lockfile bump needs no hash
+  edit. `nix/lib/pnpm-lock.nix` reads the lockfile's `packages:` map in pure Nix
+  (a parsing derivation would import from a derivation for the target system,
+  which breaks `nix eval .#devShells.<other-system>`); a plain derivation then
+  runs pnpm offline through the `importPnpmLock` input's config hook and
+  assembles `packages.<system>.pnpm-store`, the store directory pnpm installs
+  from with no registry. `file:` tarballs and `directory` entries are
+  workspace-local and are skipped before any fetch.
+- Install runs with `--ignore-scripts` in the Nix sandbox. The members build
+  with their `build` script (`buildScript` overrides it), then `pnpm pack`
+  writes each tarball and turns every `workspace:` range into the exact version.
+- The tarballs rebuild bit-for-bit. CI proves it with
+  `nix build --rebuild .#workspace-tarballs`. A declaration file that prints an
+  inferred union breaks this, because TypeScript 7 orders union members
+  differently from run to run (microsoft/TypeScript#64589). Annotate such an
+  export with a named type.
+- `pnpm` defaults to `pkgs.pnpm_12`. The root `packageManager` must pin exactly
+  that version, or evaluation fails: one pnpm resolves everywhere.
+- `packages.<system>.pnpm-store` is that store directory, in the layout
+  `sandbox --pnpm-store` consumes.
+- `members` (package names) limits the build and the packed tarballs to those
+  public members; an unknown or private name fails evaluation.
+- `lockFile` builds the tarballs from a lockfile cut down from the workspace's,
+  so a cold build fetches only what the packed members need. Write it with
+  `pnpm install --lockfile-only` in a copy of the workspace whose manifests keep
+  only those members, the workspace packages they reach and the dependencies
+  their builds use; starting from `pnpm-lock.yaml`, pnpm keeps every version it
+  pins. The build drops the workspace projects that lockfile has no importer
+  for, installs each importer with exactly the dependencies it records and
+  builds, then restores the manifests, so each tarball packs its own
+  `package.json`.
+  `pnpm-store` still installs the whole workspace from `pnpm-lock.yaml`. Check
+  the cut lockfile in CI by writing it again and diffing, or it drifts.
+
+A consumer takes the flake as an input pinned by `flake.lock`. A pull
+request's head revision is a snapshot, and a release tag is a stable version.
+It builds the tarballs it needs and depends on them with `file:` paths, so each
+tarball's integrity lands in the consumer's `pnpm-lock.yaml`.
+
+The consumer's sandbox installs from one store holding both its registry
+packages and those tarballs. A store with only the registry packages fails the
+install: pnpm tries to add the tarball to the read-only store. Build it with
+`lib.mkPnpmConsumerStore`:
+
+```nix
+pnpm-store = pnpm-release-management.lib.mkPnpmConsumerStore {
+  inherit pkgs;
+  src = self; # holds package.json, pnpm-lock.yaml, pnpm-workspace.yaml
+  files.".deps" = producer.packages.${system}.workspace-tarballs;
+};
+```
+
+`files` maps a directory relative to `src` to a derivation holding the
+`*.tgz` the lockfile names there. Third-party tarballs come from per-tarball
+fixed-output fetches as above; the `pnpm` and `@pnpm/exe.*` entries of pnpm
+12's env document are skipped, because the sandbox never lets pnpm fetch
+itself.
+
+A workspace that publishes its own packages and also consumes tarballs this way
+passes the same `files` to `lib.mkPnpmWorkspacePackages`. Its tarball build
+installs from the lockfile too, so without them the build fails on the first
+`file:` path it cannot open.
+
+Resolving the lockfile is the one step that runs on the host: `pnpm install
+--lockfile-only` needs registry metadata, which no store carries. It reads
+metadata only and runs no package code. Every install, build and test after it
+runs in the sandbox.
+
+## Release identity
+
+A released `name@version` is immutable. The tarball a consumer downloads once is
+the tarball every consumer downloads forever, so the integrity its lockfile
+records for that `name@version` can never change. Nothing pushes to a registry,
+so a rebuilt tarball at a later revision is the only way the bytes could drift,
+and that is exactly what the release tooling refuses.
+
+`release tag` records the identity when it releases. It creates an annotated tag
+`<name>@v<version>` whose message is JSON:
+
+```json
+{
+  "integrity": "sha512-<base64 of the .tgz bytes>",
+  "files": { "package/package.json": "sha512-<base64>", "package/index.js": "sha512-<base64>" }
+}
+```
+
+`--tarballs <dir>` is required on both `release plan` and `release tag`; it names
+a directory of `*.tgz` (the `packages.<system>.workspace-tarballs` output, or
+`pnpm -r pack --pack-destination <dir>`). A tarball's name and version come from
+its own `package/package.json`, never from its filename, so a Nix output and a
+`pnpm pack` output are interchangeable.
+
+`release plan` checks identity before it plans anything else. For every member
+whose current `name@version` already has a tag on the remote — except members
+the pending changesets plan will move to a new version — it fetches the tag
+object, recomputes `{ integrity, files }` from the tarball in `--tarballs`,
+and compares. A mismatch fails the plan red, naming `package@version`, the
+recorded and current hashes, and the first differing file in sorted path order.
+A file present on only one side counts as differing, so a changed dependency
+range surfaces as `package/package.json`. A lightweight tag or an annotation the
+tool cannot parse is refused too; a release tag is never silently skipped.
+
+Dependents always bump so the check can hold. A bare `workspace:^` packs as
+`^<current version>` of the dependency, so bumping a dependency changes the
+dependent's packed bytes even when its own source did not move. With
+`updateInternalDependents: 'always'` (plus `updateInternalDependencies: 'patch'`),
+a minor intent on one member moves every workspace dependent by a patch release,
+which keeps each dependent's own `name@version` identity intact instead of
+rewriting an already-released tarball.
+
+## Adoption
+
+A repository that adopts this tooling already has release tags — systemfsoftware's
+are all lightweight — whose bytes this tooling never recorded. Adoption makes the
+record once, before the first managed release, so those tags are never trusted
+from nothing.
+
+```sh
+github-release-management adopt \
+  --registry https://registry.npmjs.org \
+  --output release-ledger.json
+```
+
+`--registry <url>` is required and has no default. Adoption reads every release
+tag `<name>@v<version>` on `--remote` (`origin` by default) — not only the
+current version of a current member. The published name comes from the manifest
+at the tagged commit, never from the tag string alone: adoption reads every
+`package.json` in that commit's tree and takes the one whose `name` equals the
+tag name or ends with `/<tag name>`. So a
+tag left over from before a package was scoped (`hex-schema@v1.0.0`, whose
+manifest says `@systemfsoftware/hex-schema`) resolves to the name the registry
+actually serves. Exactly one match is required; zero or several matches is a hard
+error naming the tag and the candidate names. When the manifest's version differs
+from the tag's, the entry is `mismatched` and records both versions. It fetches
+the published
+`<name>@<version>` from the registry, downloads `dist.tarball`, and records one
+entry:
+
+```json
+{
+  "entries": [
+    {
+      "_tag": "published",
+      "tag": "@scope/name@v1.2.3",
+      "commit": "<peeled commit the tag points to>",
+      "package": "@scope/name",
+      "version": "1.2.3",
+      "integrity": "sha512-<dist.integrity>",
+      "sha256": "sha256-<base64 of the downloaded .tgz>",
+      "files": { "package/package.json": "sha512-<base64>", "package/index.js": "sha512-<base64>" }
+    }
+  ]
+}
+```
+
+That covers an older version of a current member (the immutability law applies if
+anyone re-releases that `name@version`) and a name that is no longer a workspace
+member (the tag name gives `name@version`, split on the last `@v`), both resolved
+through the tagged manifest. The manifest's `private: true` at that commit means
+the version was never published, so it is excluded and listed in the report as
+`private, never published`. The ledger entry keeps the tag as its key and records
+the resolved published name, so the identity check — which looks tags up by
+`<name>@v<version>` — is unaffected.
+
+The `files` map is the same digest shape the tag annotations use, so a later
+mismatch can name the first differing file. Fetches run four at a time and retry
+a transient registry failure (a 5xx or a timeout) three attempts with backoff; a
+404 is not transient, but it is not an error either: an exact-version 404 means
+the registry never published that `name@version`, so the entry is recorded as
+`unpublished` with the metadata URL, the 404 status and the fetch time. That
+version is burned — `release plan` refuses a cycle member at it and `release tag`
+refuses to create its tag, both `version-burned`. A network failure, a download
+whose sha512 does not equal `dist.integrity`, or a tag with zero or several
+matching manifests is a hard error: the command exits non-zero, and an adoption
+with any error writes no ledger at all.
+
+The report prints one line for each `unpublished` and `mismatched` entry, then
+`adopted <N> published, <U> unpublished, <M> mismatched, <E> errors`. A
+`mismatched` line names both versions and each version's registry state —
+`mismatched <tag>: claims <a> <state>, manifest <b> <state>` — and an error line
+is `name@version: <reason>`.
+
+The ledger is one JSON file at the repository root, written by the command and
+never hand-edited: keys in a stable order, entries sorted by tag. It lands in its
+own commit in the adopting repository, separate from any release commit, so the
+adoption itself is a reviewable one-file change. Running `adopt` again keeps
+every existing entry, including one whose tag has since left the remote, and
+adds only tags the ledger does not hold. A ledger that cannot be read or parsed,
+here or at a revision the append-only check reads, stops the command instead of
+counting as empty.
+
+After adoption, `release plan` accepts a lightweight tag only when the ledger has
+that tag with the same peeled commit and the same `name@version`. A moved tag or
+a mismatched entry is a red refusal naming the tag and both commits (or both
+values); a ledgered version whose current packed tarball differs from the ledger's
+`integrity` is refused with the first differing file, exactly like an annotated
+tag. A new lightweight tag that is not in the ledger stays the existing red
+refusal, so every tag released after adoption is annotated.
+
+The ledger is append-only. `changeset check <base>` — which already receives the
+pull request base revision — fails red when an entry present at the base is
+removed or changed at the head; additions are fine. That is what proves the
+record was extended rather than rewritten.
+
+### Legacy tags
+
+A repository whose releases predate this tooling and were never published to a
+registry has no registry bytes to adopt — only its own tags, often a bare
+`v<version>`. `adopt` has nothing to record there, and without help the plan
+reads the current version as unreleased and owes a second `<name>@v<version>`
+tag for it. `legacyTags` names that earlier scheme:
+
+```jsonc
+"legacyTags": { "tag": "v{version}", "through": "0.3.6" }
+```
+
+`tag` is the old tag template: `{version}` is required, `{name}` is optional.
+`through` is the last version released under it. `release plan`, `release tag`
+and `release github` count a publishable member as already released when its
+`<name>@v<version>` tag is absent, its version is at or below `through`, and the
+remote holds the legacy tag for it — but only after reading the tagged commit:
+exactly one `package.json` there must name the member, must not be `private`,
+and must declare the same version. Anything else is a red
+`legacy-tag-unverified` refusal naming the tag, the package and what the commit
+declares; the tooling never invents an identity it cannot read back. A
+recognised version is a declared skip, not a silent one: `release plan` prints
+`plan-release: legacy release v0.3.6 (<name>@0.3.6), identity not recorded`
+for each.
+
+A version above `through` is never matched against the old template, so every
+release after adoption is tagged `<name>@v<version>` as usual. A legacy-released
+version gets no ledger entry and no integrity check: there are no recorded bytes
+to compare against, so the guarantee starts at the first managed release.
+
+## Sandbox
+
+`packages.<system>.sandbox` runs dependency code with nothing it was not given:
+
+```bash
+sandbox -- pnpm install
+sandbox -- pnpm build
+sandbox -- pnpm test
+sandbox --allow-host api.cloudflare.com --pass-env CLOUDFLARE_API_TOKEN -- pnpm deploy
+```
+
+pnpm never reaches a registry from the sandbox. `--pnpm-store` (the dev shell
+sets `SANDBOX_PNPM_STORE` to `packages.<system>.pnpm-store`) points pnpm at the
+Nix-built store. The sandbox then runs pnpm with `offline`, `frozen-lockfile`,
+`ignore-scripts` and `trust-lockfile`; the per-tarball fixed-output fetches
+already checked each integrity. pnpm never fetches another pnpm either
+(`manage-package-manager-versions` is off), so the launcher refuses a project
+whose `packageManager` names a different pnpm major.minor than the one on
+`PATH`; a patch-level difference runs with the pnpm provided. Each invocation gets a private copy of the store's index database
+that is discarded at exit, so the Nix store stays read-only. `$HOME` is a fresh
+tmpfs every time, so nothing a dependency plants survives. Tool caches that
+should persist (turbo, vite, `tsbuildinfo`) belong in the project's gitignored
+`.cache/`; the sandbox sets `XDG_CACHE_HOME` to it.
+
+| Boundary    | Inside the sandbox                                                                                                                                                               |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| filesystem  | the project directory read-write, only the invoking closure's store paths readable (`/nix/store` is not listable), an empty `$HOME`, a private `/tmp`; no other home directories |
+| environment | cleared, then `PATH`, `TERM`, locale, `TZ`, `CI` and colour settings, plus each `--pass-env`                                                                                     |
+| network     | loopback only; each `--allow-host` opens HTTPS to that host through an allow-list proxy; only `--publish` ports reach the host                                                   |
+| processes   | own PID, IPC and UTS namespaces, no capabilities, killed with its parent, no controlling terminal                                                                                |
+
+It is bubblewrap (`--unshare-all`, `--cap-drop ALL`, `--die-with-parent`,
+`--new-session`) and runs on Linux only. Egress goes through a CONNECT proxy
+outside the sandbox that tunnels only to declared `host[:port]` (default 443;
+`*.example.com` matches subdomains). Inside, `HTTPS_PROXY` points at it and
+`NODE_USE_ENV_PROXY=1` makes Node's `fetch` use it. There is no unsandboxed
+mode.
+
+Reads of `/nix/store` are restricted to the invocation's closure: the launcher
+resolves `nix-store --query --requisites` over the sandboxed `PATH`, the command
+and its own helpers, then mounts each of those paths read-only over an empty
+`/nix/store` that cannot be listed. A store path outside the closure is
+unreadable, so a dependency cannot enumerate or reach the rest of the store.
+
+`--egress-log PATH` appends one JSONL line per proxy decision, allowed or
+refused, at least `{"host","port","decision","rule"}`. The file must sit outside
+the sandbox's writable tree — the project, its `$HOME` and its `/tmp` — and the
+launcher refuses `PATH` inside them with exit code 2. With `--egress-log` set the
+proxy runs and the proxy environment is set even without `--allow-host`, so
+refusals are logged too.
+
+`--publish HOST_PORT:SANDBOX_PORT` makes a sandbox port reachable as
+`127.0.0.1:HOST_PORT` on the host; only published ports are reachable. On Linux
+the sandbox has its own network namespace, so an outside forwarder bridges the
+host port to an inside forwarder over a Unix socket. `--listen PORT` declares a
+port the stack may bind without publishing it. Both flags take ports 1–65535;
+anything malformed exits 2 with usage.
+
+`packages.<system>.sandbox-proofs` is the gate. Each refusal proof first prints
+from inside the same sandbox, so a sandbox that fails to start fails the proof
+instead of passing it. The proofs: reading `~/.ssh` and `~/.config` fails,
+writing outside the project fails, a write to the real `/tmp` leaves nothing on
+the host, agent sockets and secrets do not cross the cleared environment, a
+store path outside the closure and the listing of `/nix/store` both fail while a
+closure tool still runs and an offline `pnpm` 12 install of a tiny workspace
+resolves from the `--pnpm-store` store, a consumer installs a `file:` workspace
+tarball from its `mkPnpmConsumerStore` store while a store without that tarball
+fails, a `packageManager` pin on another pnpm minor is refused while one on
+another patch installs offline (and fails once pnpm manages its version),
+`--egress-log` records exactly the
+allowed and refused decisions and refuses a log inside the project, an
+undeclared connection fails, a declared host is reachable while every other host
+is refused, a loopback dev server still answers, and a published port answers
+from the host while an unpublished one does not. CI runs them on Linux, then
+installs, builds and tests this repository as three separate sandbox
+invocations with no network at all.
+
+bubblewrap needs unprivileged user namespaces and a mountable `/proc`. Ubuntu
+24.04 needs `sysctl kernel.apparmor_restrict_unprivileged_userns=0`. A
+container needs `/proc` unmasked (`--security-opt unmask=/proc/*` under
+podman). Without them the sandbox refuses to start.
 
 ## Install, build, test, package
 
@@ -288,6 +716,14 @@ grants to widen) terminates a certificate signed by a CA the image installs
 into the system trust store. The apps therefore talk to their production URLs
 with no `localhost` behaviour anywhere: no app carries a test-only host, and
 no test-only base URL exists to forget to remove.
+
+`registry.npmjs.org` is redirected the same way, but nothing publishes there:
+verdaccio stands behind it as a tripwire. It keeps `publish: $all`, so a
+regression that publishes succeeds at the registry instead of hiding behind an
+auth error, and it writes every request to `/tmp/verdaccio/verdaccio.log`. The
+last phase, `the release never publishes to npm`, sends one `GET /-/ping` and
+waits for it in that log, so a tripwire that logs nothing cannot pass. It then
+asserts zero `PUT` requests in the log and no package under verdaccio's storage.
 
 Green and red runs alike leave a transcript under `e2e/.artifacts/<timestamp>/`:
 

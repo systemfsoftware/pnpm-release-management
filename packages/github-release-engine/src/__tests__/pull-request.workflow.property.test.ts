@@ -8,6 +8,7 @@ import {
   PullRequestAbsent,
   PullRequestFound,
   PullRequestNumber,
+  RelativePath,
   ReleaseLabel,
   RemoteName,
   RepoName,
@@ -24,7 +25,7 @@ const gitRefArb = fc
 
 const numberArb = fc.integer({ min: 1, max: 1000 }).map((number) => PullRequestNumber.make(number))
 
-const pendingArb = fc.nat({ max: 5 }).map((pending) => Count.make(pending))
+const countArb = fc.nat({ max: 5 }).map((count) => Count.make(count))
 
 const refsArb = fc.tuple(gitRefArb, fc.boolean(), gitRefArb).map(([base, same, other]) => {
   if (same) {
@@ -55,13 +56,32 @@ const remoteArb = slugPartArb.map((remote) => RemoteName.make(remote))
 const labelsArb = fc
   .array(slugPartArb.map((label) => ReleaseLabel.make(label)), { maxLength: 3 })
 
+const createdArb = fc.array(
+  fc.stringMatching(/^[a-z][a-z0-9_-]{0,12}(\/[a-z0-9_-]{1,12}){0,2}\.md$/).map((path) => RelativePath.make(path)),
+  { maxLength: 3 },
+)
+
 it.prop(
   '∀state_PullRequest_≡OpensRefreshesCloses',
-  [pendingArb, refsArb, existingArb, titleArb, bodyArb, bodyIssueArb, slugArb, remoteArb, labelsArb],
-  ([pending, refs, existing, title, body, bodyIssue, slug, remote, labels]) => {
+  [
+    countArb,
+    countArb,
+    createdArb,
+    refsArb,
+    existingArb,
+    titleArb,
+    bodyArb,
+    bodyIssueArb,
+    slugArb,
+    remoteArb,
+    labelsArb,
+  ],
+  ([pending, changes, created, refs, existing, title, body, bodyIssue, slug, remote, labels]) => {
     const outcome = pullRequest(
       PullRequestCommand.make({
         pending,
+        changes,
+        created,
         existing,
         branch: refs.branch,
         base: refs.base,
@@ -80,6 +100,7 @@ it.prop(
       return Match.value(outcome.failure).pipe(
         Match.tag('PullRequestBodyUnreadable', (bad) => bad.path === bodyIssue),
         Match.tag('PullRequestHeadInvalid', () => false),
+        Match.tag('PullRequestUnversioned', () => false),
         Match.exhaustive,
       )
     }
@@ -89,6 +110,18 @@ it.prop(
       }
       return Match.value(outcome.failure).pipe(
         Match.tag('PullRequestHeadInvalid', (bad) => bad.branch === refs.branch),
+        Match.tag('PullRequestBodyUnreadable', () => false),
+        Match.tag('PullRequestUnversioned', () => false),
+        Match.exhaustive,
+      )
+    }
+    if (pending > 0) {
+      if (Result.isFailure(outcome) === false) {
+        return false
+      }
+      return Match.value(outcome.failure).pipe(
+        Match.tag('PullRequestUnversioned', (unversioned) => unversioned.pending === pending),
+        Match.tag('PullRequestHeadInvalid', () => false),
         Match.tag('PullRequestBodyUnreadable', () => false),
         Match.exhaustive,
       )
@@ -102,7 +135,7 @@ it.prop(
       Match.tag('PullRequestAbsent', () => false),
       Match.exhaustive,
     )
-    if (pending > 0) {
+    if (changes > 0) {
       if (existingIsFound) {
         return Match.value(decision).pipe(
           Match.tag('PullRequestUpdated', (refreshed) => {

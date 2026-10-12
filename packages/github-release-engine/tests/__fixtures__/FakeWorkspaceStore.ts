@@ -1,10 +1,11 @@
-import type { Member, RelativePath } from '@systemfsoftware/release-language'
+import type { ChangelogStorage, Member, RelativePath } from '@systemfsoftware/release-language'
 import { FsPath, ManifestUnreadable, RepoRoot, WorkspaceStore } from '@systemfsoftware/release-language'
 import { Effect, Layer } from 'effect'
 
 export interface FakeWorkspaceState {
   readonly members: Array<Member>
   readonly files: Record<string, string | undefined>
+  readonly storage?: ChangelogStorage
 }
 
 export const makeFakeWorkspaceStore = (state: FakeWorkspaceState) =>
@@ -25,4 +26,5 @@ export const makeFakeWorkspaceStore = (state: FakeWorkspaceState) =>
       }
       return Effect.succeed({ path, text })
     },
+    changelogStorage: () => Effect.succeed(state.storage ?? 'registry'),
   })

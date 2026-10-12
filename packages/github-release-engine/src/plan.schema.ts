@@ -1,4 +1,4 @@
-import { Count, PackageName } from '@systemfsoftware/release-language'
+import { Count, LegacyRelease, PackageName } from '@systemfsoftware/release-language'
 import * as S from 'effect/Schema'
 import { PlanRelease, PlanSettled, PlanVersion } from './plan-release.workflow.js'
 
@@ -17,6 +17,7 @@ export const PlanReport = S.Struct({
   thisCycle: Count,
   deferred: Count,
   unpublished: S.Array(PackageName),
+  legacy: S.Array(LegacyRelease),
 })
 
 export type PlanReport = S.Schema.Type<typeof PlanReport>

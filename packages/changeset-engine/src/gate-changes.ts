@@ -8,16 +8,26 @@ import {
   GitRef,
   type Intent,
   type IntentRefusal,
+  LEDGER_PATH,
+  LedgerPort,
+  type LedgerRefusal,
   type MemberRefusal,
+  ReleaseLedger,
   RepoRoot,
   TaskName,
   WorkspaceStore,
 } from '@systemfsoftware/release-language'
-import { Effect } from 'effect'
+import { Effect, Option } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import { type ChangesGated, type ChangesVacant, gateChanges, GateCommand } from './gate-changes.workflow.js'
+import {
+  type LedgerAppendChanged,
+  LedgerAppendCommand,
+  type LedgerAppendRemoved,
+  verifyLedgerAppend,
+} from './verify-ledger-append.workflow.js'
 
 const GateRequest = Wire.wire({
   root: Wire.mint(RepoRoot),
@@ -34,7 +44,13 @@ export interface GateReport {
 
 type GateRequestInput = S.Schema.Type<typeof GateRequest>
 
-type GateReadError = ChangeEvidenceRefusal | MemberRefusal | IntentRefusal
+type GateReadError =
+  | ChangeEvidenceRefusal
+  | MemberRefusal
+  | IntentRefusal
+  | LedgerRefusal
+  | LedgerAppendRemoved
+  | LedgerAppendChanged
 
 type GateVerdict = Result.Result<
   ChangesVacant | ChangesGated,
@@ -48,7 +64,7 @@ const read = (
 ): Effect.Effect<
   GateCommand,
   GateReadError,
-  ChangeEvidencePort | WorkspaceStore | ChangesetStore
+  ChangeEvidencePort | WorkspaceStore | ChangesetStore | LedgerPort
 > =>
   Effect.gen(function*() {
     const evidence = yield* Effect.flatMap(ChangeEvidencePort, (port) => {
@@ -64,9 +80,22 @@ const read = (
     const intents: ReadonlyArray<Intent> = yield* Effect.all(
       paths.map((path) => store.readIntent(path)),
     )
+    const ledgerPort = yield* LedgerPort
+    const head = yield* ledgerPort.read(LEDGER_PATH)
+    const base = yield* ledgerPort.readAt(request.ref, LEDGER_PATH)
+    const appendVerdict = verifyLedgerAppend(
+      LedgerAppendCommand.make({
+        base: Option.getOrElse(base, () => ReleaseLedger.make({ entries: [] })).entries,
+        head: Option.getOrElse(head, () => ReleaseLedger.make({ entries: [] })).entries,
+      }),
+    )
+    if (Result.isFailure(appendVerdict)) {
+      return yield* Effect.fail(appendVerdict.failure)
+    }
     return GateCommand.make({
       members,
       touched: evidence.touched,
+      deleted: evidence.deleted,
       intents,
       skipLiveness: request.skipLiveness,
     })
@@ -104,13 +133,20 @@ const refusalReport = (refusal: GateIntentMissing | GateUnknownPackage): GateRep
     Match.exhaustive,
   )
 
+const deletedLine = (deleted: ReadonlyArray<string>): string => {
+  if (deleted.length === 0) return ''
+  return `\nchangeset gate: ${deleted.length} package(s) deleted, nothing left to release — ${deleted.join(', ')}`
+}
+
 const decisionReport = (decision: ChangesVacant | ChangesGated): GateReport =>
   Match.value(decision).pipe(
     Match.tag(
       'ChangesVacant',
       (vacant): GateReport => ({
         ok: true,
-        text: `changeset gate: no publishable package changed (${vacant.members.length} member(s))`,
+        text: `changeset gate: no publishable package changed (${vacant.members.length} member(s))${
+          deletedLine(vacant.deleted)
+        }`,
       }),
     ),
     Match.tag(
@@ -119,7 +155,7 @@ const decisionReport = (decision: ChangesVacant | ChangesGated): GateReport =>
         ok: true,
         text: `changeset gate: ${gated.touched.length} publishable package(s) changed, each named by an intent — ${
           gated.touched.join(', ')
-        }`,
+        }${deletedLine(gated.deleted)}`,
       }),
     ),
     Match.exhaustive,
