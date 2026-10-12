@@ -58,34 +58,23 @@ export const gitLines = (
     return out.stdout.split('\n').filter((line) => line.length > 0)
   })
 
-const turboConfigAtHead = (
+const turboConfigsAt = (
   root: RepoRoot,
-): Effect.Effect<Option.Option<TurboConfigFile>, EvidenceFileUnreadable, FileSystem.FileSystem> =>
-  Effect.gen(function*() {
-    const fs = yield* FileSystem.FileSystem
-    for (const file of TurboConfigFile.literals) {
-      const path = `${root}/${file}`
-      if (yield* fs.exists(path).pipe(Effect.mapError(() => new EvidenceFileUnreadable({ path })))) {
-        return Option.some(file)
-      }
-    }
-    return Option.none()
-  })
+  rev: string,
+): Effect.Effect<ReadonlyArray<string>, EvidenceCommandFailed | ProcessFault, ChildProcessSpawner> =>
+  gitLines(root, ['ls-tree', '--name-only', rev, '--', ...TurboConfigFile.literals])
 
 export const refuseUnderTurbo = (
   root: RepoRoot,
   base: string,
-): Effect.Effect<
-  void,
-  PathsGateUnderTurbo | EvidenceFileUnreadable | EvidenceCommandFailed | ProcessFault,
-  FileSystem.FileSystem | ChildProcessSpawner
-> =>
+  head: string,
+): Effect.Effect<void, PathsGateUnderTurbo | EvidenceCommandFailed | ProcessFault, ChildProcessSpawner> =>
   Effect.gen(function*() {
-    const head = yield* turboConfigAtHead(root)
-    if (Option.isNone(head)) return
-    const atBase = yield* gitLines(root, ['ls-tree', '--name-only', base, '--', ...TurboConfigFile.literals])
-    if (atBase.length === 0) return
-    return yield* Effect.fail(new PathsGateUnderTurbo({ turboConfig: head.value }))
+    const atHead = yield* turboConfigsAt(root, head)
+    const named = TurboConfigFile.literals.find((file) => atHead.includes(file))
+    if (named === undefined) return
+    if ((yield* turboConfigsAt(root, base)).length === 0) return
+    return yield* Effect.fail(new PathsGateUnderTurbo({ turboConfig: named }))
   })
 
 const dirOf = (manifestPath: string): Option.Option<RelativePath> => {

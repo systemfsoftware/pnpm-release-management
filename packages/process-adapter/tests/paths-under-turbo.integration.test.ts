@@ -79,7 +79,7 @@ const refusalOf = <E>(exit: Exit.Exit<unknown, E>): E | undefined =>
 const removeRepository = (root: string) =>
   Effect.flatMap(FileSystem, (fs) => fs.remove(root, { recursive: true, force: true }))
 
-Feature('Classifying changes by directory only where turbo cannot').body(({ scenarioOutline }) => {
+Feature('Classifying changes by directory only where turbo cannot').body(({ scenario, scenarioOutline }) => {
   scenarioOutline(
     'A repository whose root keeps <config> on both sides of the pull request is told to use turbo',
     [{ config: 'turbo.json' }, { config: 'turbo.jsonc' }] as const,
@@ -103,6 +103,33 @@ Feature('Classifying changes by directory only where turbo cannot').body(({ scen
         ),
       ),
     { scenarioLayer: live },
+  )
+
+  scenario(
+    'Deleting the turbo config without committing the deletion does not reopen directory classification',
+    { scenarioLayer: live },
+    Gherkin.Do.pipe(
+      Given('a repository whose root kept turbo.json in both commits but whose working copy has since lost it')(
+        'root',
+        () =>
+          Effect.gen(function*() {
+            const root = yield* repositoryChangingPub('turbo.json', 'turbo.json')
+            const fs = yield* FileSystem
+            const path = yield* Path
+            yield* fs.remove(path.join(root, 'turbo.json'))
+            return root
+          }),
+      ),
+      When('its changes are classified by directory')('exit', (s) => Effect.exit(collectPathsEvidence(s.root))),
+      Then('the classification is still refused, naming turbo.json')((s) =>
+        Effect.gen(function*() {
+          const refusal = refusalOf(s.exit)
+          expect(refusal).toBeInstanceOf(PathsGateUnderTurbo)
+          expect(refusal).toMatchObject({ turboConfig: 'turbo.json' })
+          yield* removeRepository(s.root)
+        })
+      ),
+    ),
   )
 
   scenarioOutline(

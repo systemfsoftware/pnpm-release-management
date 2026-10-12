@@ -28,8 +28,8 @@ const branchFault = (refusal: TagRefusal): EvidenceCommandFailed =>
 const evidencePort = (git: GitPort): ChangeEvidencePort => ({
   pathsEvidence: (root, ref) =>
     Effect.gen(function*() {
-      yield* refuseUnderTurbo(root, ref)
       const head = yield* git.currentBranch().pipe(Effect.mapError(branchFault))
+      yield* refuseUnderTurbo(root, ref, head)
       const changed = yield* git.changedPaths(ref, head)
       const members = yield* membersAt(root, yield* gitLines(root, MANIFEST_GLOB))
       const [mergeBase = ref] = yield* gitLines(root, ['merge-base', ref, head])
