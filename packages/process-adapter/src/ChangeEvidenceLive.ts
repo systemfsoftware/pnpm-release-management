@@ -9,7 +9,7 @@ import {
 import { Effect, Layer } from 'effect'
 import * as Match from 'effect/Match'
 import { pathsTouched } from './change-verdict.js'
-import { deletedAt, gitLines, MANIFEST_GLOB, membersAt } from './evidence-io.js'
+import { deletedAt, gitLines, MANIFEST_GLOB, membersAt, refuseUnderTurbo } from './evidence-io.js'
 import { collectTurboEvidence } from './turbo-evidence.js'
 import { turboPin } from './turbo-pin.js'
 
@@ -28,6 +28,7 @@ const branchFault = (refusal: TagRefusal): EvidenceCommandFailed =>
 const evidencePort = (git: GitPort): ChangeEvidencePort => ({
   pathsEvidence: (root, ref) =>
     Effect.gen(function*() {
+      yield* refuseUnderTurbo(root, ref)
       const head = yield* git.currentBranch().pipe(Effect.mapError(branchFault))
       const changed = yield* git.changedPaths(ref, head)
       const members = yield* membersAt(root, yield* gitLines(root, MANIFEST_GLOB))
