@@ -154,7 +154,7 @@ Then add a `release.jsonc`:
 | `versioning.manifest`           | —                           | `surfaces`: the JSON manifest that owns the version                   |
 | `versioning.changelog`          | —                           | `surfaces`: the root changelog that receives the release summary      |
 | `versioning.surfaces[]`         | —                           | `surfaces`: additional files rewritten on every bump                  |
-| `gate.strategy`                 | required                    | `turbo` (a task graph decides what a change touches) or `paths`       |
+| `gate.strategy`                 | required                    | `turbo` (a task graph decides) or `paths` without a root Turbo config |
 | `gate.task`                     | `build`                     | `turbo`: the task whose inputs decide the changed packages            |
 | `distribution.launcherManifest` | —                           | required only for repositories that ship platform packages            |
 | `distribution.targets[]`        | —                           | `{ target, suffix, os, cpu, libc?, runner, bin }`                     |
@@ -188,6 +188,21 @@ workspace-member entry in the sibling `Cargo.lock` (registry and git
 dependencies carry a `source` line and are left alone). Its optional `package`
 names the workspace package whose bumped version the Cargo workspace follows;
 it is required under `changesets` versioning, where there is no single version.
+
+`paths` classifies a change by the member directory it touches, so it is for
+repositories without a root Turbo config. When the root holds `turbo.json` or
+`turbo.jsonc` at both the base and the head of a comparison, the paths gate
+refuses before classifying anything:
+
+```text
+paths gate refused: turbo.json makes turbo the source of change evidence — set "gate": { "strategy": "turbo" } in release.jsonc
+```
+
+A pull request that adds or removes the Turbo config is still decided by
+`paths`, because Turbo cannot dry-run the side without one. Under `turbo` the
+check reads the pin from the root importer's `turbo` devDependency in
+`pnpm-lock.yaml`; a lockfile without it fails with `turbo pin unusable:` until
+`turbo` is a root devDependency.
 
 ## Change intents
 
