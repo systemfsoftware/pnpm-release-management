@@ -155,7 +155,7 @@ const runPhases = async (session: Session): Promise<void> => {
     await world.must('git checkout -q main && git branch -q -D turbo-probe', { cwd: FIXTURE })
     expect(refused.code).toBe(1)
     expect(`${refused.stdout}${refused.stderr}`).toContain(
-      'paths gate refused: turbo.json makes turbo the source of change evidence',
+      'paths gate refused: turbo.json makes turbo the source of change evidence — set "gate": { "strategy": "turbo" } in release.jsonc',
     )
   })
 
