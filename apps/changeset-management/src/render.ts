@@ -53,6 +53,8 @@ export const renderRefusal = (refusal: AppRefusal): Effect.Effect<void, never, R
         EvidenceFileUnreadable: (unreadable) => `cannot read ${unreadable.path}`,
         EvidenceCommandFailed: (failed) => `${failed.program} failed: ${failed.detail}`,
         TurboPinUnusable: (unusable) => `turbo pin unusable: ${unusable.detail}`,
+        PathsGateUnderTurbo: (refused) =>
+          `paths gate refused: ${refused.turboConfig} makes turbo the source of change evidence — set "gate": { "strategy": "turbo" } in release.jsonc`,
         WorktreeUnavailable: (unavailable) => `worktree unavailable: ${unavailable.detail}`,
         ProcessUnstartable: (unstartable) => `cannot start ${unstartable.program}: ${unstartable.reason}`,
         ProcessUnobservable: (unobservable) => `cannot read ${unobservable.program} output: ${unobservable.reason}`,

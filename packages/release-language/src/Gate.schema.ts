@@ -36,6 +36,10 @@ export class TurboPinUnusable extends S.TaggedError<TurboPinUnusable>()('TurboPi
   detail: S.String,
 }) {}
 
+export class PathsGateUnderTurbo extends S.TaggedError<PathsGateUnderTurbo>()('PathsGateUnderTurbo', {
+  turboConfig: S.String,
+}) {}
+
 export class WorktreeUnavailable extends S.TaggedError<WorktreeUnavailable>()('WorktreeUnavailable', {
   detail: S.String,
 }) {}
@@ -64,6 +68,7 @@ export const EvidenceRefusal = S.Union([
   EvidenceFileUnreadable,
   EvidenceCommandFailed,
   TurboPinUnusable,
+  PathsGateUnderTurbo,
   WorktreeUnavailable,
   ProcessUnstartable,
   ProcessUnobservable,

@@ -42,6 +42,7 @@ export {
   GateIntentMissing,
   GateRefusal,
   GateUnknownPackage,
+  PathsGateUnderTurbo,
   ProcessUnobservable,
   ProcessUnstartable,
   TurboDryRunDrifted,
