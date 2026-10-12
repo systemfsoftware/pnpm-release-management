@@ -7,6 +7,7 @@ import {
   PathsGateUnderTurbo,
   RelativePath,
   type RepoRoot,
+  TurboConfigFile,
 } from '@systemfsoftware/release-language'
 import { Effect, FileSystem, Option } from 'effect'
 import * as S from 'effect/Schema'
@@ -20,8 +21,6 @@ export const MANIFEST_GLOB: ReadonlyArray<string> = [
   '*package.json',
   ':(exclude)repos/**',
 ]
-
-const TURBO_CONFIGS = ['turbo.json', 'turbo.jsonc'] as const
 
 export const readText = (
   path: string,
@@ -59,12 +58,12 @@ export const gitLines = (
     return out.stdout.split('\n').filter((line) => line.length > 0)
   })
 
-const turboConfigInTree = (
+const turboConfigAtHead = (
   root: RepoRoot,
-): Effect.Effect<Option.Option<string>, EvidenceFileUnreadable, FileSystem.FileSystem> =>
+): Effect.Effect<Option.Option<TurboConfigFile>, EvidenceFileUnreadable, FileSystem.FileSystem> =>
   Effect.gen(function*() {
     const fs = yield* FileSystem.FileSystem
-    for (const file of TURBO_CONFIGS) {
+    for (const file of TurboConfigFile.literals) {
       const path = `${root}/${file}`
       if (yield* fs.exists(path).pipe(Effect.mapError(() => new EvidenceFileUnreadable({ path })))) {
         return Option.some(file)
@@ -82,9 +81,9 @@ export const refuseUnderTurbo = (
   FileSystem.FileSystem | ChildProcessSpawner
 > =>
   Effect.gen(function*() {
-    const head = yield* turboConfigInTree(root)
+    const head = yield* turboConfigAtHead(root)
     if (Option.isNone(head)) return
-    const atBase = yield* gitLines(root, ['ls-tree', '--name-only', base, '--', ...TURBO_CONFIGS])
+    const atBase = yield* gitLines(root, ['ls-tree', '--name-only', base, '--', ...TurboConfigFile.literals])
     if (atBase.length === 0) return
     return yield* Effect.fail(new PathsGateUnderTurbo({ turboConfig: head.value }))
   })

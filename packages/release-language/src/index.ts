@@ -45,6 +45,7 @@ export {
   PathsGateUnderTurbo,
   ProcessUnobservable,
   ProcessUnstartable,
+  TurboConfigFile,
   TurboDryRunDrifted,
   TurboDryRunUnreadable,
   TurboPinUnusable,

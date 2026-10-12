@@ -36,8 +36,11 @@ export class TurboPinUnusable extends S.TaggedError<TurboPinUnusable>()('TurboPi
   detail: S.String,
 }) {}
 
+export const TurboConfigFile = S.Literals(['turbo.json', 'turbo.jsonc'])
+export type TurboConfigFile = S.Schema.Type<typeof TurboConfigFile>
+
 export class PathsGateUnderTurbo extends S.TaggedError<PathsGateUnderTurbo>()('PathsGateUnderTurbo', {
-  turboConfig: S.String,
+  turboConfig: TurboConfigFile,
 }) {}
 
 export class WorktreeUnavailable extends S.TaggedError<WorktreeUnavailable>()('WorktreeUnavailable', {
