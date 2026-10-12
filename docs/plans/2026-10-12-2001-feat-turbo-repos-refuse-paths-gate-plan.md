@@ -6,6 +6,7 @@ topic: turbo-repos-refuse-paths-gate
 artifact_contract: ce-unified-plan/v1
 product_contract_source: ce-brainstorm
 execution: code
+supersedes: docs/plans/2026-10-12-1922-feat-turbo-repos-refuse-paths-gate-plan.md
 ---
 
 # Turbo repositories refuse the paths gate - Plan
@@ -89,8 +90,8 @@ Product Contract preservation: Product Contract unchanged.
 
 ### Key Technical Decisions
 
-- KTD1. **The probe runs first inside `pathsEvidence`, before the branch lookup or any classification.** The refusal is then deterministic and costs no member enumeration, and every caller of paths evidence inherits it. Governs R3.
-- KTD2. **The base side is read from git at the caller's `ref`; the head side is read from the working tree at the root.** These are the revisions the turbo gate dry-runs: the base worktree is checked out at `ref^{commit}` and the head dry run runs in the root. The base probe lists `turbo.json` and `turbo.jsonc` with `git ls-tree --name-only <ref> --`, which exits 0 when neither is present. An unreadable `ref` stays the existing `EvidenceCommandFailed`, never "not Turbo-driven". Governs R1, R2, R5.
+- KTD1. **The probe runs inside `pathsEvidence` right after the branch lookup, before any changed-path read or classification.** The refusal costs no member enumeration, and every caller of paths evidence inherits it. Governs R3.
+- KTD2. **Both sides are read from git: the base at the caller's `ref`, the head at the branch the paths gate classifies.** `git ls-tree --name-only <rev> -- turbo.json turbo.jsonc` exits 0 when neither is present. The refusal is then a function of the compared revisions alone, so uncommitted working-tree state can neither hide nor invent a Turbo config. An unreadable revision stays the existing `EvidenceCommandFailed`, never "not Turbo-driven". Governs R1, R2, R5.
 - KTD3. **The refusal is a new `S.TaggedError` in the `EvidenceRefusal` union carrying the head's Turbo config file name.** It follows `TurboPinUnusable`'s shape, travels the existing `ChangeEvidenceRefusal` channel to `renderRefusal`, and `Match.tagsExhaustive` makes the render case a compile error until written. When both files exist the refusal names `turbo.json`, the first file Turbo looks for. Governs R4.
 - KTD4. **The rendered line starts with a fixed stem and names the file and the fix.** Shape: `paths gate refused: <file> makes turbo the source of change evidence — set "gate": { "strategy": "turbo" } in release.jsonc`. The stem `paths gate refused:` is the stable, greppable part. Governs R4.
 - KTD5. **Changeset: `release-language` major, `process-adapter` minor.** This mirrors `.changeset/command-unstartable.md`: a union that gains a member breaks exhaustive matches for adapter authors, and the adapter gains a refusal.
@@ -124,13 +125,13 @@ U1 adds the type and its rendered line, so U2's adapter code and test can constr
 
 ### U2. Paths evidence refuses when Turbo drives the comparison
 
-- **Goal:** `pathsEvidence` refuses before classifying when a root Turbo config exists at both `ref` and the working tree, and behaves as before otherwise.
+- **Goal:** `pathsEvidence` refuses before classifying when a root Turbo config exists at both `ref` and the classified head, and behaves as before otherwise.
 - **Requirements:** R1, R2, R3, R5; AE1, AE2, AE3, AE5, AE6.
 - **Dependencies:** U1.
-- **Files:** `packages/process-adapter/src/ChangeEvidenceLive.ts`, `packages/process-adapter/src/evidence-io.ts`, `packages/process-adapter/tests/paths-under-turbo.integration.test.ts` (new).
+- **Files:** `packages/process-adapter/src/ChangeEvidenceLive.ts`, `packages/process-adapter/src/evidence-io.ts`, `packages/process-adapter/tests/paths-under-turbo.integration.test.ts` (new), `e2e/tests/pipeline.integration.test.ts`.
 - **Approach:**
-  1. Add a head-side probe and a base-side probe per KTD2, beside the existing evidence I/O helpers.
-  2. Call them first in `pathsEvidence` per KTD1, failing with U1's refusal when both sides hold a config.
+  1. Add one git probe per revision per KTD2, beside the existing evidence I/O helpers.
+  2. Call it in `pathsEvidence` per KTD1, failing with U1's refusal when both revisions hold a config.
 - **Patterns to follow:** `deletedAt` and `gitLines` in `evidence-io.ts` for git reads at a revision; the fixture builder, `git` helper, `fakeGitChanging`, and `Effect.exit` refusal idiom in `deleted-packages.integration.test.ts` and `turbo-pin.integration.test.ts`.
 - **Test scenarios:**
   - Covers AE1. A repository with root `turbo.json` at base and head and a changed publishable member: paths evidence fails with the new refusal naming `turbo.json`.
@@ -138,6 +139,8 @@ U1 adds the type and its rendered line, so U2's adapter code and test can constr
   - Covers AE3. No root Turbo config on either side: paths evidence succeeds and names the changed publishable member as touched.
   - Covers AE5. `turbo.json` added on the head only: paths evidence succeeds and names the member.
   - Covers AE6. `turbo.json` removed on the head: paths evidence succeeds and names the member.
+  - Covers R1, R5. `turbo.json` at base and head with its deletion left uncommitted in the working copy: paths evidence is still refused naming `turbo.json`.
+  - Covers AE1, R3, R4 through the real CLI. The e2e pipeline gains a phase that commits a root `turbo.json`, changes a publishable member on top, and runs `changeset-management check` against the commit that added the config: exit 1 with the `paths gate refused: turbo.json` line. A unit test of the renderer would need a test-only package export, so the line is pinned at the CLI.
 - **Verification:** the new feature passes, the existing process-adapter suites stay green, and their fixtures still need no Turbo config.
 
 ### U3. Documentation and change intent
@@ -164,6 +167,7 @@ U1 adds the type and its rendered line, so U2's adapter code and test can constr
 | Adoption pull request | same tools on that consumer's commit that introduced `turbo.json`, compared with its parent                                                                                          | AE5                                                                    |
 | Turbo route unchanged | same tools on a scratch Turbo consumer with `turbo`: a source change with an intent, the same without one, and a lockfile Turbo pin edit                                             | R6, R7                                                                 |
 | Non-Turbo `paths`     | same tools on a scratch copy of a public repository with no Turbo config                                                                                                             | AE3                                                                    |
+| e2e refusal           | CI e2e job (container; not run locally)                                                                                                                                              | R3, R4 through the CLI: exit 1 and the stable line                     |
 | Workflow lint         | `actionlint` over `.github/workflows/`                                                                                                                                               | no workflow regression (no workflow file changes in this plan)         |
 
 Mutation testing is not run locally; mutation evidence comes from the main-branch CI.
