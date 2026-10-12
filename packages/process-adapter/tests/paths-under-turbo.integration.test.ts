@@ -81,23 +81,27 @@ const removeRepository = (root: string) =>
 
 Feature('Classifying changes by directory only where turbo cannot').body(({ scenario, scenarioOutline }) => {
   scenarioOutline(
-    'A repository whose root keeps <config> on both sides of the pull request is told to use turbo',
-    [{ config: 'turbo.json' }, { config: 'turbo.jsonc' }] as const,
+    'A repository whose root keeps <head> on the head side and <base> on the base side is told to use turbo',
+    [
+      { base: 'turbo.json', head: 'turbo.json' },
+      { base: 'turbo.jsonc', head: 'turbo.jsonc' },
+      { base: 'turbo.jsonc', head: 'turbo.json' },
+    ] as const,
     (row) =>
       Gherkin.Do.pipe(
-        Given(`a repository whose root kept ${row.config} while a publishable package changed`)(
+        Given(`a repository whose root went from ${row.base} to ${row.head} while a publishable package changed`)(
           'root',
-          () => repositoryChangingPub(row.config, row.config),
+          () => repositoryChangingPub(row.base, row.head),
         ),
         When('its changes are classified by directory')(
           'exit',
           (s) => Effect.exit(collectPathsEvidence(s.root)),
         ),
-        Then(`the classification is refused, naming ${row.config} and the turbo fix`)((s) =>
+        Then(`the classification is refused, naming the head's ${row.head} and the turbo fix`)((s) =>
           Effect.gen(function*() {
             const refusal = refusalOf(s.exit)
             expect(refusal).toBeInstanceOf(PathsGateUnderTurbo)
-            expect(refusal).toMatchObject({ turboConfig: row.config })
+            expect(refusal).toMatchObject({ turboConfig: row.head })
             yield* removeRepository(s.root)
           })
         ),
