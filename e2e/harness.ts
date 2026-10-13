@@ -3,6 +3,7 @@ import {
   conditionHolds,
   readWorkflow,
   resolveExpressions,
+  runsAfterFailure,
   runStepsOf,
   toolStepsOf,
   workflowEnvOf,
@@ -329,7 +330,9 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
       return ''
     }
     const results: Array<StepResult> = []
+    let failed = false
     for (const [index, step] of runStepsOf(WORKFLOWS[workflow], name).entries()) {
+      if (failed && !runsAfterFailure(step.condition)) continue
       if (!conditionHolds(step.condition, lookup)) continue
       const script = `${STEP_DIR}/${name}-${index}.sh`
       const output = `${STEP_DIR}/${name}-${index}.output`
@@ -347,7 +350,10 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
       )
       const stepOutputs = outputsOf((await must(`cat ${quote(output)}`)).stdout)
       results.push({ step: step.label, outputs: stepOutputs, ...result })
-      if (result.code !== 0) return results
+      if (result.code !== 0) {
+        failed = true
+        continue
+      }
       if (step.id !== undefined) outputs[step.id] = stepOutputs
       jobEnv = outputsOf((await must(`cat ${quote(githubEnv)}`)).stdout)
     }
