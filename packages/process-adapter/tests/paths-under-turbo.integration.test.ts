@@ -34,7 +34,25 @@ const CONFIG_FILES = {
 
 type RootConfig = keyof typeof CONFIG_FILES
 
-const repositoryChangingPub = (base: RootConfig, head: RootConfig) =>
+const lockfilePinning = (packages: string): string =>
+  [
+    "lockfileVersion: '9.0'",
+    '',
+    'importers:',
+    '',
+    '  .:',
+    '    devDependencies:',
+    '      turbo:',
+    `        specifier: ^${TURBO}`,
+    `        version: ${TURBO}`,
+    '',
+    'packages:',
+    '',
+    packages,
+    '',
+  ].join('\n')
+
+const repositoryChangingPub = (base: RootConfig, head: RootConfig, lockfile: string) =>
   Effect.gen(function*() {
     const fs = yield* FileSystem
     const path = yield* Path
@@ -44,6 +62,7 @@ const repositoryChangingPub = (base: RootConfig, head: RootConfig) =>
         fs.makeDirectory(path.dirname(path.join(root, file)), { recursive: true }),
         () => fs.writeFileString(path.join(root, file), text),
       )
+    yield* write('pnpm-lock.yaml', lockfile)
     yield* write('packages/pub/package.json', JSON.stringify({ name: '@t/pub', version: '1.0.0' }))
     yield* write(CHANGED, 'export const pub = 1\n')
     yield* Effect.forEach(CONFIG_FILES[base], (file) => write(file, '{ "tasks": { "build": {} } }\n'))
@@ -62,7 +81,7 @@ const repositoryChangingPub = (base: RootConfig, head: RootConfig) =>
 const repositoryServingChanges = (base: RootConfig, head: RootConfig) =>
   Effect.gen(function*() {
     const served = yield* serveTurbo({ pin: TURBO })
-    return { served, root: yield* repositoryChangingPub(base, head) }
+    return { served, root: yield* repositoryChangingPub(base, head, lockfilePinning(served.packagesYaml())) }
   })
 
 const collectPathsEvidence = (root: string) =>

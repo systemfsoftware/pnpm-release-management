@@ -350,12 +350,9 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
       )
       const stepOutputs = outputsOf((await must(`cat ${quote(output)}`)).stdout)
       results.push({ step: step.label, outputs: stepOutputs, ...result })
-      if (result.code !== 0) {
-        failed = true
-        continue
-      }
       if (step.id !== undefined) outputs[step.id] = stepOutputs
       jobEnv = outputsOf((await must(`cat ${quote(githubEnv)}`)).stdout)
+      if (result.code !== 0) failed = true
     }
     return results
   }
