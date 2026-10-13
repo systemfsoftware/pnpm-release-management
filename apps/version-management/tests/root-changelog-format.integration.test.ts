@@ -113,7 +113,10 @@ const removeRepository = (root: RepoRoot) =>
 Feature('Release notes in the root changelog pass the repository format check').body(({ scenarioOutline }) => {
   scenarioOutline(
     'Versioning a repository that starts with <start> leaves a root changelog the format check accepts',
-    [{ start: 'no root changelog' }, { start: 'a changelog with an earlier release' }] as const,
+    [
+      { start: 'no root changelog', kept: [] },
+      { start: 'a changelog with an earlier release', kept: ['## 1.0.0', '- first release'] },
+    ] as const,
     (row) =>
       Gherkin.Do.pipe(
         Given(`a repository with ${row.start} and two pending intents, one long and one of two paragraphs`)(
@@ -125,10 +128,11 @@ Feature('Release notes in the root changelog pass the repository format check').
           Effect.gen(function*() {
             expect(s.decision._tag).toBe('VersionBumped')
             const changelog = yield* rootChangelogOf(s.root)
-            expect(changelog).toContain('## 1.1.0')
-            expect(changelog).toContain(LONG_SUMMARY)
-            expect(changelog).toContain(FIRST_PARAGRAPH)
-            expect(changelog).toContain(SECOND_PARAGRAPH)
+            const lines = changelog.split('\n')
+            expect(lines).toContain('## 1.1.0')
+            expect(lines).toContain(`- ${LONG_SUMMARY}`)
+            expect(lines.find((line) => line.startsWith(`- ${FIRST_PARAGRAPH}`))).toContain(SECOND_PARAGRAPH)
+            expect(lines).toEqual(expect.arrayContaining([...row.kept]))
             const verdict = yield* repositoryFormatCheck(s.root)
             expect(verdict.output).toBe('')
             expect(verdict.code).toBe(0)
