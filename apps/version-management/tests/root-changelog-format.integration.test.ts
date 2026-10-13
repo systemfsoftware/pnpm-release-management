@@ -21,11 +21,12 @@ import { expect } from 'vitest'
 const Feature = makeFeature({ it, layer })
 
 const REPOSITORY = new URL('../../../', import.meta.url).pathname
+const ROOT_CHANGELOG = 'CHANGELOG.md'
 
 const request = S.decodeUnknownEffect(BumpInput)({
   strategy: 'surfaces',
   changelogDir: '.changeset/changelogs',
-  rootChangelog: 'CHANGELOG.md',
+  rootChangelog: ROOT_CHANGELOG,
   manifest: { file: 'package.json', surface: { kind: 'json', path: 'package.json' } },
   surfaces: [{ file: 'packages/alpha/package.json', surface: { kind: 'json', path: 'packages/alpha/package.json' } }],
 })
@@ -47,7 +48,7 @@ const FILES: ReadonlyArray<readonly [string, string]> = [
 
 const STARTING_CHANGELOGS = {
   'no root changelog': [],
-  'a changelog with an earlier release': [['CHANGELOG.md', '# Changelog\n\n## 1.0.0\n\n- first release\n']],
+  'a changelog with an earlier release': [[ROOT_CHANGELOG, '# Changelog\n\n## 1.0.0\n\n- first release\n']],
 } as const satisfies Record<string, ReadonlyArray<readonly [string, string]>>
 
 const repositoryStartingWith = (start: keyof typeof STARTING_CHANGELOGS) =>
@@ -81,7 +82,7 @@ const repositoryFormatCheck = (root: RepoRoot) =>
     Effect.gen(function*() {
       const handle = yield* ChildProcess.make(
         `${REPOSITORY}bin/dprint`,
-        ['check', '--config', `${REPOSITORY}dprint.json`, 'CHANGELOG.md'],
+        ['check', '--config', `${REPOSITORY}dprint.json`, ROOT_CHANGELOG],
         { cwd: root, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' },
       )
       const [stdout, stderr, code] = yield* Effect.all(
@@ -100,7 +101,7 @@ const rootChangelogOf = (root: RepoRoot) =>
   Effect.gen(function*() {
     const fs = yield* FileSystem
     const path = yield* Path
-    return yield* fs.readFileString(path.join(root, 'CHANGELOG.md'))
+    return yield* fs.readFileString(path.join(root, ROOT_CHANGELOG))
   })
 
 const removeRepository = (root: RepoRoot) =>
