@@ -22,7 +22,7 @@ import type { ChildProcessSpawner } from 'effect/unstable/process/ChildProcessSp
 import { verdictTouched } from './change-verdict.js'
 import { gitLines, MANIFEST_GLOB, MANIFEST_SUFFIX, memberOf, membersAt, readText } from './evidence-io.js'
 import { runProcess } from './ProcessRun.js'
-import { fetchTurbo, TURBO_ENV } from './turbo-fetch.js'
+import { type FetchedTurbo, fetchTurbo, TURBO_ENV } from './turbo-fetch.js'
 import type { TurboPin } from './turbo-pin.js'
 import { DryRunDocument } from './TurboDryRun.schema.js'
 
@@ -98,12 +98,12 @@ const dryRunView = (
 
 const dryRunAt = (
   cwd: string,
-  turbo: string,
+  turbo: FetchedTurbo,
   task: TaskName,
 ): Effect.Effect<DryRun, EvidenceRefusal, Requirements> =>
   Effect.gen(function*() {
     const out = yield* runProcess({
-      program: turbo,
+      program: turbo.program,
       args: ['run', task, '--dry=json'],
       cwd,
       stdio: 'captured',
@@ -113,7 +113,7 @@ const dryRunAt = (
       const tail = out.stderr.trim().split('\n').slice(-5).join('\n')
       return yield* Effect.fail(
         new EvidenceCommandFailed({
-          program: turbo,
+          program: `turbo (${turbo.key})`,
           detail: `dry run in ${cwd} failed:\n${tail}`,
         }),
       )
@@ -179,7 +179,7 @@ const dryRunEvidence = (
   root: RepoRoot,
   baseDir: string,
   task: TaskName,
-  turbo: string,
+  turbo: FetchedTurbo,
   version: string,
   changedFiles: ReadonlyArray<RelativePath>,
 ): Effect.Effect<ChangeEvidence, EvidenceRefusal, Requirements> =>

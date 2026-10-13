@@ -49,10 +49,15 @@ const messageOf = (cause: unknown): string => {
 const tarballUrl = (name: string, version: string, recorded: string | undefined) =>
   S.decodeUnknownResult(HttpUrl)(recorded ?? `${REGISTRY}/${name}/-/${name.split('/')[1]}-${version}.tgz`)
 
+export interface FetchedTurbo {
+  readonly program: string
+  readonly key: string
+}
+
 export const fetchTurbo = (
   pin: TurboPin,
 ): Effect.Effect<
-  string,
+  FetchedTurbo,
   TurboPinUnusable | ProcessFault,
   RegistryPort | FileSystem.FileSystem | ChildProcessSpawner | Scope.Scope
 > =>
@@ -114,5 +119,5 @@ export const fetchTurbo = (
         ),
       )
     }
-    return program
+    return { program, key }
   })
