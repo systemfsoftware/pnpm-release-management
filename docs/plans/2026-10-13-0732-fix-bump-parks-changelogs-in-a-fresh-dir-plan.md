@@ -12,7 +12,7 @@ execution: code
 
 ## Goal Capsule
 
-- **Objective:** Every push to `main` gets a green Release (dogfood) run again, and any repository using `registry` changelog storage can run `version-management bump` on a fresh checkout.
+- **Objective:** Every push to `main` gets a green Release (dogfood) run again, and `version-management bump` can park member changelogs on a fresh checkout of any repository.
 - **Means:** `bump` creates the directory it parks member changelogs in, and the fixtures stop creating that directory for it.
 - **Product authority:** the repository's root. The fix is forward-only, in one pull request off `main`; root merges it and confirms the lane on `main`.
 - **Open blockers:** none.
@@ -48,7 +48,7 @@ Reproduced on a clone of `main` with the release tools built from `main` (`nix b
 **Proof**
 
 - R3. The public `version-management bump` CLI, driven on a real git repository that has a pending intent moving a member and no `changelogDir`, exits 0 and parks the member's changelog. It fails on `2b89555` and passes with the fix.
-- R4. No test fixture pre-creates `changelogDir`, because doing so hides R1.
+- R4. The fixtures that pin bump's parked write, `e2e/fixture.ts` and `packages/version-engine/tests/changesets.integration.test.ts`, do not pre-create `changelogDir`, because doing so hides R1. The `.gitkeep` seeds in the release-step and storage-switch fixtures stay: they model a tree bump has already written.
 
 **Lane**
 
@@ -128,11 +128,12 @@ Reproduced on a clone of `main` with the release tools built from `main` (`nix b
 | Refusal kept | the same CLI with `.changeset/changelogs` created as a file                                                            | AE2, R2                                             |
 | Static gates | `pnpm check:ci` minus the container e2e (`pnpm typecheck`, `pnpm lint`, `pnpm format:check`, package tests)            | no regression                                       |
 | CI           | the pull request's E2E job red on U1's commit, green on U2's                                                           | R3 through the CLI in the container                 |
+| Lane         | root observes the first Release (dogfood) run on `main` after merge, green or the named failing step                   | the Objective                                       |
 
 Mutation testing is not run locally; mutation evidence comes from main-branch CI. No workflow file changes, so no `actionlint` row.
 
 ## Definition of Done
 
 - U1 and U2 landed as separate commits, the E2E job observed red on U1 and green on U2.
-- Every Verification Contract row executed and recorded in the pull request.
+- Every Verification Contract row executed and recorded in the pull request, except the Lane row, which root records after merge.
 - No workflow file, timeout or skip changed.
