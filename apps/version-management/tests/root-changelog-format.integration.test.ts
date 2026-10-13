@@ -55,7 +55,7 @@ const repositoryStartingWith = (start: keyof typeof STARTING_CHANGELOGS) =>
   Effect.gen(function*() {
     const fs = yield* FileSystem
     const path = yield* Path
-    const root = yield* fs.makeTempDirectory({ prefix: 'version-management-root-changelog-' })
+    const root = yield* fs.makeTempDirectoryScoped({ prefix: 'version-management-root-changelog-' })
     yield* Effect.forEach([...FILES, ...STARTING_CHANGELOGS[start]], ([file, text]) =>
       Effect.gen(function*() {
         const full = path.join(root, file)
@@ -104,12 +104,6 @@ const rootChangelogOf = (root: RepoRoot) =>
     return yield* fs.readFileString(path.join(root, ROOT_CHANGELOG))
   })
 
-const removeRepository = (root: RepoRoot) =>
-  Effect.gen(function*() {
-    const fs = yield* FileSystem
-    yield* fs.remove(root, { recursive: true, force: true })
-  })
-
 Feature('Release notes in the root changelog pass the repository format check').body(({ scenarioOutline }) => {
   scenarioOutline(
     'Versioning a repository that starts with <start> leaves a root changelog the format check accepts',
@@ -136,7 +130,6 @@ Feature('Release notes in the root changelog pass the repository format check').
             const verdict = yield* repositoryFormatCheck(s.root)
             expect(verdict.output).toBe('')
             expect(verdict.code).toBe(0)
-            yield* removeRepository(s.root)
           })
         ),
       ),
