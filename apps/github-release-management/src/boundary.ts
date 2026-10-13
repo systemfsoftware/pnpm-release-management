@@ -13,7 +13,7 @@ import {
   type ReleaseConfig,
   ReleaseConfigStore,
   type RepoRoot,
-  type TaskName,
+  taskOf,
 } from '@systemfsoftware/release-language'
 import { Effect, type FileSystem, Option, Path } from 'effect'
 import * as S from 'effect/Schema'
@@ -68,18 +68,13 @@ export interface UnreleasedTarballsFlags {
   readonly tarballs: string | undefined
 }
 
-const gateTaskOf = (gate: ReleaseConfig['gate']): TaskName | undefined => {
-  if (gate.strategy === 'turbo') return gate.task
-  return undefined
-}
-
 export const unreleasedTarballsRequestOf = (workspace: Workspace, flags: UnreleasedTarballsFlags) =>
   decodeFlags(
     S.decodeUnknownEffect(UnreleasedTarballsRequest)({
       root: workspace.root,
       ref: flags.base,
       strategy: workspace.config.gate.strategy,
-      task: gateTaskOf(workspace.config.gate),
+      task: taskOf(workspace.config.gate),
       remote: flags.remote,
       tarballs: flags.tarballs,
     }),

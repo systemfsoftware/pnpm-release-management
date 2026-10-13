@@ -1,9 +1,10 @@
 import { Cell, Wire } from '@systemfsoftware/effect-cell-types'
 import {
-  ChangeEvidencePort,
+  type ChangeEvidencePort,
   type ChangeEvidenceRefusal,
   ChangesetsPort,
   type ChangesetsRefusal,
+  evidenceOf,
   FsPath,
   GitPort,
   GitRef,
@@ -64,12 +65,7 @@ const read = (
 > =>
   Effect.gen(function*() {
     const remote = request.remote ?? RemoteName.make('origin')
-    const evidence = yield* Effect.flatMap(ChangeEvidencePort, (port) => {
-      if (request.strategy === 'turbo') {
-        return port.turboEvidence(request.root, request.ref, request.task ?? TaskName.make('build'))
-      }
-      return port.pathsEvidence(request.root, request.ref)
-    })
+    const evidence = yield* evidenceOf(request.root, request.ref, request.strategy, request.task)
     const workspace = yield* WorkspaceStore
     const git = yield* GitPort
     const members = yield* workspace.listMembers()

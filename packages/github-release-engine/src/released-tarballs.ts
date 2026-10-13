@@ -5,8 +5,6 @@ import {
   type LedgerIdentityRefusal,
   LedgerTagMissing,
   LedgerTagMoved,
-  type PackageName,
-  type PackageVersion,
   type ReleaseLedgerEntry,
   type RemoteName,
   TagAnnotationLightweight,
@@ -21,13 +19,8 @@ import { Effect, Option } from 'effect'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import { tagOf } from './cycle.js'
-import { burnedOf, publishedRecorded, stateForVersion, tagEntryOf } from './integrity.js'
+import { burnedOf, type IntegrityCandidate, publishedRecorded, stateForVersion, tagEntryOf } from './integrity.js'
 import { type IntegrityCheck } from './integrity.schema.js'
-
-export interface ReleasedVersion {
-  readonly name: PackageName
-  readonly version: PackageVersion
-}
 
 export type ReleasedTarballRefusal = IntegrityRefusal | LedgerIdentityRefusal | VersionBurned | TagRefusal
 
@@ -49,7 +42,7 @@ const parseAnnotation = (text: string): Result.Result<TarballIntegrity, string> 
 }
 
 export const releasedTarballChecks = (
-  members: ReadonlyArray<ReleasedVersion>,
+  members: ReadonlyArray<IntegrityCandidate>,
   digests: ReadonlyArray<TarballDigest>,
   ledgerEntries: ReadonlyArray<ReleaseLedgerEntry>,
   remote: RemoteName,

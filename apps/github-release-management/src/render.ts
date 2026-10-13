@@ -11,11 +11,9 @@ import {
 import { evidenceRefusalLines } from '@systemfsoftware/process-adapter'
 import {
   type AdoptionFailure,
-  type ChangeEvidenceRefusal,
+  ChangeEvidenceRefusal,
   type ConfigRefusal,
-  EvidenceRefusal,
   FsPath,
-  GateRefusal,
   type GithubReleaseRefusal,
   type GitRef,
   type IntegrityRefusal,
@@ -369,8 +367,6 @@ export const renderPlan = (
 
 export type UnreleasedTarballsFailure = PlanFailure | TarballRefusal | ChangeEvidenceRefusal
 
-const isEvidenceRefusal = S.is(S.Union([GateRefusal, EvidenceRefusal]))
-
 const unreleasedMismatchLine = (mismatch: TagIntegrityMismatch): string =>
   `tag digests refused: ${mismatch.package}@v${mismatch.version} changed without a release — ` +
   `recorded ${mismatch.recorded}, built ${mismatch.current}, first differing file ${mismatch.file}; ` +
@@ -379,7 +375,7 @@ const unreleasedMismatchLine = (mismatch: TagIntegrityMismatch): string =>
 export const renderUnreleasedTarballsRefusal = (
   refusal: UnreleasedTarballsFailure,
 ): Effect.Effect<void, never, Reporter> => {
-  if (isEvidenceRefusal(refusal)) {
+  if (S.is(ChangeEvidenceRefusal)(refusal)) {
     return refuse(Match.value(refusal).pipe(Match.tagsExhaustive(evidenceRefusalLines)))
   }
   if (S.is(TagIntegrityMismatch)(refusal)) {
@@ -393,25 +389,26 @@ export const renderUnreleasedTarballs = (
   output: string | undefined,
 ): Effect.Effect<void, OutputUnwritable, Reporter | FileSystem.FileSystem> =>
   Effect.gen(function*() {
-    const packages = Match.value(decision).pipe(
+    const { packages, report } = Match.value(decision).pipe(
       Match.tagsExhaustive({
-        UnreleasedVacant: (): ReadonlyArray<string> => [],
-        UnreleasedListed: (listed): ReadonlyArray<string> => listed.packages,
-        UnreleasedMatched: (matched): ReadonlyArray<string> => matched.packages,
-      }),
-    )
-    yield* Match.value(decision).pipe(
-      Match.tagsExhaustive({
-        UnreleasedVacant: () => note('tag digests: no released package changes without a release'),
-        UnreleasedListed: (listed) =>
-          note(
+        UnreleasedVacant: () => ({
+          packages: [],
+          report: note('tag digests: no released package changes without a release'),
+        }),
+        UnreleasedListed: (listed) => ({
+          packages: listed.packages,
+          report: note(
             `tag digests: ${listed.packages.join(', ')} change(s) without a release; ` +
               'their flake-built tarballs are compared with their release tags',
           ),
-        UnreleasedMatched: (matched) =>
-          emit(`tag digests: ${matched.packages.length} package(s) match their release tags`),
+        }),
+        UnreleasedMatched: (matched) => ({
+          packages: matched.packages,
+          report: emit(`tag digests: ${matched.packages.length} package(s) match their release tags`),
+        }),
       }),
     )
+    yield* report
     const line = `packages=${packages.join(' ')}`
     if (output === undefined) {
       yield* emit(line)

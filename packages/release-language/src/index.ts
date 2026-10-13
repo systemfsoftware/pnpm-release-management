@@ -1,5 +1,4 @@
-export { ChangeEvidencePort } from './ChangeEvidencePort.js'
-export type { ChangeEvidenceRefusal } from './ChangeEvidencePort.js'
+export { ChangeEvidencePort, evidenceOf, taskOf } from './ChangeEvidencePort.js'
 export { ChangelogStore } from './ChangelogStore.js'
 export { ChangesetsPort } from './ChangesetsPort.js'
 export type { ChangesetsRefusal } from './ChangesetsPort.js'
@@ -36,6 +35,7 @@ export { DecisionTypeId } from './decision.js'
 export { ForgePort } from './ForgePort.js'
 export {
   ChangeEvidence,
+  ChangeEvidenceRefusal,
   EvidenceCommandFailed,
   EvidenceFileUnreadable,
   EvidenceRefusal,
