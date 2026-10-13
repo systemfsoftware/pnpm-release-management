@@ -5,6 +5,7 @@ import {
   PlanRequest,
   PullRequestRequest,
   TagRequest,
+  UnreleasedTarballsRequest,
 } from '@systemfsoftware/github-release-engine'
 import {
   type ConfigRefusal,
@@ -12,6 +13,7 @@ import {
   type ReleaseConfig,
   ReleaseConfigStore,
   type RepoRoot,
+  taskOf,
 } from '@systemfsoftware/release-language'
 import { Effect, type FileSystem, Option, Path } from 'effect'
 import * as S from 'effect/Schema'
@@ -57,6 +59,24 @@ export const planRequestOf = (workspace: Workspace, flags: PlanFlags) =>
       tarballs: flags.tarballs,
       changelogDir: workspace.config.changelogDir,
       legacyTags: workspace.config.legacyTags,
+    }),
+  )
+
+export interface UnreleasedTarballsFlags {
+  readonly base: string
+  readonly remote: string | undefined
+  readonly tarballs: string | undefined
+}
+
+export const unreleasedTarballsRequestOf = (workspace: Workspace, flags: UnreleasedTarballsFlags) =>
+  decodeFlags(
+    S.decodeUnknownEffect(UnreleasedTarballsRequest)({
+      root: workspace.root,
+      ref: flags.base,
+      strategy: workspace.config.gate.strategy,
+      task: taskOf(workspace.config.gate),
+      remote: flags.remote,
+      tarballs: flags.tarballs,
     }),
   )
 
