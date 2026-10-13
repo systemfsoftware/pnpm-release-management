@@ -11,38 +11,20 @@ import {
 import { Cause, Effect, Exit, Layer, Option } from 'effect'
 import { FileSystem } from 'effect/FileSystem'
 import { Path } from 'effect/Path'
-import { ChildProcess } from 'effect/unstable/process'
 import { expect } from 'vitest'
 import { fakeGitChanging } from './__fixtures__/FakeGitPort.js'
-import { registryServing } from './__fixtures__/served-turbo.js'
+import { git } from './__fixtures__/real-git.js'
+import { registryServing, serveTurbo } from './__fixtures__/served-turbo.js'
 
 const Feature = makeFeature({ it, layer })
 
+const TURBO = '2.10.1'
 const CHANGED = RelativePath.make('packages/pub/index.js')
 
-const unreachableFetch: typeof globalThis.fetch = () => {
-  expect.unreachable('paths evidence must not reach the registry')
-}
-
-const registry = registryServing(unreachableFetch)
-
 const live = Layer.merge(
-  ChangeEvidenceLive.pipe(Layer.provide(fakeGitChanging([CHANGED])), Layer.provide(registry)),
+  ChangeEvidenceLive.pipe(Layer.provide(fakeGitChanging([CHANGED])), Layer.provide(registryServing)),
   NodeServices.layer,
 )
-
-const git = (cwd: string, ...args: ReadonlyArray<string>) =>
-  Effect.scoped(
-    Effect.gen(function*() {
-      const handle = yield* ChildProcess.make(
-        'git',
-        ['-c', 'commit.gpgsign=false', '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args],
-        { cwd },
-      )
-      const code = yield* handle.exitCode
-      if (code !== 0) return yield* Effect.die(new Error(`git ${args.join(' ')} exited ${code}`))
-    }),
-  )
 
 const CONFIG_FILES = {
   'no turbo config': [],
@@ -77,6 +59,12 @@ const repositoryChangingPub = (base: RootConfig, head: RootConfig) =>
     return root
   })
 
+const repositoryServingChanges = (base: RootConfig, head: RootConfig) =>
+  Effect.gen(function*() {
+    const served = yield* serveTurbo({ pin: TURBO })
+    return { served, root: yield* repositoryChangingPub(base, head) }
+  })
+
 const collectPathsEvidence = (root: string) =>
   Effect.flatMap(ChangeEvidencePort, (port) => port.pathsEvidence(RepoRoot.make(root), GitRef.make('base')))
 
@@ -100,19 +88,20 @@ Feature('Classifying changes by directory only where turbo cannot').body(({ scen
     (row) =>
       Gherkin.Do.pipe(
         Given(`a repository whose root went from ${row.base} to ${row.head} while a publishable package changed`)(
-          'root',
-          () => repositoryChangingPub(row.base, row.head),
+          'fixture',
+          () => repositoryServingChanges(row.base, row.head),
         ),
         When('its changes are classified by directory')(
           'exit',
-          (s) => Effect.exit(collectPathsEvidence(s.root)),
+          (s) => Effect.exit(collectPathsEvidence(s.fixture.root)),
         ),
         Then(`the classification is refused, naming the head's ${row.head} and the turbo fix`)((s) =>
           Effect.gen(function*() {
             const refusal = refusalOf(s.exit)
             expect(refusal).toBeInstanceOf(PathsGateUnderTurbo)
             expect(refusal).toMatchObject({ turboConfig: row.head })
-            yield* removeRepository(s.root)
+            expect(s.fixture.served.requests).toEqual([])
+            yield* removeRepository(s.fixture.root)
           })
         ),
       ),
@@ -124,23 +113,24 @@ Feature('Classifying changes by directory only where turbo cannot').body(({ scen
     { scenarioLayer: live },
     Gherkin.Do.pipe(
       Given('a repository whose root kept turbo.json in both commits but whose working copy has since lost it')(
-        'root',
+        'fixture',
         () =>
           Effect.gen(function*() {
-            const root = yield* repositoryChangingPub('turbo.json', 'turbo.json')
+            const { root, served } = yield* repositoryServingChanges('turbo.json', 'turbo.json')
             const fs = yield* FileSystem
             const path = yield* Path
             yield* fs.remove(path.join(root, 'turbo.json'))
-            return root
+            return { root, served }
           }),
       ),
-      When('its changes are classified by directory')('exit', (s) => Effect.exit(collectPathsEvidence(s.root))),
+      When('its changes are classified by directory')('exit', (s) => Effect.exit(collectPathsEvidence(s.fixture.root))),
       Then('the classification is still refused, naming turbo.json')((s) =>
         Effect.gen(function*() {
           const refusal = refusalOf(s.exit)
           expect(refusal).toBeInstanceOf(PathsGateUnderTurbo)
           expect(refusal).toMatchObject({ turboConfig: 'turbo.json' })
-          yield* removeRepository(s.root)
+          expect(s.fixture.served.requests).toEqual([])
+          yield* removeRepository(s.fixture.root)
         })
       ),
     ),
@@ -156,14 +146,15 @@ Feature('Classifying changes by directory only where turbo cannot').body(({ scen
     (row) =>
       Gherkin.Do.pipe(
         Given(`a repository whose root went from ${row.base} to ${row.head} while a publishable package changed`)(
-          'root',
-          () => repositoryChangingPub(row.base, row.head),
+          'fixture',
+          () => repositoryServingChanges(row.base, row.head),
         ),
-        When('its changes are classified by directory')('evidence', (s) => collectPathsEvidence(s.root)),
+        When('its changes are classified by directory')('evidence', (s) => collectPathsEvidence(s.fixture.root)),
         Then('the changed publishable package is named as touched')((s) =>
           Effect.gen(function*() {
             expect(s.evidence.touched).toEqual(['@t/pub'])
-            yield* removeRepository(s.root)
+            expect(s.fixture.served.requests).toEqual([])
+            yield* removeRepository(s.fixture.root)
           })
         ),
       ),

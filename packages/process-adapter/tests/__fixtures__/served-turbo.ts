@@ -1,27 +1,31 @@
 import { RegistryLive } from '@systemfsoftware/adoption-adapter'
 import { ChangeEvidenceLive } from '@systemfsoftware/process-adapter'
-import type { GitPort } from '@systemfsoftware/release-language'
-import { Layer } from 'effect'
+import type { GitPort, RegistryPort } from '@systemfsoftware/release-language'
+import { Effect, Layer, type Scope } from 'effect'
 import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 import { createHash } from 'node:crypto'
+import { createServer } from 'node:http'
 import { buildTarball } from './build-tarball.js'
 
-export const registryServing = (fetch: typeof globalThis.fetch) =>
-  RegistryLive.pipe(
-    Layer.provide(FetchHttpClient.layer),
-    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetch)),
-  )
+export const registryServing: Layer.Layer<RegistryPort> = RegistryLive.pipe(
+  Layer.provide(FetchHttpClient.layer),
+)
 
-export const evidenceServing = (served: ServedTurbo, git: Layer.Layer<GitPort>) =>
-  ChangeEvidenceLive.pipe(Layer.provide(git), Layer.provide(registryServing(served.fetch)))
+export const evidenceServing = (git: Layer.Layer<GitPort>) =>
+  ChangeEvidenceLive.pipe(Layer.provide(git), Layer.provide(registryServing))
 
 export interface ServedTurbo {
   readonly key: string
   readonly url: string
+  readonly tarballUrl: (pin: string) => string
   readonly integrity: string
   readonly requests: ReadonlyArray<string>
-  readonly fetch: typeof globalThis.fetch
-  readonly packagesYaml: (recordedIntegrity?: string) => string
+  readonly packagesYaml: (recording?: ServedTurboRecording) => string
+}
+
+export interface ServedTurboRecording {
+  readonly integrity?: string
+  readonly tarball?: string
 }
 
 export interface ServedTurboOptions {
@@ -64,50 +68,93 @@ process.stdout.write(JSON.stringify({ packages, tasks, turboVersion: '${version}
 
 const turboScript = (version: string, dryRun: string): string =>
   `#!/usr/bin/env node
+if (process.env.TURBO_TELEMETRY_DISABLED !== '1') {
+  process.stderr.write('telemetry not disabled\\n')
+  process.exit(3)
+}
 if (process.argv[2] === '--version') {
   process.stdout.write('${version}\\n')
   process.exit(0)
 }
 ${dryRun}`
 
-const urlOf = (input: string | URL | Request): URL => {
-  if (input instanceof Request) {
-    return new URL(input.url)
-  }
-  return new URL(input.toString())
+interface Listener {
+  readonly origin: string
+  readonly close: () => Promise<void>
 }
 
-export const serveTurbo = (options: ServedTurboOptions): ServedTurbo => {
+const startListener = (servedPath: string, bytes: Uint8Array, requests: Array<string>): Promise<Listener> => {
+  const { promise, resolve, reject } = Promise.withResolvers<Listener>()
+  const server = createServer((request, response) => {
+    const requested = decodeURIComponent(new URL(request.url ?? '/', 'http://127.0.0.1').pathname)
+    requests.push(requested)
+    if (requested !== servedPath) {
+      response.writeHead(404).end()
+      return
+    }
+    response.writeHead(200, {
+      'content-type': 'application/octet-stream',
+      'content-length': String(bytes.byteLength),
+    })
+    response.end(bytes)
+  })
+  server.once('error', reject)
+  server.listen(0, '127.0.0.1', () => {
+    const address = server.address()
+    if (address === null || typeof address === 'string') {
+      reject(new Error('served-turbo: the loopback listener reported no port'))
+      return
+    }
+    resolve({
+      origin: `http://127.0.0.1:${address.port}`,
+      close: () => {
+        const closed = Promise.withResolvers<void>()
+        server.closeAllConnections()
+        server.close(() => closed.resolve())
+        return closed.promise
+      },
+    })
+  })
+  return promise
+}
+
+const listenerOrigin = (
+  servedPath: string,
+  bytes: Uint8Array,
+  requests: Array<string>,
+): Effect.Effect<string, never, Scope.Scope> =>
+  Effect.acquireRelease(
+    Effect.promise(() => startListener(servedPath, bytes, requests)),
+    (listener) => Effect.promise(() => listener.close()),
+  ).pipe(Effect.map((listener) => listener.origin))
+
+export const serveTurbo = (options: ServedTurboOptions): Effect.Effect<ServedTurbo, never, Scope.Scope> => {
   const { os, cpu } = platformOf(process.platform, process.arch)
   const name = `@turbo/${os}-${cpu}`
   const version = options.reportedVersion ?? options.pin
-  const bytes: Uint8Array = buildTarball({
+  const bytes = buildTarball({
     [`turbo-${os}-${process.arch}/bin/turbo`]: turboScript(
       version,
       options.dryRunBody ?? dryRunOverPresentManifests(version),
     ),
   })
   const integrity = digestOf(bytes)
-  const url = `https://registry.npmjs.org/${name}/-/${name.slice(name.indexOf('/') + 1)}-${options.pin}.tgz`
-  const servedPath = decodeURIComponent(new URL(url).pathname)
+  const pathOf = (pin: string): string => `/turbo/${os}-${cpu}-${pin}.tgz`
   const requests: Array<string> = []
-  const fetch: typeof globalThis.fetch = (input) => {
-    const requested = decodeURIComponent(urlOf(input).pathname)
-    requests.push(requested)
-    if (requested !== servedPath) {
-      return Promise.resolve(new Response(null, { status: 404 }))
+  return Effect.map(listenerOrigin(pathOf(options.pin), bytes, requests), (origin) => {
+    const tarballUrl = (pin: string): string => `${origin}${pathOf(pin)}`
+    const url = tarballUrl(options.pin)
+    return {
+      key: `${name}@${options.pin}`,
+      url,
+      tarballUrl,
+      integrity,
+      requests,
+      packagesYaml: (recording = {}) =>
+        [
+          `  '${name}@${options.pin}':`,
+          `    resolution: {integrity: ${recording.integrity ?? integrity}, tarball: ${recording.tarball ?? url}}`,
+        ].join('\n'),
     }
-    return Promise.resolve(
-      new Response(bytes.slice(), { headers: { 'content-type': 'application/octet-stream' } }),
-    )
-  }
-  return {
-    key: `${name}@${options.pin}`,
-    url,
-    integrity,
-    requests,
-    fetch,
-    packagesYaml: (recordedIntegrity = integrity) =>
-      [`  '${name}@${options.pin}':`, `    resolution: {integrity: ${recordedIntegrity}}`].join('\n'),
-  }
+  })
 }

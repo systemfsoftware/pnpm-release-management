@@ -12,9 +12,9 @@ import {
 import { Cause, Effect, Exit, Option } from 'effect'
 import { FileSystem } from 'effect/FileSystem'
 import { Path } from 'effect/Path'
-import { ChildProcess } from 'effect/unstable/process'
 import { expect } from 'vitest'
 import { fakeGitChanging, FakeGitOnMain } from './__fixtures__/FakeGitPort.js'
+import { git } from './__fixtures__/real-git.js'
 import { evidenceServing, serveTurbo } from './__fixtures__/served-turbo.js'
 
 const Feature = makeFeature({ it, layer })
@@ -64,19 +64,6 @@ const LOCKFILES = {
 
 type Shape = keyof typeof LOCKFILES
 
-const git = (cwd: string, ...args: ReadonlyArray<string>) =>
-  Effect.scoped(
-    Effect.gen(function*() {
-      const handle = yield* ChildProcess.make(
-        'git',
-        ['-c', 'commit.gpgsign=false', '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args],
-        { cwd },
-      )
-      const code = yield* handle.exitCode
-      if (code !== 0) return yield* Effect.die(new Error(`git ${args.join(' ')} exited ${code}`))
-    }),
-  )
-
 const writeAt = (root: string, file: string, text: string) =>
   Effect.gen(function*() {
     const fs = yield* FileSystem
@@ -105,23 +92,29 @@ const repositoryWith = (lockfileText: string) =>
   })
 
 const repositoryServingThePin = Effect.gen(function*() {
-  const served = serveTurbo({ pin: TURBO })
+  const served = yield* serveTurbo({ pin: TURBO })
   return { served, root: yield* repositoryWith(lockfile(served.packagesYaml())) }
 })
 
 const repositoryServingAnotherVersion = Effect.gen(function*() {
-  const served = serveTurbo({ pin: TURBO, reportedVersion: OTHER_TURBO })
+  const served = yield* serveTurbo({ pin: TURBO, reportedVersion: OTHER_TURBO })
   return { served, root: yield* repositoryWith(lockfile(served.packagesYaml())) }
 })
 
 const repositoryRecordingForeignBytes = Effect.gen(function*() {
-  const served = serveTurbo({ pin: TURBO })
-  const foreign = serveTurbo({ pin: TURBO, reportedVersion: OTHER_TURBO })
-  return { served, root: yield* repositoryWith(lockfile(served.packagesYaml(foreign.integrity))) }
+  const served = yield* serveTurbo({ pin: TURBO })
+  const foreign = yield* serveTurbo({ pin: TURBO, reportedVersion: OTHER_TURBO })
+  return { served, root: yield* repositoryWith(lockfile(served.packagesYaml({ integrity: foreign.integrity }))) }
+})
+
+const repositoryRecordingAnUnservedTarball = Effect.gen(function*() {
+  const served = yield* serveTurbo({ pin: TURBO })
+  const recorded = served.tarballUrl(OTHER_TURBO)
+  return { recorded, served, root: yield* repositoryWith(lockfile(served.packagesYaml({ tarball: recorded }))) }
 })
 
 const repositoryRecordingNoPlatformPackage = Effect.gen(function*() {
-  const served = serveTurbo({ pin: TURBO })
+  const served = yield* serveTurbo({ pin: TURBO })
   return { served, root: yield* repositoryWith(lockfile()) }
 })
 
@@ -158,7 +151,7 @@ Feature('Turbo change evidence runs the turbo the lockfile pins').body(({ scenar
         'dirs',
         () =>
           Effect.gen(function*() {
-            const served = serveTurbo({ pin: TURBO })
+            const served = yield* serveTurbo({ pin: TURBO })
             const fs = yield* FileSystem
             const path = yield* Path
             const base = yield* fs.makeTempDirectory({ prefix: 'turbo-pin-' })
@@ -174,7 +167,7 @@ Feature('Turbo change evidence runs the turbo the lockfile pins').body(({ scenar
         'refusals',
         (s) =>
           Effect.gen(function*() {
-            const provided = evidenceServing(s.dirs.served, FakeGitOnMain)
+            const provided = evidenceServing(FakeGitOnMain)
             const collect = (shape: Shape) =>
               Effect.exit(turboEvidenceAt(s.dirs.dir(shape), 'main')).pipe(
                 Effect.map(refusalOf),
@@ -215,7 +208,7 @@ Feature('Turbo change evidence runs the turbo the lockfile pins').body(({ scenar
         'evidence',
         (s) =>
           turboEvidenceAt(s.fixture.root, 'base').pipe(
-            Effect.provide(evidenceServing(s.fixture.served, fakeGitChanging(CHANGED))),
+            Effect.provide(evidenceServing(fakeGitChanging(CHANGED))),
           ),
       ),
       Then('the fetched binary judges both sides, the pin is the engine version, and the registry was asked once')(
@@ -245,7 +238,7 @@ Feature('Turbo change evidence runs the turbo the lockfile pins').body(({ scenar
         'exit',
         (s) =>
           Effect.exit(turboEvidenceAt(s.fixture.root, 'base')).pipe(
-            Effect.provide(evidenceServing(s.fixture.served, fakeGitChanging(CHANGED))),
+            Effect.provide(evidenceServing(fakeGitChanging(CHANGED))),
           ),
       ),
       Then('the refusal names the reported version and the pinned one')((s) =>
@@ -273,7 +266,7 @@ Feature('Turbo change evidence runs the turbo the lockfile pins').body(({ scenar
         'exit',
         (s) =>
           Effect.exit(turboEvidenceAt(s.fixture.root, 'base')).pipe(
-            Effect.provide(evidenceServing(s.fixture.served, fakeGitChanging(CHANGED))),
+            Effect.provide(evidenceServing(fakeGitChanging(CHANGED))),
           ),
       ),
       Then('the refusal names the fetched integrity against the recorded one')((s) =>
@@ -301,7 +294,7 @@ Feature('Turbo change evidence runs the turbo the lockfile pins').body(({ scenar
         'exit',
         (s) =>
           Effect.exit(turboEvidenceAt(s.fixture.root, 'base')).pipe(
-            Effect.provide(evidenceServing(s.fixture.served, fakeGitChanging(CHANGED))),
+            Effect.provide(evidenceServing(fakeGitChanging(CHANGED))),
           ),
       ),
       Then('the refusal names the package and the platform, and the registry is never asked')((s) =>
@@ -314,6 +307,38 @@ Feature('Turbo change evidence runs the turbo the lockfile pins').body(({ scenar
           expect(s.fixture.served.requests).toEqual([])
           yield* removeRepository(s.fixture.root)
         })
+      ),
+    ),
+  )
+
+  scenario(
+    'A lockfile that records a tarball the registry does not serve is refused after one request',
+    { scenarioLayer: NodeServices.layer },
+    Gherkin.Do.pipe(
+      Given('a repository whose lockfile records a tarball the registry does not serve')(
+        'fixture',
+        () => repositoryRecordingAnUnservedTarball,
+      ),
+      When('turbo evidence is collected against base')(
+        'exit',
+        (s) =>
+          Effect.exit(turboEvidenceAt(s.fixture.root, 'base')).pipe(
+            Effect.provide(evidenceServing(fakeGitChanging(CHANGED))),
+          ),
+      ),
+      Then('the refusal names the pin and the URL it came from, and the registry was asked once')(
+        (s) =>
+          Effect.gen(function*() {
+            const refusal = refusalOf(s.exit)
+            expect(refusal).toBeInstanceOf(TurboPinUnusable)
+            const detail = detailOf(refusal)
+            expect(
+              detail.startsWith(`change-evidence: cannot fetch ${s.fixture.served.key} from http://127.0.0.1:`),
+            ).toBe(true)
+            expect(detail.endsWith(`: registry has no tarball at ${s.fixture.recorded}`)).toBe(true)
+            expect(s.fixture.served.requests).toEqual([new URL(s.fixture.recorded).pathname])
+            yield* removeRepository(s.fixture.root)
+          }),
       ),
     ),
   )

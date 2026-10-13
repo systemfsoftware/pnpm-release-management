@@ -11,9 +11,9 @@ import {
 import { Effect } from 'effect'
 import { FileSystem } from 'effect/FileSystem'
 import { Path } from 'effect/Path'
-import { ChildProcess } from 'effect/unstable/process'
 import { expect } from 'vitest'
 import { fakeGitChanging } from './__fixtures__/FakeGitPort.js'
+import { git } from './__fixtures__/real-git.js'
 import { evidenceServing, serveTurbo } from './__fixtures__/served-turbo.js'
 
 const Feature = makeFeature({ it, layer })
@@ -40,19 +40,6 @@ const lockfile = (packages: string): string =>
 
 const CHANGED = [RelativePath.make('packages/gone/index.js'), RelativePath.make('packages/gone/package.json')]
 
-const git = (cwd: string, ...args: ReadonlyArray<string>) =>
-  Effect.scoped(
-    Effect.gen(function*() {
-      const handle = yield* ChildProcess.make(
-        'git',
-        ['-c', 'commit.gpgsign=false', '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args],
-        { cwd },
-      )
-      const code = yield* handle.exitCode
-      if (code !== 0) return yield* Effect.die(new Error(`git ${args.join(' ')} exited ${code}`))
-    }),
-  )
-
 const GONE = [
   { kind: 'private', manifest: { name: '@t/gone', version: '1.0.0', private: true } },
   { kind: 'publishable', manifest: { name: '@t/gone', version: '1.0.0' } },
@@ -60,7 +47,7 @@ const GONE = [
 
 const repositoryDeleting = (gone: (typeof GONE)[number]['manifest']) =>
   Effect.gen(function*() {
-    const served = serveTurbo({ pin: TURBO })
+    const served = yield* serveTurbo({ pin: TURBO })
     const fs = yield* FileSystem
     const path = yield* Path
     const root = yield* fs.makeTempDirectory({ prefix: 'deleted-packages-' })
@@ -121,7 +108,7 @@ Feature('Change evidence counts a package deleted on the head').body(({ scenario
           'evidence',
           (s) =>
             evidenceOf(s.fixture.root).pipe(
-              Effect.provide(evidenceServing(s.fixture.served, fakeGitChanging(CHANGED))),
+              Effect.provide(evidenceServing(fakeGitChanging(CHANGED))),
             ),
         ),
         Then('both read the deleted manifest from base, list it as deleted, and name no package to release')(
@@ -150,7 +137,7 @@ Feature('Change evidence counts a package deleted on the head').body(({ scenario
           Effect.gen(function*() {
             const port = yield* ChangeEvidencePort
             return yield* port.pathsEvidence(RepoRoot.make(s.fixture.root), GitRef.make('upstream'))
-          }).pipe(Effect.provide(evidenceServing(s.fixture.served, fakeGitChanging(CHANGED)))),
+          }).pipe(Effect.provide(evidenceServing(fakeGitChanging(CHANGED)))),
       ),
       Then('the manifest is read at the merge-base and the package is listed as deleted')((s) =>
         Effect.gen(function*() {
