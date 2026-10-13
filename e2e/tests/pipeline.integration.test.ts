@@ -160,7 +160,7 @@ const runPhases = async (session: Session): Promise<void> => {
   })
 
   await session.phase(
-    'changeset check job runs its own revision of the tools with no install and no dev shell',
+    'changeset check job runs its own revision of the tools with no install, no dev shell and no tarball build',
     async (world) => {
       const steps = await world.job('require-intent', {
         workflow: 'changeset-check.yml',
@@ -171,10 +171,12 @@ const runPhases = async (session: Session): Promise<void> => {
         'start',
         "Build the release tools at this workflow's own revision",
         'Require an intent for every publishable-package change',
+        'digests',
         "Record the job's wall time",
       ])
-      const checked = steps.at(-2)
+      const checked = steps.find((step) => step.step === 'Require an intent for every publishable-package change')
       expect(`${checked?.stdout}${checked?.stderr}`).toContain('@e2e/alpha')
+      expect(steps.find((step) => step.step === 'digests')?.outputs['packages']).toBe('')
     },
   )
 

@@ -6,11 +6,16 @@ import {
   type PlanReport,
   type PullRequestDecision,
   type TagDecision,
+  type UnreleasedTarballsDecision,
 } from '@systemfsoftware/github-release-engine'
+import { evidenceRefusalLines } from '@systemfsoftware/process-adapter'
 import {
   type AdoptionFailure,
+  type ChangeEvidenceRefusal,
   type ConfigRefusal,
+  EvidenceRefusal,
   FsPath,
+  GateRefusal,
   type GithubReleaseRefusal,
   type GitRef,
   type IntegrityRefusal,
@@ -25,6 +30,7 @@ import {
   type ReleaseLedgerEntry,
   type ReleaseTag,
   type TagAtOtherCommit,
+  TagIntegrityMismatch,
   type TagRefusal,
   type TarballRefusal,
   type VersionBurned,
@@ -34,6 +40,7 @@ import {
 } from '@systemfsoftware/release-language'
 import { Effect, FileSystem } from 'effect'
 import * as Match from 'effect/Match'
+import * as S from 'effect/Schema'
 import { type BoundaryRefusal, OutputUnreadable, OutputUnwritable } from './boundary.schema.js'
 
 type PlatformRefusal = ConfigRefusal | BoundaryRefusal | WorkspaceRootNotAbsolute
@@ -358,6 +365,59 @@ export const renderPlan = (
       return
     }
     yield* appendFile(output, block)
+  })
+
+export type UnreleasedTarballsFailure = PlanFailure | TarballRefusal | ChangeEvidenceRefusal
+
+const isEvidenceRefusal = S.is(S.Union([GateRefusal, EvidenceRefusal]))
+
+const unreleasedMismatchLine = (mismatch: TagIntegrityMismatch): string =>
+  `tag digests refused: ${mismatch.package}@v${mismatch.version} changed without a release — ` +
+  `recorded ${mismatch.recorded}, built ${mismatch.current}, first differing file ${mismatch.file}; ` +
+  `give ${mismatch.package} a real bump in its intent, or revert its change`
+
+export const renderUnreleasedTarballsRefusal = (
+  refusal: UnreleasedTarballsFailure,
+): Effect.Effect<void, never, Reporter> => {
+  if (isEvidenceRefusal(refusal)) {
+    return refuse(Match.value(refusal).pipe(Match.tagsExhaustive(evidenceRefusalLines)))
+  }
+  if (S.is(TagIntegrityMismatch)(refusal)) {
+    return refuse(unreleasedMismatchLine(refusal))
+  }
+  return renderPlanRefusal(refusal)
+}
+
+export const renderUnreleasedTarballs = (
+  decision: UnreleasedTarballsDecision,
+  output: string | undefined,
+): Effect.Effect<void, OutputUnwritable, Reporter | FileSystem.FileSystem> =>
+  Effect.gen(function*() {
+    const packages = Match.value(decision).pipe(
+      Match.tagsExhaustive({
+        UnreleasedVacant: (): ReadonlyArray<string> => [],
+        UnreleasedListed: (listed): ReadonlyArray<string> => listed.packages,
+        UnreleasedMatched: (matched): ReadonlyArray<string> => matched.packages,
+      }),
+    )
+    yield* Match.value(decision).pipe(
+      Match.tagsExhaustive({
+        UnreleasedVacant: () => note('tag digests: no released package changes without a release'),
+        UnreleasedListed: (listed) =>
+          note(
+            `tag digests: ${listed.packages.join(', ')} change(s) without a release; ` +
+              'their flake-built tarballs are compared with their release tags',
+          ),
+        UnreleasedMatched: (matched) =>
+          emit(`tag digests: ${matched.packages.length} package(s) match their release tags`),
+      }),
+    )
+    const line = `packages=${packages.join(' ')}`
+    if (output === undefined) {
+      yield* emit(line)
+      return
+    }
+    yield* appendFile(output, line)
   })
 
 export type AdoptFailure = PlatformRefusal | MemberRefusal | TagRefusal | LedgerRefusal | AdoptionRefused
