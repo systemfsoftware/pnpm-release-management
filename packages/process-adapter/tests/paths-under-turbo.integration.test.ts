@@ -1,5 +1,4 @@
 import { NodeServices } from '@effect/platform-node'
-import { RegistryLive } from '@systemfsoftware/adoption-adapter'
 import { Gherkin, Given, it, layer, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
 import { ChangeEvidenceLive } from '@systemfsoftware/process-adapter'
 import {
@@ -12,10 +11,10 @@ import {
 import { Cause, Effect, Exit, Layer, Option } from 'effect'
 import { FileSystem } from 'effect/FileSystem'
 import { Path } from 'effect/Path'
-import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 import { ChildProcess } from 'effect/unstable/process'
 import { expect } from 'vitest'
 import { fakeGitChanging } from './__fixtures__/FakeGitPort.js'
+import { registryServing } from './__fixtures__/served-turbo.js'
 
 const Feature = makeFeature({ it, layer })
 
@@ -25,10 +24,7 @@ const unreachableFetch: typeof globalThis.fetch = () => {
   expect.unreachable('paths evidence must not reach the registry')
 }
 
-const registry = RegistryLive.pipe(
-  Layer.provide(FetchHttpClient.layer),
-  Layer.provide(Layer.succeed(FetchHttpClient.Fetch, unreachableFetch)),
-)
+const registry = registryServing(unreachableFetch)
 
 const live = Layer.merge(
   ChangeEvidenceLive.pipe(Layer.provide(fakeGitChanging([CHANGED])), Layer.provide(registry)),

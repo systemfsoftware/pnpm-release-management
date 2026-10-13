@@ -1,40 +1,27 @@
 import { NodeServices } from '@effect/platform-node'
-import { RegistryLive } from '@systemfsoftware/adoption-adapter'
 import { Gherkin, Given, it, layer, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
-import { ChangeEvidenceLive } from '@systemfsoftware/process-adapter'
 import {
   ChangeEvidencePort,
   EvidenceCommandFailed,
-  GitPort,
   GitRef,
   RelativePath,
   RepoRoot,
   TaskName,
   TurboPinUnusable,
 } from '@systemfsoftware/release-language'
-import { Cause, Effect, Exit, Layer, Option } from 'effect'
+import { Cause, Effect, Exit, Option } from 'effect'
 import { FileSystem } from 'effect/FileSystem'
 import { Path } from 'effect/Path'
-import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 import { ChildProcess } from 'effect/unstable/process'
 import { expect } from 'vitest'
 import { fakeGitChanging, FakeGitOnMain } from './__fixtures__/FakeGitPort.js'
-import { type ServedTurbo, serveTurbo } from './__fixtures__/served-turbo.js'
+import { evidenceServing, serveTurbo } from './__fixtures__/served-turbo.js'
 
 const Feature = makeFeature({ it, layer })
 
 const TURBO = '2.10.1'
 const OTHER_TURBO = '2.10.0'
 const CHANGED = [RelativePath.make('packages/pub/index.js')]
-
-const registry = (served: ServedTurbo) =>
-  RegistryLive.pipe(
-    Layer.provide(FetchHttpClient.layer),
-    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, served.fetch)),
-  )
-
-const evidenceLayer = (served: ServedTurbo, git: Layer.Layer<GitPort>) =>
-  ChangeEvidenceLive.pipe(Layer.provide(git), Layer.provide(registry(served)))
 
 const lockfile = (packages?: string): string => {
   const head = [
@@ -187,7 +174,7 @@ Feature('Turbo change evidence runs the turbo the lockfile pins').body(({ scenar
         'refusals',
         (s) =>
           Effect.gen(function*() {
-            const provided = evidenceLayer(s.dirs.served, FakeGitOnMain)
+            const provided = evidenceServing(s.dirs.served, FakeGitOnMain)
             const collect = (shape: Shape) =>
               Effect.exit(turboEvidenceAt(s.dirs.dir(shape), 'main')).pipe(
                 Effect.map(refusalOf),
@@ -228,7 +215,7 @@ Feature('Turbo change evidence runs the turbo the lockfile pins').body(({ scenar
         'evidence',
         (s) =>
           turboEvidenceAt(s.fixture.root, 'base').pipe(
-            Effect.provide(evidenceLayer(s.fixture.served, fakeGitChanging(CHANGED))),
+            Effect.provide(evidenceServing(s.fixture.served, fakeGitChanging(CHANGED))),
           ),
       ),
       Then('the fetched binary judges both sides, the pin is the engine version, and the registry was asked once')(
@@ -258,7 +245,7 @@ Feature('Turbo change evidence runs the turbo the lockfile pins').body(({ scenar
         'exit',
         (s) =>
           Effect.exit(turboEvidenceAt(s.fixture.root, 'base')).pipe(
-            Effect.provide(evidenceLayer(s.fixture.served, fakeGitChanging(CHANGED))),
+            Effect.provide(evidenceServing(s.fixture.served, fakeGitChanging(CHANGED))),
           ),
       ),
       Then('the refusal names the reported version and the pinned one')((s) =>
@@ -286,7 +273,7 @@ Feature('Turbo change evidence runs the turbo the lockfile pins').body(({ scenar
         'exit',
         (s) =>
           Effect.exit(turboEvidenceAt(s.fixture.root, 'base')).pipe(
-            Effect.provide(evidenceLayer(s.fixture.served, fakeGitChanging(CHANGED))),
+            Effect.provide(evidenceServing(s.fixture.served, fakeGitChanging(CHANGED))),
           ),
       ),
       Then('the refusal names the fetched integrity against the recorded one')((s) =>
@@ -314,7 +301,7 @@ Feature('Turbo change evidence runs the turbo the lockfile pins').body(({ scenar
         'exit',
         (s) =>
           Effect.exit(turboEvidenceAt(s.fixture.root, 'base')).pipe(
-            Effect.provide(evidenceLayer(s.fixture.served, fakeGitChanging(CHANGED))),
+            Effect.provide(evidenceServing(s.fixture.served, fakeGitChanging(CHANGED))),
           ),
       ),
       Then('the refusal names the package and the platform, and the registry is never asked')((s) =>

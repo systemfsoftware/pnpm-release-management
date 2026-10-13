@@ -310,7 +310,7 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
     await must(RUNNER_SETUP)
     const githubEnv = `${STEP_DIR}/${name}.env`
     const summary = `${STEP_DIR}/${name}.summary`
-    await must(`: > ${quote(githubEnv)} && : > ${quote(summary)}`)
+    await must(`: > ${quote(githubEnv)}`)
     let jobEnv: Record<string, string> = {}
     const outputs: Record<string, Record<string, string>> = {}
     const operand = (expression: string): string | undefined => {

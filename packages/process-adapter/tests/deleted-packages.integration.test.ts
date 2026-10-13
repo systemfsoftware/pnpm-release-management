@@ -1,24 +1,20 @@
 import { NodeServices } from '@effect/platform-node'
-import { RegistryLive } from '@systemfsoftware/adoption-adapter'
 import { Gherkin, Given, it, layer, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
-import { ChangeEvidenceLive } from '@systemfsoftware/process-adapter'
 import {
   type ChangeEvidence,
   ChangeEvidencePort,
-  GitPort,
   GitRef,
   RelativePath,
   RepoRoot,
   TaskName,
 } from '@systemfsoftware/release-language'
-import { Effect, Layer } from 'effect'
+import { Effect } from 'effect'
 import { FileSystem } from 'effect/FileSystem'
 import { Path } from 'effect/Path'
-import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 import { ChildProcess } from 'effect/unstable/process'
 import { expect } from 'vitest'
 import { fakeGitChanging } from './__fixtures__/FakeGitPort.js'
-import { type ServedTurbo, serveTurbo } from './__fixtures__/served-turbo.js'
+import { evidenceServing, serveTurbo } from './__fixtures__/served-turbo.js'
 
 const Feature = makeFeature({ it, layer })
 
@@ -41,15 +37,6 @@ const lockfile = (packages: string): string =>
     packages,
     '',
   ].join('\n')
-
-const registry = (served: ServedTurbo) =>
-  RegistryLive.pipe(
-    Layer.provide(FetchHttpClient.layer),
-    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, served.fetch)),
-  )
-
-const evidenceLayer = (served: ServedTurbo, git: Layer.Layer<GitPort>) =>
-  ChangeEvidenceLive.pipe(Layer.provide(git), Layer.provide(registry(served)))
 
 const CHANGED = [RelativePath.make('packages/gone/index.js'), RelativePath.make('packages/gone/package.json')]
 
@@ -134,7 +121,7 @@ Feature('Change evidence counts a package deleted on the head').body(({ scenario
           'evidence',
           (s) =>
             evidenceOf(s.fixture.root).pipe(
-              Effect.provide(evidenceLayer(s.fixture.served, fakeGitChanging(CHANGED))),
+              Effect.provide(evidenceServing(s.fixture.served, fakeGitChanging(CHANGED))),
             ),
         ),
         Then('both read the deleted manifest from base, list it as deleted, and name no package to release')(
@@ -163,7 +150,7 @@ Feature('Change evidence counts a package deleted on the head').body(({ scenario
           Effect.gen(function*() {
             const port = yield* ChangeEvidencePort
             return yield* port.pathsEvidence(RepoRoot.make(s.fixture.root), GitRef.make('upstream'))
-          }).pipe(Effect.provide(evidenceLayer(s.fixture.served, fakeGitChanging(CHANGED)))),
+          }).pipe(Effect.provide(evidenceServing(s.fixture.served, fakeGitChanging(CHANGED)))),
       ),
       Then('the manifest is read at the merge-base and the package is listed as deleted')((s) =>
         Effect.gen(function*() {

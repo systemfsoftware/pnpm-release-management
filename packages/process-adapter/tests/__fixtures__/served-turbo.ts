@@ -1,5 +1,19 @@
+import { RegistryLive } from '@systemfsoftware/adoption-adapter'
+import { ChangeEvidenceLive } from '@systemfsoftware/process-adapter'
+import type { GitPort } from '@systemfsoftware/release-language'
+import { Layer } from 'effect'
+import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 import { createHash } from 'node:crypto'
 import { buildTarball } from './build-tarball.js'
+
+export const registryServing = (fetch: typeof globalThis.fetch) =>
+  RegistryLive.pipe(
+    Layer.provide(FetchHttpClient.layer),
+    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetch)),
+  )
+
+export const evidenceServing = (served: ServedTurbo, git: Layer.Layer<GitPort>) =>
+  ChangeEvidenceLive.pipe(Layer.provide(git), Layer.provide(registryServing(served.fetch)))
 
 export interface ServedTurbo {
   readonly key: string
