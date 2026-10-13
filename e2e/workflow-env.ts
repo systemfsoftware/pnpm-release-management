@@ -108,6 +108,7 @@ export const conditionHolds = (
 ): boolean => {
   if (condition === undefined) return true
   const expression = condition.trim().replace(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/, '$1')
+  if (expression === 'always()') return true
   if (/\|\||[()]/.test(expression)) {
     throw new Error(`the e2e evaluates only && of comparisons and negations in if:, got: ${condition}`)
   }

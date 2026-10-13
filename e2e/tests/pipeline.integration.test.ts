@@ -159,36 +159,24 @@ const runPhases = async (session: Session): Promise<void> => {
     )
   })
 
-  for (
-    const { phase, devshell, install } of [
-      {
-        phase:
-          'changeset check job runs its own revision of the tools inside a caller dev shell whose lock pins an older one',
-        devshell: 'true',
-        install: "Install the caller's workspace through its own bootstrap script",
-      },
-      {
-        phase: 'changeset check job without a dev shell runs its own revision of the tools too',
-        devshell: 'false',
-        install: "Install the caller's workspace",
-      },
-    ]
-  ) {
-    await session.phase(phase, async (world) => {
+  await session.phase(
+    'changeset check job runs its own revision of the tools with no install and no dev shell',
+    async (world) => {
       const steps = await world.job('require-intent', {
         workflow: 'changeset-check.yml',
-        inputs: { 'base-sha': base, devshell },
+        inputs: { 'base-sha': base, devshell: 'true' },
       })
       expect(steps.filter((step) => step.code !== 0)).toEqual([])
       expect(steps.map((step) => step.step)).toEqual([
+        'start',
         "Build the release tools at this workflow's own revision",
-        install,
         'Require an intent for every publishable-package change',
+        "Record the job's wall time",
       ])
-      const checked = steps.at(-1)
+      const checked = steps.at(-2)
       expect(`${checked?.stdout}${checked?.stderr}`).toContain('@e2e/alpha')
-    })
-  }
+    },
+  )
 
   await session.phase('plan asks for a version step', async (world) => {
     const tarballs = await packTarballs(world)

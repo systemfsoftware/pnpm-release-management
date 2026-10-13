@@ -309,7 +309,8 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
   ): Promise<ReadonlyArray<StepResult>> => {
     await must(RUNNER_SETUP)
     const githubEnv = `${STEP_DIR}/${name}.env`
-    await must(`: > ${quote(githubEnv)}`)
+    const summary = `${STEP_DIR}/${name}.summary`
+    await must(`: > ${quote(githubEnv)} && : > ${quote(summary)}`)
     let jobEnv: Record<string, string> = {}
     const outputs: Record<string, Record<string, string>> = {}
     const operand = (expression: string): string | undefined => {
@@ -339,7 +340,10 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
       )
       const result = await run(
         `PATH=${RUNNER_BIN}:$PATH bash --noprofile --norc -eo pipefail ${quote(script)}`,
-        { cwd: FIXTURE, env: { ...jobEnv, ...env, GITHUB_OUTPUT: output, GITHUB_ENV: githubEnv } },
+        {
+          cwd: FIXTURE,
+          env: { ...jobEnv, ...env, GITHUB_OUTPUT: output, GITHUB_ENV: githubEnv, GITHUB_STEP_SUMMARY: summary },
+        },
       )
       const stepOutputs = outputsOf((await must(`cat ${quote(output)}`)).stdout)
       results.push({ step: step.label, outputs: stepOutputs, ...result })
