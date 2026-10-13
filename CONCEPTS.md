@@ -36,6 +36,12 @@ A repository picks one strategy in its release config. `paths` cannot see a buil
 
 A comparison whose base and head revisions both hold a root Turbo config, so Turbo can produce change evidence for both sides. A pull request that adds or removes the config is not Turbo-driven, because Turbo cannot evaluate the side without one. The paths gate refuses a Turbo-driven comparison and names the `turbo` gate strategy as the fix.
 
+## Versioning
+
+### Parked changelog
+
+A member's changelog for one released version, written by the version bump under the changelog directory rather than beside the member, when the release config stores changelogs in the registry. Its name joins the member name, with `/` replaced by `!`, to the version. The release step later turns it into that version's GitHub Release notes. The changelog directory is the tool's own: a fresh checkout does not have it, and the bump creates it.
+
 ## Flagged ambiguities
 
 - "Root" always means the repository root: the root manifest is not a member manifest, and the root-importer row is not a member.
