@@ -63,7 +63,6 @@ export const packTarballs = async (world: World, dir: string = TARBALLS): Promis
 
 export const setupFixture = async (world: World): Promise<void> => {
   await world.must(`rm -rf ${FIXTURE} ${ORIGIN} && mkdir -p ${FIXTURE}/packages/alpha ${FIXTURE}/packages/beta`)
-  await world.must(`mkdir -p ${FIXTURE}/.changeset/changelogs`)
 
   const [, name] = GITHUB_REPOSITORY.split('/')
   const seed = btoa('# fixture\n')
