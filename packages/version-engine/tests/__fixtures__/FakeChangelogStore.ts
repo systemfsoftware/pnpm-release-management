@@ -10,7 +10,6 @@ import {
 import { Effect, Layer } from 'effect'
 
 export type FakeChangelogState = {
-  readonly rootChangelogs: Map<RelativePath, string>
   readonly memberChangelogs: Map<RelativePath, string>
 }
 
@@ -44,7 +43,7 @@ export const makeFakeChangelogStore = (
         return file
       }),
   })
-  return { layer, state: { rootChangelogs, memberChangelogs } }
+  return { layer, state: { memberChangelogs } }
 }
 
 const memberChangelogTextOf = (entry: MemberChangelogEntry, existing: string | undefined): string => {

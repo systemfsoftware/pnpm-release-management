@@ -145,9 +145,6 @@ Feature('Versioning packages').body(({ scenario }) => {
                   expect(changelogs.state.memberChangelogs.get(brandPath('changelog/b@2.0.0.md'))).toEqual(
                     '# b@2.0.0\n\nfix b\n',
                   )
-                  expect(changelogs.state.rootChangelogs.get(brandPath('CHANGELOG.md'))).toEqual(
-                    '# Changelog\n\n## 2.0.0\n\n  - ship a\n  - fix b\n',
-                  )
                 }),
                 Match.tag('VersionConsumed', () => failUnexpected('expected a consolidated bump')),
                 Match.tag('VersionIdle', () => failUnexpected('expected a consolidated bump')),

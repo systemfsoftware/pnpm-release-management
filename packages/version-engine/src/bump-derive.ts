@@ -33,7 +33,7 @@ export const fallbackSummaryOf = (intents: ReadonlyArray<Intent>): string =>
 export const rootBulletsOf = (intents: ReadonlyArray<Intent>): string =>
   intents
     .filter((intent) => intent.packages.some((entry) => entry.bump !== 'none'))
-    .map((intent) => `  - ${intent.summary}`)
+    .map((intent) => `- ${intent.summary}`)
     .join('\n')
 
 export const summaryForPackage = (intents: ReadonlyArray<Intent>, name: PackageName): string => {
