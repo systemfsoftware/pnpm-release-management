@@ -302,6 +302,35 @@ const runPhases = async (session: Session): Promise<void> => {
   })
 
   await session.phase(
+    'changeset check job refuses a released package that changes under a none intent',
+    async (world) => {
+      const released = await headSha(world)
+      await world.must('git checkout -q -b wrong-none', { cwd: FIXTURE })
+      await world.write(`${FIXTURE}/packages/alpha/index.js`, 'export const alpha = 4\n')
+      const created = await world.tool(
+        'changeset-management',
+        'new',
+        '@e2e/alpha --bump none --summary "alpha only tidies its export" --slug alpha-tidy',
+      )
+      expect(created.code).toBe(0)
+      await world.must('git add -A && git commit -q -m "chore: alpha tidies its export"', { cwd: FIXTURE })
+      await packTarballs(world, WORKSPACE_TARBALLS)
+
+      const steps = await world.job('require-intent', {
+        workflow: 'changeset-check.yml',
+        inputs: { 'base-sha': released },
+      })
+      await world.must('git checkout -q main && git branch -q -D wrong-none', { cwd: FIXTURE })
+
+      const refused = steps.filter((step) => step.code !== 0)
+      expect(refused.length).toBe(1)
+      expect(`${refused[0]?.stdout}${refused[0]?.stderr}`).toContain(
+        'tag digests refused: @e2e/alpha@v1.1.0 changed without a release',
+      )
+    },
+  )
+
+  await session.phase(
     'version job runs its own revision of the tools over a caller lock pinned to an older one, opens the release PR and dispatches CI on its branch',
     async (world) => {
       const created = await world.tool(
