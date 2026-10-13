@@ -4,12 +4,12 @@ import {
   type EvidenceRefusal,
   type Member,
   type PackageName,
+  type RegistryPort,
   type RelativePath,
   type RepoRoot,
   type TaskName,
   TurboDryRunDrifted,
   TurboDryRunUnreadable,
-  TurboPinUnusable,
   WorktreeUnavailable,
 } from '@systemfsoftware/release-language'
 import { Effect, FileSystem } from 'effect'
@@ -22,9 +22,10 @@ import type { ChildProcessSpawner } from 'effect/unstable/process/ChildProcessSp
 import { verdictTouched } from './change-verdict.js'
 import { gitLines, MANIFEST_GLOB, MANIFEST_SUFFIX, memberOf, membersAt, readText } from './evidence-io.js'
 import { runProcess } from './ProcessRun.js'
+import { fetchTurbo, TURBO_ENV } from './turbo-fetch.js'
+import type { TurboPin } from './turbo-pin.js'
 import { DryRunDocument } from './TurboDryRun.schema.js'
 
-const TURBO_BIN = 'node_modules/.bin/turbo'
 const WORKTREE_PREFIX = 'changeset-base-'
 
 type Requirements = FileSystem.FileSystem | ChildProcessSpawner
@@ -97,53 +98,28 @@ const dryRunView = (
 
 const dryRunAt = (
   cwd: string,
-  root: RepoRoot,
+  turbo: string,
   task: TaskName,
-  pinned: string,
 ): Effect.Effect<DryRun, EvidenceRefusal, Requirements> =>
   Effect.gen(function*() {
-    const fs = yield* FileSystem.FileSystem
-    const turboBin = `${root}/${TURBO_BIN}`
-    const installed = yield* fs.stat(turboBin).pipe(
-      Effect.as(true),
-      Effect.orElseSucceed(() => false),
-    )
-    if (!installed) {
-      return yield* Effect.fail(
-        new TurboPinUnusable({
-          detail: `turbo not present at ${turboBin} — run 'pnpm install --frozen-lockfile'`,
-        }),
-      )
-    }
     const out = yield* runProcess({
-      program: turboBin,
+      program: turbo,
       args: ['run', task, '--dry=json'],
       cwd,
       stdio: 'captured',
+      env: TURBO_ENV,
     })
     if (out.code !== 0) {
       const tail = out.stderr.trim().split('\n').slice(-5).join('\n')
       return yield* Effect.fail(
         new EvidenceCommandFailed({
-          program: turboBin,
+          program: turbo,
           detail: `dry run in ${cwd} failed:\n${tail}`,
         }),
       )
     }
     const document = yield* Effect.fromResult(decodeDryRun(out.stdout, cwd))
-    const run = yield* Effect.fromResult(dryRunView(document, cwd, task))
-    if (
-      run.document.turboVersion !== undefined &&
-      run.document.turboVersion !== pinned
-    ) {
-      return yield* Effect.fail(
-        new TurboPinUnusable({
-          detail:
-            `turbo in ${cwd} self-reports version ${run.document.turboVersion}, not the lockfile pin ${pinned} — run 'pnpm install --frozen-lockfile'`,
-        }),
-      )
-    }
-    return run
+    return yield* Effect.fromResult(dryRunView(document, cwd, task))
   })
 
 interface TurboMembers {
@@ -203,14 +179,15 @@ const dryRunEvidence = (
   root: RepoRoot,
   baseDir: string,
   task: TaskName,
-  pinned: string,
+  turbo: string,
+  version: string,
   changedFiles: ReadonlyArray<RelativePath>,
 ): Effect.Effect<ChangeEvidence, EvidenceRefusal, Requirements> =>
   Effect.gen(function*() {
     const [baseRun, headRun] = yield* Effect.all(
       [
-        dryRunAt(baseDir, root, task, pinned),
-        dryRunAt(root, root, task, pinned),
+        dryRunAt(baseDir, turbo, task),
+        dryRunAt(root, turbo, task),
       ],
       { concurrency: 2 },
     )
@@ -229,7 +206,7 @@ const dryRunEvidence = (
         task,
         base: Object.fromEntries(HashMap.toEntries(baseRun.matrix)),
         head: Object.fromEntries(HashMap.toEntries(headRun.matrix)),
-        engineVersion: headRun.document.turboVersion ?? null,
+        engineVersion: version,
       },
     }
     return evidence
@@ -239,10 +216,11 @@ export const collectTurboEvidence = (
   root: RepoRoot,
   baseSha: string,
   task: TaskName,
-  pinned: string,
+  pin: TurboPin,
   changedFiles: ReadonlyArray<RelativePath>,
-): Effect.Effect<ChangeEvidence, EvidenceRefusal, Requirements> =>
-  Effect.gen(function*() {
+): Effect.Effect<ChangeEvidence, EvidenceRefusal, Requirements | RegistryPort> =>
+  Effect.scoped(Effect.gen(function*() {
+    const turbo = yield* fetchTurbo(pin)
     const fs = yield* FileSystem.FileSystem
     const baseDir = yield* fs.makeTempDirectory({
       prefix: WORKTREE_PREFIX,
@@ -268,7 +246,7 @@ export const collectTurboEvidence = (
       )
     }
     return yield* Effect.ensuring(
-      dryRunEvidence(root, baseDir, task, pinned, changedFiles),
+      dryRunEvidence(root, baseDir, task, turbo, pin.version, changedFiles),
       runProcess({
         program: 'git',
         args: ['worktree', 'remove', '--force', baseDir],
@@ -276,4 +254,4 @@ export const collectTurboEvidence = (
         stdio: 'captured',
       }).pipe(Effect.ignore),
     )
-  })
+  }))

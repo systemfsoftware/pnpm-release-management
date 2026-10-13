@@ -1,4 +1,5 @@
 import { NodeServices } from '@effect/platform-node'
+import { RegistryLive } from '@systemfsoftware/adoption-adapter'
 import { Gherkin, Given, it, layer, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
 import { ChangeEvidenceLive } from '@systemfsoftware/process-adapter'
 import {
@@ -11,6 +12,7 @@ import {
 import { Cause, Effect, Exit, Layer, Option } from 'effect'
 import { FileSystem } from 'effect/FileSystem'
 import { Path } from 'effect/Path'
+import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 import { ChildProcess } from 'effect/unstable/process'
 import { expect } from 'vitest'
 import { fakeGitChanging } from './__fixtures__/FakeGitPort.js'
@@ -19,7 +21,19 @@ const Feature = makeFeature({ it, layer })
 
 const CHANGED = RelativePath.make('packages/pub/index.js')
 
-const live = Layer.merge(ChangeEvidenceLive.pipe(Layer.provide(fakeGitChanging([CHANGED]))), NodeServices.layer)
+const unreachableFetch: typeof globalThis.fetch = () => {
+  expect.unreachable('paths evidence must not reach the registry')
+}
+
+const registry = RegistryLive.pipe(
+  Layer.provide(FetchHttpClient.layer),
+  Layer.provide(Layer.succeed(FetchHttpClient.Fetch, unreachableFetch)),
+)
+
+const live = Layer.merge(
+  ChangeEvidenceLive.pipe(Layer.provide(fakeGitChanging([CHANGED])), Layer.provide(registry)),
+  NodeServices.layer,
+)
 
 const git = (cwd: string, ...args: ReadonlyArray<string>) =>
   Effect.scoped(
