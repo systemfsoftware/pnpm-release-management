@@ -14,9 +14,13 @@ import {
 import { Effect, Layer } from 'effect'
 import { FileSystem } from 'effect/FileSystem'
 import { Path } from 'effect/Path'
-import { overwriteTextFile, readTextFile } from './StoreFile.js'
+import { ensureDirectory, overwriteTextFile, readTextFile } from './StoreFile.js'
+import type { StoreFault } from './StoreFile.schema.js'
 
 const CHANGELOG_SEED = '# Changelog\n'
+
+const unwritable = (file: RelativePath) => (fault: StoreFault): ChangelogRefusal =>
+  ChangelogUnwritable.make({ path: file, reason: fault.reason })
 
 export const ChangelogStoreLive = (root: RepoRoot): Layer.Layer<ChangelogStore, never, FileSystem | Path> =>
   Layer.effect(
@@ -41,7 +45,7 @@ export const ChangelogStoreLive = (root: RepoRoot): Layer.Layer<ChangelogStore, 
           )
           const text = `${existing.trimEnd()}\n\n## ${append.version}\n\n${append.summary}\n`
           yield* overwriteTextFile(fs, path.join(root, append.path), text).pipe(
-            Effect.mapError((fault) => ChangelogUnwritable.make({ path: append.path, reason: fault.reason })),
+            Effect.mapError(unwritable(append.path)),
           )
           return { path: append.path, text }
         })
@@ -61,8 +65,10 @@ export const ChangelogStoreLive = (root: RepoRoot): Layer.Layer<ChangelogStore, 
       const writeMemberChangelog = (entry: MemberChangelogEntry): Effect.Effect<ChangelogFile, ChangelogRefusal> =>
         Effect.gen(function*() {
           const text = yield* memberChangelogTextOf(entry)
-          yield* overwriteTextFile(fs, path.join(root, entry.path), text).pipe(
-            Effect.mapError((fault) => ChangelogUnwritable.make({ path: entry.path, reason: fault.reason })),
+          const full = path.join(root, entry.path)
+          yield* ensureDirectory(fs, path.dirname(full)).pipe(
+            Effect.andThen(overwriteTextFile(fs, full, text)),
+            Effect.mapError(unwritable(entry.path)),
           )
           return { path: entry.path, text }
         })

@@ -113,7 +113,6 @@ Feature('Changesets versioning').body(({ scenario }) => {
             ['packages/alpha/package.json', ALPHA_MANIFEST],
             ['packages/beta/package.json', BETA_MANIFEST],
             ['.changeset/README.md', CHANGESET_README],
-            ['.changeset/changelogs/.gitkeep', ''],
             ['.changeset/alpha-minor.md', '---\n"@e2e/alpha": minor\n---\n\nalpha grows a public export\n'],
             ['.changeset/beta-patch.md', '---\n"@e2e/beta": patch\n---\n\nbeta fixes a bug\n'],
           ]),
@@ -175,7 +174,6 @@ Feature('Changesets versioning').body(({ scenario }) => {
             ['pnpm-workspace.yaml', WORKSPACE],
             ['packages/alpha/package.json', ALPHA_MANIFEST],
             ['.changeset/README.md', CHANGESET_README],
-            ['.changeset/changelogs/.gitkeep', ''],
             ['.changeset/ghost.md', '---\n"@e2e/ghost": minor\n---\n\nhaunt\n'],
           ]),
       ),
@@ -225,7 +223,6 @@ Feature('Changesets versioning').body(({ scenario }) => {
             ['crates/gritlint/Cargo.toml', CARGO_MEMBER],
             ['Cargo.toml', CARGO_MANIFEST],
             ['.changeset/README.md', CHANGESET_README],
-            ['.changeset/changelogs/.gitkeep', ''],
             ['.changeset/gritlint.md', '---\n"@e2e/gritlint": minor\n---\n\ngritlint grows\n'],
           ]),
       ),
@@ -258,6 +255,83 @@ Feature('Changesets versioning').body(({ scenario }) => {
             })),
           Match.tag('refused', (refused) =>
             Effect.sync(() => failUnexpected(`expected a bump, got ${refused.refusal._tag}`))),
+          Match.exhaustive,
+        )
+      ),
+    ),
+  )
+
+  scenario(
+    'A changelog directory several levels deep is created for the parked changelog',
+    { scenarioLayer: live },
+    Gherkin.Do.pipe(
+      Given('a member with an intent and a changelog directory two levels below anything that exists')(
+        'ready',
+        () =>
+          resetTo([
+            ['package.json', ROOT_MANIFEST],
+            ['pnpm-workspace.yaml', WORKSPACE],
+            ['packages/alpha/package.json', ALPHA_MANIFEST],
+            ['.changeset/README.md', CHANGESET_README],
+            ['.changeset/alpha-minor.md', '---\n"@e2e/alpha": minor\n---\n\nalpha grows a public export\n'],
+          ]),
+      ),
+      When('the pending intents are versioned')('outcome', () =>
+        runBump(bumpInputOf({
+          strategy: 'changesets',
+          changelogDir: 'release/notes/changelogs',
+          manifest: MANIFEST_TARGET,
+          surfaces: [],
+        }))),
+      Then('the member moves and its changelog is parked in the new directory')((s) =>
+        Match.value(s.outcome).pipe(
+          Match.tag('decided', () =>
+            Effect.gen(function*() {
+              expect(yield* readFixture('release/notes/changelogs/@e2e!alpha@1.1.0.md')).toEqual(
+                '# @e2e/alpha@1.1.0\n\nalpha grows a public export\n',
+              )
+            })),
+          Match.tag('refused', (refused) =>
+            Effect.sync(() => failUnexpected(`expected a bump, got ${refused.refusal._tag}`))),
+          Match.exhaustive,
+        )
+      ),
+    ),
+  )
+
+  scenario(
+    'A changelog directory taken by a file is refused, naming the parked changelog',
+    { scenarioLayer: live },
+    Gherkin.Do.pipe(
+      Given('a member with an intent and a regular file where the changelog directory belongs')(
+        'ready',
+        () =>
+          resetTo([
+            ['package.json', ROOT_MANIFEST],
+            ['pnpm-workspace.yaml', WORKSPACE],
+            ['packages/alpha/package.json', ALPHA_MANIFEST],
+            ['.changeset/README.md', CHANGESET_README],
+            ['.changeset/changelogs', 'not a directory\n'],
+            ['.changeset/alpha-minor.md', '---\n"@e2e/alpha": minor\n---\n\nalpha grows a public export\n'],
+          ]),
+      ),
+      When('the pending intents are versioned')('outcome', () =>
+        runBump(bumpInputOf({
+          strategy: 'changesets',
+          changelogDir,
+          manifest: MANIFEST_TARGET,
+          surfaces: [],
+        }))),
+      Then('versioning is refused as an unwritable changelog at the parked path')((s) =>
+        Match.value(s.outcome).pipe(
+          Match.tag('refused', (refused) =>
+            Effect.sync(() => {
+              expect(refused.refusal).toMatchObject({
+                _tag: 'ChangelogUnwritable',
+                path: '.changeset/changelogs/@e2e!alpha@1.1.0.md',
+              })
+            })),
+          Match.tag('decided', () => Effect.sync(() => failUnexpected('expected a refusal'))),
           Match.exhaustive,
         )
       ),
