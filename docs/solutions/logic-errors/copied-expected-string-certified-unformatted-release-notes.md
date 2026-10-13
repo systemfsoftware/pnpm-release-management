@@ -37,7 +37,7 @@ The real judge of that file is the consumer's gate: the repository's own `dprint
 
 ## A format oracle needs a content assertion beside it
 
-dprint also accepts a changelog whose summaries lost their `-` marker: plain paragraphs are well formatted. The feature therefore also requires each summary on its own line starting with `-`, and requires the earlier release to survive the append. A passing format check alone cannot show either.
+dprint also accepts a changelog whose summaries lost their `-` marker: the repository's `bin/dprint check` exits 0 on a release section written as plain paragraphs. The feature therefore also requires each summary to start a line that begins with `-`, and requires the earlier release to survive the append. A passing format check alone cannot show either.
 
 ## Where the test lives
 
