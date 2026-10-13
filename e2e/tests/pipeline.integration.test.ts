@@ -322,12 +322,23 @@ const runPhases = async (session: Session): Promise<void> => {
         workflow: 'changeset-check.yml',
         inputs: { 'base-sha': released },
       })
+      await world.must(`rm -rf ${WORKSPACE_TARBALLS}`)
+      const unbuildable = await world.job('require-intent', {
+        workflow: 'changeset-check.yml',
+        inputs: { 'base-sha': released },
+      })
+      await packTarballs(world, WORKSPACE_TARBALLS)
       await world.must('git checkout -q main && git branch -q -D wrong-none', { cwd: FIXTURE })
 
       const refused = steps.filter((step) => step.code !== 0)
       expect(refused.length).toBe(1)
       expect(`${refused[0]?.stdout}${refused[0]?.stderr}`).toContain(
         'tag digests refused: @e2e/alpha@v1.1.0 changed without a release',
+      )
+      const failed = unbuildable.filter((step) => step.code !== 0)
+      expect(failed.length).toBe(1)
+      expect(`${failed[0]?.stdout}${failed[0]?.stderr}`).toContain(
+        "tag digests: cannot build .#workspace-tarballs to compare @e2e/alpha with their release tags - the caller's flake must expose workspace-tarballs",
       )
     },
   )

@@ -1,33 +1,22 @@
 import { NodeServices } from '@effect/platform-node'
-import { LedgerLive } from '@systemfsoftware/adoption-adapter'
+import { LedgerLive, RegistryLive } from '@systemfsoftware/adoption-adapter'
+import { ChangesetsPortLive } from '@systemfsoftware/changesets-adapter'
 import { Reporter } from '@systemfsoftware/cli-adapter'
 import { Cell } from '@systemfsoftware/effect-cell-types'
 import { Gherkin, Given, it, layer, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
 import { GitLive } from '@systemfsoftware/git-adapter'
 import { unreleasedTarballsCell, type UnreleasedTarballsDecision } from '@systemfsoftware/github-release-engine'
 import { renderUnreleasedTarballsRefusal } from '@systemfsoftware/github-release-management/render'
-import {
-  ChangeEvidencePort,
-  ChangesetsPort,
-  Count,
-  FsPath,
-  GitRef,
-  ManifestUnreadable,
-  type Member,
-  PackageManifest,
-  PackageName,
-  PackageVersion,
-  RelativePath,
-  RepoRoot,
-  TarballPort,
-  WorkspaceStore,
-} from '@systemfsoftware/release-language'
+import { ChangeEvidenceLive } from '@systemfsoftware/process-adapter'
+import { FsPath, GitRef, PackageName, PackageVersion, RepoRoot, TarballPort } from '@systemfsoftware/release-language'
 import { TarballLive } from '@systemfsoftware/tarball-adapter'
+import { WorkspaceStoreLive } from '@systemfsoftware/workspace-adapter'
 import { Effect, Layer, Ref, Result } from 'effect'
 import { FileSystem } from 'effect/FileSystem'
 import * as Match from 'effect/Match'
 import { Path } from 'effect/Path'
 import * as Stream from 'effect/Stream'
+import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 import { ChildProcess } from 'effect/unstable/process'
 import { expect } from 'vitest'
 
@@ -36,13 +25,6 @@ const Feature = makeFeature({ it, layer })
 const NAME = PackageName.make('@scope/alpha')
 const VERSION = PackageVersion.make('1.0.0')
 const TAG = `${NAME}@v${VERSION}`
-
-const member: Member = {
-  name: NAME,
-  dir: RelativePath.make('packages/alpha'),
-  manifest: { name: NAME, version: VERSION },
-  publishable: true,
-}
 
 interface Repo {
   readonly scratch: string
@@ -84,7 +66,7 @@ const packAlpha = (repo: Repo) =>
       'archive',
       '--format=tar.gz',
       '--prefix=package/',
-      '--mtime=@0',
+      '--mtime=2000-01-01T00:00:00Z',
       '-o',
       path.join(repo.tarballs, 'alpha.tgz'),
       'HEAD:packages/alpha',
@@ -99,6 +81,16 @@ const write = (repo: Repo, file: string, text: string) =>
     yield* fs.writeFileString(path.join(repo.root, file), text)
   })
 
+const RELEASED_TREE = [
+  ['package.json', JSON.stringify({ name: '@scope/root', private: true })],
+  ['pnpm-workspace.yaml', 'packages:\n  - packages/*\n'],
+  ['.changeset/README.md', '# Changesets\n'],
+  ['packages/alpha/package.json', JSON.stringify({ name: NAME, version: VERSION })],
+  ['packages/alpha/index.js', 'export const alpha = 1\n'],
+  ['packages/alpha/.gitattributes', 'tests export-ignore\n'],
+  ['packages/alpha/tests/alpha.test.js', 'alpha is one\n'],
+] as const
+
 const releasedRepo = Effect.gen(function*() {
   const fs = yield* FileSystem
   const path = yield* Path
@@ -109,8 +101,7 @@ const releasedRepo = Effect.gen(function*() {
   yield* git(scratch, 'init', '-q', '--bare', remote)
   yield* git(repo.root, 'init', '-q', '-b', 'main')
   yield* git(repo.root, 'remote', 'add', 'origin', remote)
-  yield* write(repo, 'packages/alpha/package.json', JSON.stringify({ name: NAME, version: VERSION }))
-  yield* write(repo, 'packages/alpha/index.js', 'export const alpha = 1\n')
+  yield* Effect.forEach(RELEASED_TREE, ([file, text]) => write(repo, file, text), { discard: true })
   yield* git(repo.root, 'add', '-A')
   yield* git(repo.root, 'commit', '-q', '-m', 'feat: alpha 1.0.0')
   yield* packAlpha(repo)
@@ -122,45 +113,26 @@ const releasedRepo = Effect.gen(function*() {
   return repo
 }).pipe(Effect.provide(TarballLive))
 
-const RELEASES = {
-  none: [],
-  minor: [{
-    name: NAME,
-    type: 'minor' as const,
-    oldVersion: VERSION,
-    newVersion: PackageVersion.make('1.1.0'),
-    summary: 'alpha grows a public export',
-  }],
-} as const
-
-const adaptersOf = (repo: Repo, releases: (typeof RELEASES)[keyof typeof RELEASES]) =>
-  Layer.mergeAll(
+const adaptersOf = (repo: Repo) => {
+  const root = RepoRoot.make(repo.root)
+  return Layer.mergeAll(
     GitLive,
     TarballLive,
-    LedgerLive(RepoRoot.make(repo.root)),
-    Layer.succeed(WorkspaceStore, {
-      root: RepoRoot.make(repo.root),
-      listMembers: () => Effect.succeed([member]),
-      readManifest: () => Effect.succeed(PackageManifest.make({ name: NAME, version: VERSION })),
-      readFileFromRoot: () => Effect.fail(ManifestUnreadable.make({ path: FsPath.make('/') })),
-      changelogStorage: () => Effect.succeed('registry' as const),
-    }),
-    Layer.succeed(ChangeEvidencePort, {
-      pathsEvidence: () => Effect.succeed({ members: [member], touched: [NAME], deleted: [], raw: null }),
-      turboEvidence: () => Effect.die(new Error('the repository gates by paths')),
-    }),
-    Layer.succeed(ChangesetsPort, {
-      plan: () => Effect.succeed({ changesets: Count.make(1), releases }),
-      apply: () => Effect.void,
-    }),
+    LedgerLive(root),
+    WorkspaceStoreLive(root),
+    ChangesetsPortLive({ root, base: GitRef.make('main') }),
+    ChangeEvidenceLive.pipe(
+      Layer.provide(Layer.merge(GitLive, RegistryLive.pipe(Layer.provide(FetchHttpClient.layer)))),
+    ),
   ).pipe(Layer.provide(NodeServices.layer))
+}
 
 const tarballsOf = (repo: Repo, packed: boolean): FsPath | undefined => {
   if (packed) return FsPath.make(repo.tarballs)
   return undefined
 }
 
-const compare = (repo: Repo, options: { readonly bump: keyof typeof RELEASES; readonly packed: boolean }) =>
+const compare = (repo: Repo, packed: boolean) =>
   Effect.acquireUseRelease(
     Effect.sync(() => {
       const previous = process.cwd()
@@ -169,11 +141,11 @@ const compare = (repo: Repo, options: { readonly bump: keyof typeof RELEASES; re
     }),
     () =>
       Effect.result(
-        Cell.run(Cell.provide(unreleasedTarballsCell, adaptersOf(repo, RELEASES[options.bump])), {
+        Cell.run(Cell.provide(unreleasedTarballsCell, adaptersOf(repo)), {
           root: RepoRoot.make(repo.root),
           ref: GitRef.make('main'),
           strategy: 'paths' as const,
-          tarballs: tarballsOf(repo, options.packed),
+          tarballs: tarballsOf(repo, packed),
         }),
       ),
     (previous) => Effect.sync(() => process.chdir(previous)),
@@ -205,14 +177,17 @@ const removeRepository = (repo: Repo) =>
 
 const CHANGES = {
   'a file outside the package': ['README.md', '# fixture\n'],
+  'a test the package does not pack': ['packages/alpha/tests/alpha.test.js', 'alpha is still one\n'],
   'a file the package packs': ['packages/alpha/index.js', 'export const alpha = 2\n'],
 } as const
 
-const changedAfterRelease = (change: keyof typeof CHANGES) =>
+const changedAfterRelease = (change: keyof typeof CHANGES, bump: 'none' | 'minor') =>
   Effect.gen(function*() {
     const repo = yield* releasedRepo
     const [file, text] = CHANGES[change]
+    yield* git(repo.root, 'checkout', '-q', '-b', 'change')
     yield* write(repo, file, text)
+    yield* write(repo, '.changeset/alpha-change.md', `---\n"${NAME}": ${bump}\n---\n\nalpha changes\n`)
     yield* git(repo.root, 'add', '-A')
     yield* git(repo.root, 'commit', '-q', '-m', 'chore: change after the release')
     yield* packAlpha(repo)
@@ -224,7 +199,8 @@ Feature('Comparing the tarballs of released packages a pull request changes with
     scenarioOutline(
       'A pull request that changes <change> after alpha 1.0.0 is tagged, under a <bump> intent, <outcome>',
       [
-        { change: 'a file outside the package', bump: 'none', packed: true, outcome: 'matched @scope/alpha' },
+        { change: 'a file outside the package', bump: 'none', packed: true, outcome: 'nothing to compare' },
+        { change: 'a test the package does not pack', bump: 'none', packed: true, outcome: 'matched @scope/alpha' },
         { change: 'a file the package packs', bump: 'none', packed: false, outcome: 'listed @scope/alpha' },
         { change: 'a file the package packs', bump: 'minor', packed: true, outcome: 'nothing to compare' },
       ] as const,
@@ -232,18 +208,16 @@ Feature('Comparing the tarballs of released packages a pull request changes with
         Gherkin.Do.pipe(
           Given(`alpha released as an annotated ${TAG} and then ${row.change} changed`)(
             'repo',
-            () => changedAfterRelease(row.change),
+            () => changedAfterRelease(row.change, row.bump),
           ),
-          When('the unreleased tarballs are compared')('outcome', (s) =>
-            compare(s.repo, { bump: row.bump, packed: row.packed })),
+          When('the unreleased tarballs are compared')('outcome', (s) => compare(s.repo, row.packed)),
           Then(`the comparison is ${row.outcome}`)((s) =>
-            Effect.gen(function*() {
+            Effect.sync(() => {
               if (Result.isFailure(s.outcome)) {
                 throw new Error(`expected a decision, got ${JSON.stringify(s.outcome.failure)}`)
               }
               expect(decisionOf(s.outcome.success)).toBe(row.outcome)
-              yield* removeRepository(s.repo)
-            })
+            }).pipe(Effect.ensuring(removeRepository(s.repo)))
           ),
         ),
       { scenarioLayer: NodeServices.layer },
@@ -255,12 +229,9 @@ Feature('Comparing the tarballs of released packages a pull request changes with
       Gherkin.Do.pipe(
         Given(`alpha released as an annotated ${TAG} and then a file it packs changed`)(
           'repo',
-          () => changedAfterRelease('a file the package packs'),
+          () => changedAfterRelease('a file the package packs', 'none'),
         ),
-        When('the unreleased tarballs are compared')(
-          'outcome',
-          (s) => compare(s.repo, { bump: 'none', packed: true }),
-        ),
+        When('the unreleased tarballs are compared')('outcome', (s) => compare(s.repo, true)),
         Then('the refusal names the tag, the first differing file and the fix')((s) =>
           Effect.gen(function*() {
             if (Result.isSuccess(s.outcome)) {
@@ -270,8 +241,7 @@ Feature('Comparing the tarballs of released packages a pull request changes with
             expect(line).toContain(`tag digests refused: ${TAG} changed without a release`)
             expect(line).toContain('first differing file package/index.js')
             expect(line).toContain(`give ${NAME} a real bump in its intent, or revert its change`)
-            yield* removeRepository(s.repo)
-          })
+          }).pipe(Effect.ensuring(removeRepository(s.repo)))
         ),
       ),
     )

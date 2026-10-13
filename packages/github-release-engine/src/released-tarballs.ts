@@ -1,11 +1,18 @@
 import {
   GitPort,
   type IntegrityRefusal,
+  LEDGER_PATH,
   LedgerEntryMismatch,
   type LedgerIdentityRefusal,
+  LedgerPort,
+  type LedgerRefusal,
   LedgerTagMissing,
   LedgerTagMoved,
+  type Member,
+  type PackageName,
+  ReleaseLedger,
   type ReleaseLedgerEntry,
+  type ReleaseTag,
   type RemoteName,
   TagAnnotationLightweight,
   TagAnnotationMalformed,
@@ -19,7 +26,15 @@ import { Effect, Option } from 'effect'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import { tagOf } from './cycle.js'
-import { burnedOf, type IntegrityCandidate, publishedRecorded, stateForVersion, tagEntryOf } from './integrity.js'
+import {
+  burnedOf,
+  exemptNames,
+  identityCandidates,
+  type IntegrityCandidate,
+  publishedRecorded,
+  stateForVersion,
+  tagEntryOf,
+} from './integrity.js'
 import { type IntegrityCheck } from './integrity.schema.js'
 
 export type ReleasedTarballRefusal = IntegrityRefusal | LedgerIdentityRefusal | VersionBurned | TagRefusal
@@ -40,6 +55,27 @@ const parseAnnotation = (text: string): Result.Result<TarballIntegrity, string> 
     (error) => error.message,
   )
 }
+
+export const unreleasedOf = (
+  members: ReadonlyArray<Member>,
+  remoteTags: ReadonlyArray<ReleaseTag>,
+  releases: ReadonlyArray<{ readonly name: PackageName }>,
+): ReadonlyArray<IntegrityCandidate> => {
+  const released = identityCandidates(
+    members.map((member) => ({
+      name: member.name,
+      version: member.manifest.version,
+      publishable: member.publishable,
+    })),
+    remoteTags,
+  )
+  const releasing = exemptNames(released, releases)
+  return released.filter((member) => releasing.includes(member.name) === false)
+}
+
+export const ledgerEntries: Effect.Effect<ReadonlyArray<ReleaseLedgerEntry>, LedgerRefusal, LedgerPort> = Effect
+  .flatMap(LedgerPort, (port) => port.read(LEDGER_PATH))
+  .pipe(Effect.map((ledger) => Option.getOrElse(ledger, () => ReleaseLedger.make({ entries: [] })).entries))
 
 export const releasedTarballChecks = (
   members: ReadonlyArray<IntegrityCandidate>,

@@ -6,6 +6,7 @@ topic: pr-time-tag-digest-check
 artifact_contract: ce-unified-plan/v1
 product_contract_source: ce-brainstorm
 execution: code
+supersedes: docs/plans/2026-10-13-2019-feat-pr-time-tag-digest-check-plan.md
 ---
 
 # The changeset check compares an unreleased package's flake-built tarball with its release tag - Plan
@@ -69,13 +70,13 @@ execution: code
 ### Key Technical Decisions
 
 - **KTD1. The comparison is `plan`'s, extracted once.** The per-member resolution in `plan.ts` (ledger state, ledger tag commit, annotation parse, digest lookup) moves into one exported function in `github-release-engine`. `plan` and the new cell both call it, and `verifyIntegrity` decides. There is no second copy.
-- **KTD2. A new `digestsCell` in `github-release-engine`, with two modes.**
+- **KTD2. A new `unreleasedTarballsCell` in `github-release-engine`, with two modes.**
   - Without tarballs, it returns the at-risk names, so the workflow can decide whether to build.
   - With tarballs, it returns the verdict.
   - Its ports: `ChangeEvidencePort`, `WorkspaceStore`, `ChangesetsPort`, `GitPort`, `LedgerPort`, `TarballPort`.
   - `github-release-management` already wires `GitPort`, `LedgerPort` and `WorkspaceStore`, plus `ChangesetsPort` and `TarballPort` per command. The `digests` command adds `ChangeEvidenceLive` with `RegistryLive` over `FetchHttpClient`, as `changeset-management` composes it.
-  - No new `release-language` type: the refusal is `plan`'s existing `IntegrityRefusal` union.
-- **KTD3. CLI:** `github-release-management digests <base> [--tarballs <dir>]`. The list mode prints the at-risk names on stdout, one per line. The verify mode prints `tag digests: N package(s) match their release tags` or the R4 line.
+  - No new refusal type: the refusal is `plan`'s existing `IntegrityRefusal` union. The command carries its state as one tagged `targets` union (none at risk, awaiting tarballs, compared, refused), so the workflow matches it and probes no field.
+- **KTD3. CLI:** `github-release-management digests <base> [--tarballs <dir>] [--output <file>]`. Both modes write one `packages=<names, space-separated>` line, to stdout or appended to `--output`, which the workflow points at `$GITHUB_OUTPUT`. The verify mode first prints `tag digests: N package(s) match their release tags` or fails with the R4 line.
 - **KTD4. Workflow.** `changeset-check.yml` gains two steps after the intent verdict, so the first verdict step stays where it is:
   1. **The digests list step:** `id: digests`, which writes `packages` to `$GITHUB_OUTPUT`.
   2. **The digests verify step:** `if: steps.digests.outputs.packages != ''`. It runs `nix build --no-link --print-out-paths .#workspace-tarballs`, or fails with R3's named line when the output is missing, then runs the verify mode.
@@ -87,11 +88,12 @@ execution: code
 - **KTD6. Intents.**
   - `@systemfsoftware/github-release-engine: minor`, for the new cell and the extracted function.
   - `@systemfsoftware/github-release-management: minor`, for the `digests` command.
+  - `@systemfsoftware/process-adapter: minor` and `@systemfsoftware/release-language: minor`, for the shared evidence refusal lines, `evidenceOf`, `taskOf` and the `ChangeEvidenceRefusal` schema that the simplify pass moved out of both apps and both cells.
 
 ### Test admission
 
 - **AE1 and AE2: admitted.** They are e2e phases through the real reusable workflow, the real CLI and a real annotated release tag. They reproduce the defect class (a wrong `none` that `plan` refuses after merge) at the observable boundary.
-- **AE3: admitted.** It is an integration feature over the published cell, with the real tarball reader. `github-release-engine` tests already have a `FakeGit` fixture for remote tags and annotations.
+- **AE3: admitted.** It is an integration feature over the published cell with real adapters only: a real pnpm workspace and intent file, `paths` change evidence over real git, the real tarball reader and ledger, and an annotated tag pushed to a bare remote.
 - **AE4: one-time real-tool verification, not committed.**
 
 ### Assumptions challenged (destructive review)
@@ -114,9 +116,9 @@ execution: code
 
 #### U2. Extract `plan`'s per-member integrity resolution (KTD1)
 
-- **Files:** `packages/github-release-engine/src/integrity.ts` and `plan.ts`. `plan`'s existing tests stay green unchanged.
+- **Files:** new `packages/github-release-engine/src/released-tarballs.ts` (the per-member resolution, `unreleasedOf` and `ledgerEntries`), called from `plan.ts`. `plan`'s existing tests stay green unchanged.
 
-#### U3. `digestsCell` and its feature (KTD2, AE3)
+#### U3. `unreleasedTarballsCell` and its feature (KTD2, AE3)
 
 #### U4. `digests` command and its R4 render (KTD3)
 

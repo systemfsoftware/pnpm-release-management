@@ -367,9 +367,14 @@ export const renderPlan = (
 
 export type UnreleasedTarballsFailure = PlanFailure | TarballRefusal | ChangeEvidenceRefusal
 
+const differingFileOf = (file: string): string => {
+  if (file === '') return 'every packed file matches, so the archive metadata differs'
+  return `first differing file ${file}`
+}
+
 const unreleasedMismatchLine = (mismatch: TagIntegrityMismatch): string =>
   `tag digests refused: ${mismatch.package}@v${mismatch.version} changed without a release — ` +
-  `recorded ${mismatch.recorded}, built ${mismatch.current}, first differing file ${mismatch.file}; ` +
+  `recorded ${mismatch.recorded}, built ${mismatch.current}, ${differingFileOf(mismatch.file)}; ` +
   `give ${mismatch.package} a real bump in its intent, or revert its change`
 
 export const renderUnreleasedTarballsRefusal = (

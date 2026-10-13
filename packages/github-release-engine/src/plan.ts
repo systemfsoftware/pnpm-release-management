@@ -8,14 +8,12 @@ import {
   FsPath,
   GitPort,
   type IntegrityRefusal,
-  LEDGER_PATH,
   type LedgerIdentityRefusal,
   LedgerPort,
   type LedgerRefusal,
   LegacyTags,
   type PlanRefusal,
   RelativePath,
-  ReleaseLedger,
   RemoteName,
   TarballDigest,
   TarballPort,
@@ -24,16 +22,16 @@ import {
   type VersionUnknownPackage,
   WorkspaceStore,
 } from '@systemfsoftware/release-language'
-import { Effect, Option } from 'effect'
+import { Effect } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import { cycleOf, dropExcluded } from './cycle.js'
-import { exemptNames, identityCandidates, verifyIntegrity } from './integrity.js'
+import { verifyIntegrity } from './integrity.js'
 import { legacyReleased } from './legacy.js'
 import { PlanCommand, type PlanDeferredUnknown, planRelease } from './plan-release.workflow.js'
 import { type PlanDecision, PlanReport } from './plan.schema.js'
-import { releasedTarballChecks } from './released-tarballs.js'
+import { ledgerEntries, releasedTarballChecks, unreleasedOf } from './released-tarballs.js'
 
 export const PlanRequest = Wire.wire({
   deferred: Wire.mint(S.optional(FsPath)),
@@ -79,30 +77,16 @@ const read = (
     const cycles = yield* CycleStore
     const port = yield* ChangesetsPort
     const tarballs = yield* TarballPort
-    const ledgerPort = yield* LedgerPort
     const intents = yield* changesets.listIntents()
     const members = yield* workspace.listMembers()
     const tags = yield* git.remoteTags(remote)
     const legacy = yield* legacyReleased({ git, remote, members, remoteTags: tags, legacy: request.legacyTags })
     const deferred = yield* cycles.readDeferred(request.deferred)
     const planned = yield* port.plan()
-    const candidates = identityCandidates(
-      members.map((member) => ({
-        name: member.name,
-        version: member.manifest.version,
-        publishable: member.publishable,
-      })),
-      tags,
-    )
-    const exempt = exemptNames(
-      candidates.map((member) => ({ name: member.name, version: member.version })),
-      planned.releases,
-    )
-    const toCheck = candidates.filter((member) => exempt.includes(member.name) === false)
+    const toCheck = unreleasedOf(members, tags, planned.releases)
     const digests = yield* digestsWhen(toCheck.length > 0, () => tarballs.read(request.tarballs))
-    const ledger = yield* ledgerPort.read(LEDGER_PATH)
-    const ledgerEntries = Option.getOrElse(ledger, () => ReleaseLedger.make({ entries: [] })).entries
-    const checks = yield* releasedTarballChecks(toCheck, digests, ledgerEntries, remote)
+    const entries = yield* ledgerEntries
+    const checks = yield* releasedTarballChecks(toCheck, digests, entries, remote)
     if (toCheck.length > 0) {
       const verdict = verifyIntegrity(checks)
       if (Result.isFailure(verdict)) {

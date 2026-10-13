@@ -27,53 +27,38 @@ export class UnreleasedMatched extends S.TaggedClass<UnreleasedMatched>()('Unrel
   readonly [DecisionTypeId] = DecisionTypeId
 }
 
-export class TarballsCompared extends S.TaggedClass<TarballsCompared>()('TarballsCompared', {
-  count: Count,
-}) {}
-
 const ComparisonRefusal = S.Union([TagIntegrityMismatch, IntegrityFilesEmpty, IntegrityNothingToVerify])
-type ComparisonRefusal = S.Schema.Type<typeof ComparisonRefusal>
+export type ComparisonRefusal = S.Schema.Type<typeof ComparisonRefusal>
+
+const NoTargets = S.TaggedStruct('NoTargets', {})
+const AwaitingTarballs = S.TaggedStruct('AwaitingTarballs', { packages: S.NonEmptyArray(PackageName) })
+const TarballsCompared = S.TaggedStruct('TarballsCompared', {
+  packages: S.NonEmptyArray(PackageName),
+  count: Count,
+})
+const TarballsRefused = S.TaggedStruct('TarballsRefused', {
+  packages: S.NonEmptyArray(PackageName),
+  refusal: ComparisonRefusal,
+})
+const UnreleasedTargets = S.Union([NoTargets, AwaitingTarballs, TarballsCompared, TarballsRefused])
+export type UnreleasedTargets = S.Schema.Type<typeof UnreleasedTargets>
 
 export class UnreleasedTarballsCommand extends S.TaggedClass<UnreleasedTarballsCommand>()(
   'UnreleasedTarballsCommand',
-  {
-    packages: S.Array(PackageName),
-    comparison: S.optional(S.Union([TarballsCompared, ComparisonRefusal])),
-  },
+  { targets: UnreleasedTargets },
 ) {}
-
-const VacantCase = S.TaggedStruct('Vacant', {})
-const ListedCase = S.TaggedStruct('Listed', { packages: S.NonEmptyArray(PackageName) })
-const MatchedCase = S.TaggedStruct('Matched', { packages: S.NonEmptyArray(PackageName) })
-const RefusedCase = S.TaggedStruct('Refused', { refusal: ComparisonRefusal })
-const UnreleasedCase = S.Union([VacantCase, ListedCase, MatchedCase, RefusedCase])
-type UnreleasedCase = S.Schema.Type<typeof UnreleasedCase>
-
-const unreleasedCaseOf = (command: UnreleasedTarballsCommand): UnreleasedCase => {
-  const [first, ...rest] = command.packages
-  if (first === undefined) {
-    return VacantCase.make({})
-  }
-  const comparison = command.comparison
-  if (comparison === undefined) {
-    return ListedCase.make({ packages: [first, ...rest] })
-  }
-  if (S.is(TarballsCompared)(comparison)) {
-    return MatchedCase.make({ packages: [first, ...rest] })
-  }
-  return RefusedCase.make({ refusal: comparison })
-}
 
 export const compareUnreleasedTarballs = Workflow.make(
   UnreleasedTarballsCommand,
   (
     command,
   ): Result.Result<UnreleasedVacant | UnreleasedListed | UnreleasedMatched, ComparisonRefusal> =>
-    Match.value(unreleasedCaseOf(command)).pipe(
-      Match.tag('Vacant', () => Result.succeed(UnreleasedVacant.make({}))),
-      Match.tag('Listed', (listed) => Result.succeed(UnreleasedListed.make({ packages: listed.packages }))),
-      Match.tag('Matched', (matched) => Result.succeed(UnreleasedMatched.make({ packages: matched.packages }))),
-      Match.tag('Refused', (refused) => Result.fail(refused.refusal)),
-      Match.exhaustive,
+    Match.value(command.targets).pipe(
+      Match.tagsExhaustive({
+        NoTargets: () => Result.succeed(UnreleasedVacant.make({})),
+        AwaitingTarballs: (awaiting) => Result.succeed(UnreleasedListed.make({ packages: awaiting.packages })),
+        TarballsCompared: (compared) => Result.succeed(UnreleasedMatched.make({ packages: compared.packages })),
+        TarballsRefused: (refused) => Result.fail(refused.refusal),
+      }),
     ),
 )

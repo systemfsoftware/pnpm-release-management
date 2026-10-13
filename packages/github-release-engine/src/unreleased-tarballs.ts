@@ -8,34 +8,31 @@ import {
   FsPath,
   GitPort,
   GitRef,
-  type IntegrityFilesEmpty,
-  type IntegrityNothingToVerify,
-  LEDGER_PATH,
-  LedgerPort,
+  type LedgerPort,
   type LedgerRefusal,
   type MemberRefusal,
-  ReleaseLedger,
+  type PackageName,
   RemoteName,
   RepoRoot,
-  type TagIntegrityMismatch,
   TarballPort,
   type TarballRefusal,
   TaskName,
   WorkspaceStore,
 } from '@systemfsoftware/release-language'
-import { Effect, Option } from 'effect'
+import { Effect } from 'effect'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import {
   compareUnreleasedTarballs,
-  TarballsCompared,
+  type ComparisonRefusal,
   UnreleasedListed,
   UnreleasedMatched,
   UnreleasedTarballsCommand,
+  type UnreleasedTargets,
   UnreleasedVacant,
 } from './compare-unreleased-tarballs.workflow.js'
-import { exemptNames, identityCandidates, verifyIntegrity } from './integrity.js'
-import { releasedTarballChecks, type ReleasedTarballRefusal } from './released-tarballs.js'
+import { verifyIntegrity } from './integrity.js'
+import { ledgerEntries, releasedTarballChecks, type ReleasedTarballRefusal, unreleasedOf } from './released-tarballs.js'
 
 export const UnreleasedTarballsRequest = Wire.wire({
   root: Wire.mint(RepoRoot),
@@ -71,35 +68,27 @@ const read = (
     const members = yield* workspace.listMembers()
     const tags = yield* git.remoteTags(remote)
     const planned = yield* Effect.flatMap(ChangesetsPort, (port) => port.plan())
-    const tagged = identityCandidates(
-      members.map((member) => ({
-        name: member.name,
-        version: member.manifest.version,
-        publishable: member.publishable,
-      })),
-      tags,
+    const atRisk = unreleasedOf(members, tags, planned.releases).filter((member) =>
+      evidence.touched.includes(member.name)
     )
-    const releasing = exemptNames(tagged, planned.releases)
-    const atRisk = tagged.filter((member) =>
-      evidence.touched.includes(member.name) && releasing.includes(member.name) === false
-    )
-    const packages = atRisk.map((member) => member.name)
+    const [first, ...rest] = atRisk.map((member) => member.name)
+    if (first === undefined) {
+      return UnreleasedTarballsCommand.make({ targets: { _tag: 'NoTargets' } })
+    }
+    const packages: readonly [PackageName, ...Array<PackageName>] = [first, ...rest]
     const dir = request.tarballs
-    if (dir === undefined || atRisk.length === 0) {
-      return UnreleasedTarballsCommand.make({ packages })
+    if (dir === undefined) {
+      return UnreleasedTarballsCommand.make({ targets: { _tag: 'AwaitingTarballs', packages } })
     }
     const digests = yield* Effect.flatMap(TarballPort, (port) => port.read(dir))
-    const ledger = yield* Effect.flatMap(LedgerPort, (port) => port.read(LEDGER_PATH))
-    const ledgerEntries = Option.getOrElse(ledger, () => ReleaseLedger.make({ entries: [] })).entries
-    const checks = yield* releasedTarballChecks(atRisk, digests, ledgerEntries, remote)
-    const comparison = Result.match(verifyIntegrity(checks), {
-      onFailure: (refusal) => refusal,
-      onSuccess: (count) => TarballsCompared.make({ count }),
+    const entries = yield* ledgerEntries
+    const checks = yield* releasedTarballChecks(atRisk, digests, entries, remote)
+    const targets = Result.match(verifyIntegrity(checks), {
+      onFailure: (refusal): UnreleasedTargets => ({ _tag: 'TarballsRefused', packages, refusal }),
+      onSuccess: (count): UnreleasedTargets => ({ _tag: 'TarballsCompared', packages, count }),
     })
-    return UnreleasedTarballsCommand.make({ packages, comparison })
+    return UnreleasedTarballsCommand.make({ targets })
   })
-
-type ComparisonRefusal = IntegrityNothingToVerify | IntegrityFilesEmpty | TagIntegrityMismatch
 
 export const unreleasedTarballsCell = Cell.layer({
   read,
