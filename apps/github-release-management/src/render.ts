@@ -398,7 +398,7 @@ export const renderUnreleasedTarballs = (
       Match.tagsExhaustive({
         UnreleasedVacant: () => ({
           packages: [],
-          report: note('tag digests: no released package changes without a release'),
+          report: note('tag digests: the change evidence names no released package that changes without a release'),
         }),
         UnreleasedListed: (listed) => ({
           packages: listed.packages,

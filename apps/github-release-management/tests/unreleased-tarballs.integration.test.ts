@@ -239,6 +239,10 @@ Feature('Comparing the tarballs of released packages a pull request changes with
             }
             const line = yield* refusalLine(s.outcome.failure)
             expect(line).toContain(`tag digests refused: ${TAG} changed without a release`)
+            const [, recorded, built] = line.match(/recorded (sha512-\S+), built (sha512-\S+),/) ?? []
+            expect(recorded).toBeDefined()
+            expect(built).toBeDefined()
+            expect(built).not.toBe(recorded)
             expect(line).toContain('first differing file package/index.js')
             expect(line).toContain(`give ${NAME} a real bump in its intent, or revert its change`)
           }).pipe(Effect.ensuring(removeRepository(s.repo)))
