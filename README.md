@@ -201,8 +201,15 @@ paths gate refused: turbo.json makes turbo the source of change evidence — set
 A pull request that adds or removes the Turbo config is still decided by
 `paths`, because Turbo cannot dry-run the side without one. Under `turbo` the
 check reads the pin from the root importer's `turbo` devDependency in
-`pnpm-lock.yaml`; a lockfile without it fails with `turbo pin unusable:` until
-`turbo` is a root devDependency.
+`pnpm-lock.yaml` and fetches the one Turbo platform package for the runner
+(`@turbo/<os>-<arch>`) at that version — from the lockfile entry's `tarball`
+URL when pnpm wrote one, from the public npm registry otherwise — checks the
+fetched bytes against the integrity the lockfile records for that package, and
+requires the extracted binary's `--version` to print the pin. It runs that
+binary with `TURBO_TELEMETRY_DISABLED=1`, so a verdict needs only the caller's
+checkout: no `node_modules`, no install and no dev shell. A lockfile without
+the root pin, or without an integrity for that platform package, refuses with
+`turbo pin unusable:`; `turbo` must be a root devDependency.
 
 ## Change intents
 
@@ -281,7 +288,7 @@ agree on what this cycle owns.
 | Workflow              | Inputs                                                        | Caller must grant                                           |
 | --------------------- | ------------------------------------------------------------- | ----------------------------------------------------------- |
 | `release.yml`         | `ci-workflow` (required), `artifacts-dir`                     | `contents: write`, `pull-requests: write`, `actions: write` |
-| `changeset-check.yml` | `base-sha`, `node-version`, `devshell`, `tools-ref` (ignored) | `contents: read`, `pull-requests: read`                     |
+| `changeset-check.yml` | `base-sha`, `node-version`; `devshell`, `tools-ref` (ignored) | `contents: read`, `pull-requests: read`                     |
 
 The `pull_request` runs of a pull request opened or updated with the workflow
 token wait for a maintainer's approval, so they never run on their own.
@@ -310,35 +317,22 @@ runners from actions/runner v2.334.0), GitHub Enterprise Server does not. A job
 that cannot read it fails before running any tool. Both workflows need Nix:
 they install it on hosted runners, and a self-hosted runner must provide it.
 
-Without `devshell`, the changeset check installs the caller's workspace with
-plain pnpm and runs `"$RELEASE_TOOLS/changeset-management" check` against it.
-It still builds that binary with Nix, so a self-hosted runner needs Nix in this
-mode too.
+The changeset check installs nothing from the caller and enters no dev shell:
+it takes the caller's checkout and its pinned pnpm (with `node-version`, on
+hosted runners), builds `release-tools` at this workflow's own revision with
+Nix, and runs `"$RELEASE_TOOLS/changeset-management" check` against that tree.
+pnpm is there for member enumeration (`pnpm ls -r`), which reads the workspace
+manifest and needs no install. Under `"gate": { "strategy": "turbo" }` the
+Turbo that judges the pull request is the platform binary the check fetches
+and verifies against the caller's lockfile (see [Configuration](#configuration)),
+so the job needs no `node_modules`.
 
-`tools-ref` is accepted and ignored. It can be removed once no caller passes it:
-stryker-js-effect's `changeset-check.yml` still passes `tools-ref: main`, and
-removing an input a caller passes fails that caller's workflow, so drop it from
-the callers first.
-
-`devshell: true` makes the changeset check run the caller's own `bootstrap`
-script inside its `nix develop` shell
-(`nix develop --command pnpm run bootstrap`) instead of a plain
-`pnpm install`, then run the check in that shell. The bootstrap script is
-where the caller installs its workspace inside its own sandbox, so no
-dependency code runs outside it; a caller without a `bootstrap` script is
-refused with an error naming the missing script. The workflow takes no
-install command of its own. The job allows unprivileged user namespaces so a
-bubblewrap sandbox can start. A caller needs this mode when its lockfile points
-at tarballs its flake builds, such as `file:.sfs-deps/<name>-<version>.tgz`; a
-plain install cannot read those. With `devshell: true`, `node-version` is
-ignored for the caller's install and check: they use the dev shell's node, and
-the check runs the workflow's own binary inside the caller's sandbox,
-`nix develop --command sandbox -- "$(realpath "$RELEASE_TOOLS/changeset-management")" check`.
-The `realpath` matters: the sandbox binds only the store paths its command
-resolves to, and `release-tools` holds symlinks into the per-app store paths,
-so the unresolved path does not exist inside it. The default, `false`,
-installs with plain pnpm. This repository's own CI calls the check with
-`devshell: true` on every pull request.
+`tools-ref` and `devshell` are accepted and ignored: `devshell` configured the
+install the check no longer performs, and `tools-ref` never did anything.
+Removing an input a caller passes fails that caller's workflow, so an input can
+be dropped only once no caller passes it: a caller still passes
+`tools-ref: main`, so drop it from the callers first. This repository's own CI
+calls the check with no inputs.
 
 ## Distribution through Nix
 

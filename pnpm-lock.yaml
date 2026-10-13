@@ -653,10 +653,16 @@ importers:
       '@systemfsoftware/release-language':
         specifier: workspace:*
         version: link:../release-language
+      '@systemfsoftware/tarball-adapter':
+        specifier: workspace:*
+        version: link:../tarball-adapter
       effect:
         specifier: ^4.0.0-rc.112
         version: 4.0.0-rc.112
     devDependencies:
+      '@systemfsoftware/adoption-adapter':
+        specifier: workspace:*
+        version: link:../adoption-adapter
       '@systemfsoftware/effect-gherkin-spec':
         specifier: ^4.0.1
         version: 4.0.1(@effect/vitest@4.0.0-rc.112(effect@4.0.0-rc.112)(vitest@4.1.11(@types/node@24.13.4)(vite@8.2.2(@types/node@24.13.4)(jiti@2.6.1)(yaml@2.9.0))))(effect@4.0.0-rc.112)(vitest@4.1.11(@types/node@24.13.4)(vite@8.2.2(@types/node@24.13.4)(jiti@2.6.1)(yaml@2.9.0)))

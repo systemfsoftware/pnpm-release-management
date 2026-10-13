@@ -1,4 +1,5 @@
 import { NodeRuntime, NodeServices } from '@effect/platform-node'
+import { RegistryLive } from '@systemfsoftware/adoption-adapter'
 import { gateChangesCell, newIntentCell } from '@systemfsoftware/changeset-engine'
 import { program, ReporterLive } from '@systemfsoftware/cli-adapter'
 import { Cell } from '@systemfsoftware/effect-cell-types'
@@ -7,6 +8,7 @@ import { ChangeEvidenceLive } from '@systemfsoftware/process-adapter'
 import { ReleaseConfigStoreLive } from '@systemfsoftware/workspace-adapter'
 import { Effect, Layer, Option } from 'effect'
 import { Argument, Command, Flag } from 'effect/unstable/cli'
+import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 import { baseRefOf, storesOf, taskOf, workspaceOf } from './boundary.js'
 import { renderGate, renderRefusal, renderStaged } from './render.js'
 
@@ -14,7 +16,7 @@ const VERSION = '0.0.0'
 
 const AppLive = Layer.mergeAll(
   ReleaseConfigStoreLive,
-  Layer.provide(ChangeEvidenceLive, GitLive),
+  Layer.provide(ChangeEvidenceLive, Layer.merge(GitLive, RegistryLive.pipe(Layer.provide(FetchHttpClient.layer)))),
 ).pipe(Layer.provide(NodeServices.layer))
 
 const newIntent = Command.make('new', {

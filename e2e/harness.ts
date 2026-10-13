@@ -3,6 +3,7 @@ import {
   conditionHolds,
   readWorkflow,
   resolveExpressions,
+  runsAfterFailure,
   runStepsOf,
   toolStepsOf,
   workflowEnvOf,
@@ -309,6 +310,7 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
   ): Promise<ReadonlyArray<StepResult>> => {
     await must(RUNNER_SETUP)
     const githubEnv = `${STEP_DIR}/${name}.env`
+    const summary = `${STEP_DIR}/${name}.summary`
     await must(`: > ${quote(githubEnv)}`)
     let jobEnv: Record<string, string> = {}
     const outputs: Record<string, Record<string, string>> = {}
@@ -328,7 +330,9 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
       return ''
     }
     const results: Array<StepResult> = []
+    let failed = false
     for (const [index, step] of runStepsOf(WORKFLOWS[workflow], name).entries()) {
+      if (failed && !runsAfterFailure(step.condition)) continue
       if (!conditionHolds(step.condition, lookup)) continue
       const script = `${STEP_DIR}/${name}-${index}.sh`
       const output = `${STEP_DIR}/${name}-${index}.output`
@@ -339,13 +343,16 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
       )
       const result = await run(
         `PATH=${RUNNER_BIN}:$PATH bash --noprofile --norc -eo pipefail ${quote(script)}`,
-        { cwd: FIXTURE, env: { ...jobEnv, ...env, GITHUB_OUTPUT: output, GITHUB_ENV: githubEnv } },
+        {
+          cwd: FIXTURE,
+          env: { ...jobEnv, ...env, GITHUB_OUTPUT: output, GITHUB_ENV: githubEnv, GITHUB_STEP_SUMMARY: summary },
+        },
       )
       const stepOutputs = outputsOf((await must(`cat ${quote(output)}`)).stdout)
       results.push({ step: step.label, outputs: stepOutputs, ...result })
-      if (result.code !== 0) return results
       if (step.id !== undefined) outputs[step.id] = stepOutputs
       jobEnv = outputsOf((await must(`cat ${quote(githubEnv)}`)).stdout)
+      if (result.code !== 0) failed = true
     }
     return results
   }

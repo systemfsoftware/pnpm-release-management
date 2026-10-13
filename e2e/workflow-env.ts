@@ -102,12 +102,18 @@ const termHolds = (term: string, lookup: (expression: string) => string | undefi
   return truthy(operandOf(term, lookup))
 }
 
+const expressionOf = (condition: string): string => condition.trim().replace(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/, '$1')
+
+export const runsAfterFailure = (condition: string | undefined): boolean =>
+  condition !== undefined && expressionOf(condition) === 'always()'
+
 export const conditionHolds = (
   condition: string | undefined,
   lookup: (expression: string) => string | undefined,
 ): boolean => {
   if (condition === undefined) return true
-  const expression = condition.trim().replace(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/, '$1')
+  const expression = expressionOf(condition)
+  if (expression === 'always()') return true
   if (/\|\||[()]/.test(expression)) {
     throw new Error(`the e2e evaluates only && of comparisons and negations in if:, got: ${condition}`)
   }
