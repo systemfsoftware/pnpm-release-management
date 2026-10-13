@@ -143,6 +143,22 @@ const runPhases = async (session: Session): Promise<void> => {
     expect(`${passed.stdout}${passed.stderr}`).toContain('@e2e/alpha')
   })
 
+  await session.phase('gate refuses paths where the root keeps a turbo config', async (world) => {
+    await world.must('git checkout -q -b turbo-probe', { cwd: FIXTURE })
+    await world.write(`${FIXTURE}/turbo.json`, '{ "tasks": { "build": {} } }\n')
+    await world.must('git add -A && git commit -q -m "build: adopt turbo"', { cwd: FIXTURE })
+    const adopted = await headSha(world)
+    await world.write(`${FIXTURE}/packages/alpha/index.js`, 'export const alpha = 3\n')
+    await world.must('git add -A && git commit -q -m "feat: alpha moves under turbo"', { cwd: FIXTURE })
+
+    const refused = await world.tool('changeset-management', 'check', adopted)
+    await world.must('git checkout -q main && git branch -q -D turbo-probe', { cwd: FIXTURE })
+    expect(refused.code).toBe(1)
+    expect(`${refused.stdout}${refused.stderr}`).toContain(
+      'paths gate refused: turbo.json makes turbo the source of change evidence — set "gate": { "strategy": "turbo" } in release.jsonc',
+    )
+  })
+
   for (
     const { phase, devshell, install } of [
       {

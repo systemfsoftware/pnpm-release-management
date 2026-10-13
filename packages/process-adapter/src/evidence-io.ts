@@ -4,8 +4,10 @@ import {
   type Member,
   PackageManifest,
   type PackageName,
+  PathsGateUnderTurbo,
   RelativePath,
   type RepoRoot,
+  TurboConfigFile,
 } from '@systemfsoftware/release-language'
 import { Effect, FileSystem, Option } from 'effect'
 import * as S from 'effect/Schema'
@@ -54,6 +56,25 @@ export const gitLines = (
       )
     }
     return out.stdout.split('\n').filter((line) => line.length > 0)
+  })
+
+const turboConfigsAt = (
+  root: RepoRoot,
+  rev: string,
+): Effect.Effect<ReadonlyArray<string>, EvidenceCommandFailed | ProcessFault, ChildProcessSpawner> =>
+  gitLines(root, ['ls-tree', '--name-only', rev, '--', ...TurboConfigFile.literals])
+
+export const refuseUnderTurbo = (
+  root: RepoRoot,
+  base: string,
+  head: string,
+): Effect.Effect<void, PathsGateUnderTurbo | EvidenceCommandFailed | ProcessFault, ChildProcessSpawner> =>
+  Effect.gen(function*() {
+    const atHead = yield* turboConfigsAt(root, head)
+    const named = TurboConfigFile.literals.find((file) => atHead.includes(file))
+    if (named === undefined) return
+    if ((yield* turboConfigsAt(root, base)).length === 0) return
+    return yield* Effect.fail(new PathsGateUnderTurbo({ turboConfig: named }))
   })
 
 const dirOf = (manifestPath: string): Option.Option<RelativePath> => {

@@ -9,7 +9,7 @@ import {
 import { Effect, Layer } from 'effect'
 import * as Match from 'effect/Match'
 import { pathsTouched } from './change-verdict.js'
-import { deletedAt, gitLines, MANIFEST_GLOB, membersAt } from './evidence-io.js'
+import { deletedAt, gitLines, MANIFEST_GLOB, membersAt, refuseUnderTurbo } from './evidence-io.js'
 import { collectTurboEvidence } from './turbo-evidence.js'
 import { turboPin } from './turbo-pin.js'
 
@@ -29,6 +29,7 @@ const evidencePort = (git: GitPort): ChangeEvidencePort => ({
   pathsEvidence: (root, ref) =>
     Effect.gen(function*() {
       const head = yield* git.currentBranch().pipe(Effect.mapError(branchFault))
+      yield* refuseUnderTurbo(root, ref, head)
       const changed = yield* git.changedPaths(ref, head)
       const members = yield* membersAt(root, yield* gitLines(root, MANIFEST_GLOB))
       const [mergeBase = ref] = yield* gitLines(root, ['merge-base', ref, head])
