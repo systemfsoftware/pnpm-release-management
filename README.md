@@ -288,7 +288,7 @@ agree on what this cycle owns.
 | Workflow              | Inputs                                                        | Caller must grant                                           |
 | --------------------- | ------------------------------------------------------------- | ----------------------------------------------------------- |
 | `release.yml`         | `ci-workflow` (required), `artifacts-dir`                     | `contents: write`, `pull-requests: write`, `actions: write` |
-| `changeset-check.yml` | `base-sha`; `node-version`, `devshell`, `tools-ref` (ignored) | `contents: read`, `pull-requests: read`                     |
+| `changeset-check.yml` | `base-sha`, `node-version`; `devshell`, `tools-ref` (ignored) | `contents: read`, `pull-requests: read`                     |
 
 The `pull_request` runs of a pull request opened or updated with the workflow
 token wait for a maintainer's approval, so they never run on their own.
@@ -318,19 +318,21 @@ that cannot read it fails before running any tool. Both workflows need Nix:
 they install it on hosted runners, and a self-hosted runner must provide it.
 
 The changeset check installs nothing from the caller and enters no dev shell:
-it takes the caller's checkout, builds `release-tools` at this workflow's own
-revision with Nix, and runs `"$RELEASE_TOOLS/changeset-management" check`
-against that tree. Under `"gate": { "strategy": "turbo" }` the Turbo that
-judges the pull request is the platform binary the check fetches and verifies
-against the caller's lockfile (see [Configuration](#configuration)), so the job
-needs no node, no pnpm and no `node_modules`.
+it takes the caller's checkout and its pinned pnpm (with `node-version`, on
+hosted runners), builds `release-tools` at this workflow's own revision with
+Nix, and runs `"$RELEASE_TOOLS/changeset-management" check` against that tree.
+pnpm is there for member enumeration (`pnpm ls -r`), which reads the workspace
+manifest and needs no install. Under `"gate": { "strategy": "turbo" }` the
+Turbo that judges the pull request is the platform binary the check fetches
+and verifies against the caller's lockfile (see [Configuration](#configuration)),
+so the job needs no `node_modules`.
 
-`tools-ref`, `devshell` and `node-version` are accepted and ignored: `devshell`
-and `node-version` configured the install the check no longer performs, and
-`tools-ref` never did anything. Removing an input a caller passes fails that
-caller's workflow, so an input can be dropped only once no caller passes it: a
-caller still passes `tools-ref: main`, so drop it from the callers first. This
-repository's own CI calls the check with no inputs.
+`tools-ref` and `devshell` are accepted and ignored: `devshell` configured the
+install the check no longer performs, and `tools-ref` never did anything.
+Removing an input a caller passes fails that caller's workflow, so an input can
+be dropped only once no caller passes it: a caller still passes
+`tools-ref: main`, so drop it from the callers first. This repository's own CI
+calls the check with no inputs.
 
 ## Distribution through Nix
 

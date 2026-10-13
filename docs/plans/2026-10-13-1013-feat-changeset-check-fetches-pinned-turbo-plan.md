@@ -6,6 +6,7 @@ topic: changeset-check-fetches-pinned-turbo
 artifact_contract: ce-unified-plan/v1
 product_contract_source: ce-brainstorm
 execution: code
+supersedes: docs/plans/2026-10-13-0922-feat-changeset-check-fetches-pinned-turbo-plan.md
 ---
 
 # The changeset check fetches the consumer's pinned Turbo instead of installing the workspace - Plan
@@ -45,8 +46,8 @@ Today the `turbo` strategy only runs where the consumer's workspace is installed
 - **R2.** The fetched tarball's `sha512` must equal the integrity the lockfile records for that package, and the extracted binary's `--version` must print the pin. Otherwise `check` refuses with `TurboPinUnusable`, and the line names the package and both values (KTD5).
 - **R3.** Agent-readable lines stay stable: the render stem `turbo pin unusable: change-evidence: …` and the two lockfile-pin lines (`no lockfileVersion 9.0 document … pins 'turbo' as a root devDependency`, `N documents … pin 'turbo'`) keep their wording. Missing-intent refusals and the `paths gate refused:` line are unchanged. The three install-bound details whose fix (`pnpm install --frozen-lockfile`) no longer applies are replaced by fetch-bound details (KTD5).
 - **R4.** Turbo runs with telemetry disabled. It is given no remote-cache credentials and the change adds none; no networked cache is used.
-- **R5.** The reusable `changeset-check.yml` installs nothing from the caller and enters no dev shell. It keeps the checkout, the Nix install and the `release-tools` build at its own revision, then runs the check. The job carries `timeout-minutes: 60` and writes its wall time to the step summary (`one-stuck-job-backstop`).
-- **R6.** `devshell` and `node-version` stay accepted and ignored, like `tools-ref`, so a SHA-pinned caller that passes them keeps working when it bumps (README: "removing an input a caller passes fails that caller's workflow"). This repository's own `changeset.yml` stops passing `devshell`.
+- **R5.** The reusable `changeset-check.yml` installs nothing from the caller and enters no dev shell. It keeps the checkout, the caller's pinned package manager (`pnpm/action-setup` and `actions/setup-node` on hosted runners, `pnpm/setup` on self-hosted ones, exactly as before), the Nix install and the `release-tools` build at its own revision, then runs the check. The package manager stays because member enumeration (`WorkspaceStoreLive`) runs `pnpm ls -r --json --depth=-1`, which reads the workspace manifest and needs no install. The job carries `timeout-minutes: 60` and writes its wall time to the step summary (`one-stuck-job-backstop`).
+- **R6.** `devshell` stays accepted and ignored, like `tools-ref`, so a SHA-pinned caller that passes it keeps working when it bumps (README: "removing an input a caller passes fails that caller's workflow"). `node-version` keeps selecting the node that runs pnpm. This repository's own `changeset.yml` stops passing `devshell`.
 - **R7.** Repositories under `paths` behave exactly as before. No Turbo fetch happens for them.
 
 ### Acceptance Examples
@@ -57,7 +58,7 @@ Today the `turbo` strategy only runs where the consumer's workspace is installed
 - **AE4 (existing refusals).** A lockfile with no root `turbo` pin, and a lockfile stream where two documents pin it, refuse exactly as before. Covers R3.
 - **AE5 (paths).** `paths-under-turbo.integration.test.ts` passes unchanged. `deleted-packages.integration.test.ts` keeps its expectations; only its fake Turbo moves from `node_modules/.bin/turbo` to the served tarball (U1). Covers R7.
 - **AE6 (real CLI, no install).** The `release-tools` built by Nix, run as `changeset-management check origin/main` in a fresh clone of this repository with no `node_modules`, prints the verdict. Covers R1, R4.
-- **AE7 (retired inputs accepted).** `actionlint` passes on a scratch caller, kept outside the commit, that calls the local `changeset-check.yml` with `devshell: true` and `node-version: "24"`. actionlint checks a local reusable workflow's `with:` keys against its declared inputs, so pruning either input fails the check. Covers R6.
+- **AE7 (retired input accepted).** `actionlint` passes on a scratch caller, kept outside the commit, that calls the local `changeset-check.yml` with `devshell: true` and `node-version: "24"`. actionlint checks a local reusable workflow's `with:` keys against its declared inputs, so pruning either input fails the check. Covers R6.
 
 ### Scope Boundaries
 
@@ -83,7 +84,7 @@ Today the `turbo` strategy only runs where the consumer's workspace is installed
 
   These replace `turbo not present at …`, `installed turbo … does not match the lockfile pin …` and `turbo in <cwd> self-reports version …`. All three named `pnpm install --frozen-lockfile` as the fix, which is now wrong. The self-report check is dropped: both dry runs use the binary whose `--version` was already verified.
 - **KTD6. Telemetry off.** `runProcess` gains an optional `env`, passed with `extendEnv: true` so it adds to the parent environment rather than replacing it. Turbo is spawned with `TURBO_TELEMETRY_DISABLED=1` (Turbo's documented opt-out). The notice Turbo prints when telemetry first turns on has broken `--dry=json` output before (vercel/turborepo#7185).
-- **KTD7. Retired inputs stay declared.** `devshell` and `node-version` are described as ignored. The setup-node, pnpm, userns, plain-install and bootstrap steps are deleted.
+- **KTD7. Retired input stays declared.** `devshell` is described as ignored. The userns, plain-install and bootstrap steps and the dev-shell branch are deleted. The package-manager setup steps stay unchanged (R5).
 - **KTD8. Intent.** One `.changeset/` intent names `@systemfsoftware/process-adapter` at `major`: its exported `ChangeEvidenceLive` layer gains the `RegistryPort` requirement and its refusal details change. `.changeset/command-unstartable.md` classifies a consumer-visible adapter change the same way. `changeset-management` is private and needs no intent.
 
 ### Test admission (test-layer-selection, default refuse)
@@ -97,7 +98,7 @@ Today the `turbo` strategy only runs where the consumer's workspace is installed
 1. _Every lockfile records the runner's platform package._ pnpm writes every optional platform package of `turbo` into `packages:`. A lockfile without the entry refuses with the KTD5 line instead of guessing.
 2. _The tarball's top directory is `package/`._ It is not (`turbo-linux-x64/`); the entry is matched as `<any>/bin/turbo`.
 3. _An install-free Turbo judges like an installed one._ Measured: task hashes are identical with and without the full `PATH`, and the base-side dry run already ran in a worktree with no `node_modules` before this change.
-4. _The check binary needs node._ Checked against the Nix-built `release-tools` before U2 removes setup-node.
+4. _The check needs neither node nor pnpm._ Half wrong. The Nix-built `changeset-management` is a standalone ELF executable, so it needs no node of its own. But its member enumeration spawns `pnpm ls -r`. The pull request's first Changeset run, with the package-manager steps deleted, failed with `pnpm could not be started: ENOENT (pnpm ls -r --json --depth=-1)`, and the same binary run with only `git` on `PATH` reproduced it locally. Those steps stay (R5).
 5. _Self-hosted runners reach the npm registry._ They already reach GitHub and the Nix cache; an unreachable registry fails with the `cannot fetch` line rather than a skipped gate.
 6. _pnpm 12 streams put `packages:` in the importer's document._ The pin and integrity are read from the same document, and the stream fixture covers it.
 
@@ -113,7 +114,7 @@ Today the `turbo` strategy only runs where the consumer's workspace is installed
 #### U2. Install-free reusable check
 
 - **Files:** `.github/workflows/changeset-check.yml`, `.github/workflows/changeset.yml`, `README.md`, `.changeset/` intent (KTD8).
-- **Approach:** delete the setup-node, pnpm, userns, plain-install and bootstrap steps and the dev-shell branch of the check step. Mark `devshell` and `node-version` ignored. Add `timeout-minutes: 60`, a start-time step and a wall-time summary step. `changeset.yml` drops `devshell: true`. README's input table and CI section describe the install-free check and the fetched Turbo.
+- **Approach:** delete the userns, plain-install and bootstrap steps and the dev-shell branch of the check step, and keep the package-manager setup steps. Mark `devshell` ignored. Add `timeout-minutes: 60`, a start-time step and a wall-time summary step. `changeset.yml` drops `devshell: true`. README's input table and CI section describe the install-free check and the fetched Turbo.
 - **Verification:** `actionlint` exits 0. AE7 with a scratch caller. AE1 on the pull request's own Changeset lane; AE6 locally.
 
 ### Verification Contract
