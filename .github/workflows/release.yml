@@ -21,6 +21,10 @@ on:
         required: false
         type: string
         default: '"ubuntu-latest"'
+    outputs:
+      phase:
+        description: the phase the plan derived (release, version or none; empty when plan failed)
+        value: ${{ jobs.plan.outputs.phase }}
 
 permissions: {}
 
