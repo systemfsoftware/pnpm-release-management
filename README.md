@@ -296,6 +296,10 @@ version is not yet tagged, otherwise `version` when intents are pending, and
 gates its own jobs on it through `needs.<caller-job>.outputs.phase`, for
 example a job that should run only on a push that releases.
 
+Every job in both workflows stops after 60 minutes, so a stuck job frees its
+runner instead of holding it for GitHub's 360, and writes its wall time to the
+step summary.
+
 The `pull_request` runs of a pull request opened or updated with the workflow
 token wait for a maintainer's approval, so they never run on their own.
 `release pr --output <file>` appends `outcome` (`created`, `updated`, `closed`
