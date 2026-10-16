@@ -82,6 +82,32 @@ export const resolveExpressions = (
     return resolved
   })
 
+export const jobOutputsOf = (
+  workflow: Workflow,
+  job: string,
+  lookup: (expression: string) => string | undefined,
+): Record<string, string> =>
+  Object.fromEntries(
+    Object.entries(workflow.jobs[job]?.outputs ?? {}).map((
+      [name, value],
+    ) => [name, resolveExpressions(value, lookup)]),
+  )
+
+export const callOutputsOf = (
+  workflow: Workflow,
+  jobs: Readonly<Record<string, Readonly<Record<string, string>>>>,
+): Record<string, string> =>
+  Object.fromEntries(
+    Object.entries(workflow.on.workflow_call?.outputs ?? {}).map(([name, { value }]) => [
+      name,
+      resolveExpressions(value, (expression) => {
+        const output = expression.match(/^jobs\.([\w-]+)\.outputs\.([\w-]+)$/)
+        if (output?.[1] === undefined || output[2] === undefined) return undefined
+        return jobs[output[1]]?.[output[2]]
+      }),
+    ]),
+  )
+
 const truthy = (value: string): boolean => value !== '' && value !== 'false' && value !== '0'
 
 const operandOf = (text: string, lookup: (expression: string) => string | undefined): string => {
