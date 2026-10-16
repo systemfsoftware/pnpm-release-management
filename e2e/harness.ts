@@ -1,6 +1,8 @@
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers'
 import {
+  callOutputsOf,
   conditionHolds,
+  jobOutputsOf,
   readWorkflow,
   resolveExpressions,
   runsAfterFailure,
@@ -148,6 +150,11 @@ export interface StepResult extends ExecResult {
   readonly outputs: Readonly<Record<string, string>>
 }
 
+export interface JobRun {
+  readonly steps: ReadonlyArray<StepResult>
+  readonly outputs: Readonly<Record<string, string>>
+}
+
 export interface JobOptions {
   readonly workflow?: WorkflowFile
   readonly inputs?: Readonly<Record<string, string>>
@@ -179,7 +186,7 @@ export interface World {
   job(
     name: string,
     options?: JobOptions,
-  ): Promise<ReadonlyArray<StepResult>>
+  ): Promise<JobRun>
   write(path: string, content: string): Promise<void>
   read(path: string): Promise<string>
   github<T>(path: string, decode: (input: unknown) => T): Promise<GitHubResponse<T>>
@@ -216,6 +223,15 @@ const WORKFLOWS: Readonly<Record<WorkflowFile, Workflow>> = {
   'changeset-check.yml': await readWorkflow('changeset-check.yml'),
 }
 const RELEASE_TOOL_STEPS = toolStepsOf(WORKFLOWS['release.yml'])
+
+export const callerOutputs = (
+  workflow: WorkflowFile,
+  jobs: Readonly<Record<string, JobRun>>,
+): Record<string, string> =>
+  callOutputsOf(
+    WORKFLOWS[workflow],
+    Object.fromEntries(Object.entries(jobs).map(([name, run]) => [name, run.outputs])),
+  )
 
 const outputsOf = (text: string): Record<string, string> =>
   Object.fromEntries(
@@ -307,7 +323,7 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
   const job = async (
     name: string,
     { workflow = 'release.yml', inputs = {} }: JobOptions = {},
-  ): Promise<ReadonlyArray<StepResult>> => {
+  ): Promise<JobRun> => {
     await must(RUNNER_SETUP)
     const githubEnv = `${STEP_DIR}/${name}.env`
     const summary = `${STEP_DIR}/${name}.summary`
@@ -354,7 +370,7 @@ export const makeWorld = (container: StartedTestContainer, listener: Listener): 
       jobEnv = outputsOf((await must(`cat ${quote(githubEnv)}`)).stdout)
       if (result.code !== 0) failed = true
     }
-    return results
+    return { steps: results, outputs: jobOutputsOf(WORKFLOWS[workflow], name, lookup) }
   }
 
   const curlJson = async (

@@ -21,6 +21,10 @@ on:
         required: false
         type: string
         default: '"ubuntu-latest"'
+    outputs:
+      phase:
+        description: the phase the plan derived (release, version or none; empty when plan failed)
+        value: ${{ jobs.plan.outputs.phase }}
 
 permissions: {}
 
@@ -28,6 +32,7 @@ jobs:
   plan:
     name: plan · derive phase
     runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 60
     permissions:
       contents: read
     outputs:
@@ -35,6 +40,10 @@ jobs:
       pending_intents: ${{ steps.plan.outputs.pending_intents }}
       this_cycle: ${{ steps.plan.outputs.this_cycle }}
     steps:
+      - &start
+        id: start
+        run: echo "at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -62,16 +71,27 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: nix develop --command "$RELEASE_TOOLS/github-release-management" plan --tarballs "$TARBALLS" --output "$GITHUB_OUTPUT"
 
+      - &wall-time
+        name: Record the job's wall time
+        if: always()
+        env:
+          START: ${{ steps.start.outputs.at }}
+        run: |
+          echo "wall time: $(( $(date +%s) - START ))s" >> "$GITHUB_STEP_SUMMARY"
+
   version:
     name: version · open release PR
     needs: plan
     if: needs.plan.outputs.phase == 'version'
     runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 60
     permissions:
       contents: write
       pull-requests: write
       actions: write
     steps:
+      - *start
+
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -103,14 +123,19 @@ jobs:
             *) echo "::error::pr reported no outcome; cannot tell whether a release PR needs CI"; exit 1 ;;
           esac
 
+      - *wall-time
+
   release:
     name: release · tag · GitHub releases
     needs: plan
     if: needs.plan.outputs.phase == 'release'
     runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 60
     permissions:
       contents: write
     steps:
+      - *start
+
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -142,3 +167,5 @@ jobs:
         run: |
           nix develop --command "$RELEASE_TOOLS/github-release-management" release \
             --captured "${{ inputs.artifacts-dir }}/captured.json"
+
+      - *wall-time

@@ -285,10 +285,20 @@ agree on what this cycle owns.
 
 ## CI
 
-| Workflow              | Inputs                                                        | Caller must grant                                           |
-| --------------------- | ------------------------------------------------------------- | ----------------------------------------------------------- |
-| `release.yml`         | `ci-workflow` (required), `artifacts-dir`                     | `contents: write`, `pull-requests: write`, `actions: write` |
-| `changeset-check.yml` | `base-sha`, `node-version`; `devshell`, `tools-ref` (ignored) | `contents: read`, `pull-requests: read`                     |
+| Workflow              | Inputs                                                        | Outputs | Caller must grant                                           |
+| --------------------- | ------------------------------------------------------------- | ------- | ----------------------------------------------------------- |
+| `release.yml`         | `ci-workflow` (required), `artifacts-dir`                     | `phase` | `contents: write`, `pull-requests: write`, `actions: write` |
+| `changeset-check.yml` | `base-sha`, `node-version`; `devshell`, `tools-ref` (ignored) |         | `contents: read`, `pull-requests: read`                     |
+
+`phase` is what the `plan` job derived from repository state: `release` when a
+version is not yet tagged, otherwise `version` when intents are pending, and
+`none` when there is nothing to do. It is empty when `plan` failed. A caller
+gates its own jobs on it through `needs.<caller-job>.outputs.phase`, for
+example a job that should run only on a push that releases.
+
+Every job in both workflows stops after 60 minutes, so a stuck job frees its
+runner instead of holding it for GitHub's 360, and writes its wall time to the
+step summary.
 
 The `pull_request` runs of a pull request opened or updated with the workflow
 token wait for a maintainer's approval, so they never run on their own.

@@ -4,6 +4,7 @@ import * as S from 'effect/Schema'
 import { expect } from 'vitest'
 import { headSha, MEMBERS, packTarballs, setupFixture } from '../fixture.js'
 import {
+  callerOutputs,
   CI_WORKFLOW,
   FIXTURE,
   GH_DISPATCHES,
@@ -162,7 +163,7 @@ const runPhases = async (session: Session): Promise<void> => {
   await session.phase(
     'changeset check job runs its own revision of the tools with no install and no dev shell',
     async (world) => {
-      const steps = await world.job('require-intent', {
+      const { steps } = await world.job('require-intent', {
         workflow: 'changeset-check.yml',
         inputs: { 'base-sha': base, devshell: 'true' },
       })
@@ -186,6 +187,18 @@ const runPhases = async (session: Session): Promise<void> => {
     expect(output).toContain('pending_intents=1')
     expect(output).toContain('this_cycle=0')
     expect(output).toContain('phase=version')
+
+    await packTarballs(world, WORKSPACE_TARBALLS)
+    const plan = await world.job('plan')
+    expect(plan.steps.filter((step) => step.code !== 0)).toEqual([])
+    expect(plan.steps.map((step) => step.step)).toEqual([
+      'start',
+      "Build the release tools at this workflow's own revision",
+      "Pack the workspace through the caller's flake",
+      'plan',
+      "Record the job's wall time",
+    ])
+    expect(callerOutputs('release.yml', { plan })).toEqual({ phase: 'version' })
   })
 
   await session.phase('version step bumps surfaces, writes changelogs, consumes intents', async (world) => {
@@ -311,8 +324,16 @@ const runPhases = async (session: Session): Promise<void> => {
       )
       expect(created.code).toBe(0)
 
-      const steps = await world.job('version')
+      const { steps } = await world.job('version')
       expect(steps.filter((step) => step.code !== 0)).toEqual([])
+      expect(steps.map((step) => step.step)).toEqual([
+        'start',
+        "Build the release tools at this workflow's own revision",
+        'Bump every package and version surface, consuming the intents',
+        'pr',
+        "Run the caller's CI on the release PR",
+        "Record the job's wall time",
+      ])
       const opened = steps.find((step) => step.step === 'pr')
       expect(`${opened?.stdout}${opened?.stderr}`).toContain('created release PR #')
       expect(await world.read(GH_DISPATCHES)).toBe(`workflow run ${CI_WORKFLOW} --ref changeset-release/main\n`)
@@ -325,7 +346,7 @@ const runPhases = async (session: Session): Promise<void> => {
   )
 
   await session.phase('version job closes the release PR and dispatches nothing', async (world) => {
-    const steps = await world.job('version')
+    const { steps } = await world.job('version')
     expect(steps.filter((step) => step.code !== 0)).toEqual([])
     const closed = steps.find((step) => step.step === 'pr')
     expect(`${closed?.stdout}${closed?.stderr}`).toContain('closed release PR #')
@@ -447,17 +468,19 @@ const runPhases = async (session: Session): Promise<void> => {
     )
     release120 = (await world.must('git rev-parse HEAD', { cwd: FIXTURE })).stdout.trim()
 
-    const planned = await world.job('plan')
-    expect(planned.filter((step) => step.code !== 0)).toEqual([])
-    expect(planned.find((step) => step.step === 'plan')?.outputs).toMatchObject({ phase: 'release' })
+    const plan = await world.job('plan')
+    expect(plan.steps.filter((step) => step.code !== 0)).toEqual([])
+    expect(callerOutputs('release.yml', { plan })).toEqual({ phase: 'release' })
     const released = await world.job('release')
-    expect(released.filter((step) => step.code !== 0)).toEqual([])
-    expect(released.map((step) => step.step)).toEqual([
+    expect(released.steps.filter((step) => step.code !== 0)).toEqual([])
+    expect(released.steps.map((step) => step.step)).toEqual([
+      'start',
       "Build the release tools at this workflow's own revision",
       "Pack the workspace through the caller's flake",
       'Capture this cycle',
       "Tag released versions, recording each tarball's integrity",
       'GitHub Releases from the authored changelogs',
+      "Record the job's wall time",
     ])
 
     const tags = await world.must('git ls-remote --tags origin', { cwd: FIXTURE })
@@ -466,8 +489,9 @@ const runPhases = async (session: Session): Promise<void> => {
     const notes = await fetchRelease(world, `@e2e/alpha@v${alphaNext}`)
     expect(notes.status).toBe(200)
 
-    const settled = await world.tool('github-release-management', 'plan', `--tarballs ${releasing120}`)
-    expect(`${settled.stdout}${settled.stderr}`).toContain('phase=none')
+    const settled = await world.job('plan')
+    expect(settled.steps.filter((step) => step.code !== 0)).toEqual([])
+    expect(callerOutputs('release.yml', { plan: settled })).toEqual({ phase: 'none' })
   })
 
   await session.phase('a released identity is immutable and a reverted manifest is refused', async (world) => {
