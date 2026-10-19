@@ -20,7 +20,7 @@
   },
   "license": "Apache-2.0",
   "name": "pnpm-release-management",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/systemfsoftware/pnpm-release-management.git"
