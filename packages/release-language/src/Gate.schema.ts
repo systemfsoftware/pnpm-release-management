@@ -79,3 +79,6 @@ export const EvidenceRefusal = S.Union([
   TurboDryRunDrifted,
 ])
 export type EvidenceRefusal = S.Schema.Type<typeof EvidenceRefusal>
+
+export const ChangeEvidenceRefusal = S.Union([GateRefusal, EvidenceRefusal])
+export type ChangeEvidenceRefusal = S.Schema.Type<typeof ChangeEvidenceRefusal>

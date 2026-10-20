@@ -258,6 +258,7 @@ no git config.
 | `release pr`        | Commits the bumped tree to the release branch, opens, refreshes, or closes the release PR                     |
 | `release adopt`     | Records every pre-adoption release tag's bytes in the adoption ledger                                         |
 | `release plan`      | Derives the release phase from repository state                                                               |
+| `release digests`   | Lists, or with tarballs compares, released packages a change leaves unreleased                                |
 | `release tag`       | Captures the cycle, then pushes one tag per released package                                                  |
 | `release release`   | Creates GitHub Releases from the generated changelogs                                                         |
 | `hooks pre-commit`  | Formats and checks the staged set before a commit lands                                                       |
@@ -273,6 +274,7 @@ Flags worth knowing:
 | ------------------- | --------------------------------------------------------------------------------------------- |
 | `changeset check`   | `<base-sha-or-ref>`, `--base`, `--skip-liveness`                                              |
 | `release plan`      | `--output <file>`, `--deferred <file>`, `--remote <name>`                                     |
+| `release digests`   | `<base-sha-or-ref>`, `--tarballs <dir>`, `--output <file>`, `--remote <name>`                 |
 | `release adopt`     | `--registry <url>`, `--output <file>`, `--remote <name>`                                      |
 | `release tag`       | `--captured <file>`, `--output <file>`, `--exclude`, `--json`, `--dry-run`, `--remote <name>` |
 | `release release`   | `--captured <file>`, `--assert`, `--dry-run`                                                  |
@@ -336,6 +338,18 @@ manifest and needs no install. Under `"gate": { "strategy": "turbo" }` the
 Turbo that judges the pull request is the platform binary the check fetches
 and verifies against the caller's lockfile (see [Configuration](#configuration)),
 so the job needs no `node_modules`.
+
+After the intent verdict, the check runs `github-release-management digests`
+against the same base. It lists every released package that the change evidence
+names and the pending intents do not release: a package with a tag at its
+current version whose rows are all `none`. When that list is empty, the job
+builds nothing more. Otherwise it builds the caller's `.#workspace-tarballs`,
+the output `release.yml` tags from, and compares each listed package's tarball
+with the integrity its release recorded, by `release plan`'s rules. A changed
+tarball fails with `tag digests refused: <package>@v<version> changed without a
+release`, naming both integrities, the first differing file and the fix: a real
+bump in the intent, or reverting the change. A caller whose flake has no
+`workspace-tarballs` output fails at that step with a line saying to add it.
 
 `tools-ref` and `devshell` are accepted and ignored: `devshell` configured the
 install the check no longer performs, and `tools-ref` never did anything.

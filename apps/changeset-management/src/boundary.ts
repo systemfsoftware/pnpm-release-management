@@ -1,13 +1,6 @@
 import { LedgerLive } from '@systemfsoftware/adoption-adapter'
 import { resolveWorkspaceRoot } from '@systemfsoftware/cli-adapter'
-import {
-  type Gate,
-  GitRef,
-  type ReleaseConfig,
-  ReleaseConfigStore,
-  type RepoRoot,
-  type TaskName,
-} from '@systemfsoftware/release-language'
+import { GitRef, type ReleaseConfig, ReleaseConfigStore, type RepoRoot } from '@systemfsoftware/release-language'
 import { ChangesetStoreLive, WorkspaceStoreLive } from '@systemfsoftware/workspace-adapter'
 import { Effect, Layer, Option } from 'effect'
 import * as S from 'effect/Schema'
@@ -32,11 +25,6 @@ export const storesOf = (workspace: Workspace) =>
     ChangesetStoreLive({ root: workspace.root, changesetDir: workspace.release.changesetDir }),
     LedgerLive(workspace.root),
   )
-
-export const taskOf = (gate: Gate): TaskName | undefined => {
-  if (gate.strategy === 'turbo') return gate.task
-  return undefined
-}
 
 export const baseRefOf = (
   positional: Option.Option<string>,
