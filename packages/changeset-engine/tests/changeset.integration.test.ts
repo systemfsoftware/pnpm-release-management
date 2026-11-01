@@ -17,6 +17,7 @@ import * as Match from 'effect/Match'
 import { expect } from 'vitest'
 import { fakeChangeEvidencePort } from './__fixtures__/FakeChangeEvidencePort.js'
 import { fakeChangesetStore } from './__fixtures__/FakeChangesetStore.js'
+import { fakeLedgerPort } from './__fixtures__/FakeLedgerPort.js'
 import { fakeWorkspaceStore } from './__fixtures__/FakeWorkspaceStore.js'
 
 const Feature = makeFeature({ it, layer })
@@ -53,8 +54,9 @@ Feature('Changeset intents').body(({ scenario }) => {
     const touched = [PackageName.make('@s/b')]
     const live = Layer.mergeAll(
       fakeWorkspaceStore(members),
-      fakeChangeEvidencePort({ members, touched, raw: null }),
+      fakeChangeEvidencePort({ members, touched, deleted: [], raw: null }),
       fakeChangesetStore({ intents: [] }).layer,
+      fakeLedgerPort(),
     )
     const runnable = Cell.provide(live)(gateChangesCell)
     scenario(
@@ -80,11 +82,43 @@ Feature('Changeset intents').body(({ scenario }) => {
   }
 
   {
+    const deleted = [PackageName.make('@s/gone')]
+    const live = Layer.mergeAll(
+      fakeWorkspaceStore(members),
+      fakeChangeEvidencePort({ members, touched: [], deleted, raw: null }),
+      fakeChangesetStore({ intents: [] }).layer,
+      fakeLedgerPort(),
+    )
+    const runnable = Cell.provide(live)(gateChangesCell)
+    scenario(
+      'A package deleted on the head needs no intent and is listed as deleted',
+      { scenarioLayer: live },
+      Gherkin.Do.pipe(
+        Given('a change that deletes a package and records no intent')(
+          'setup',
+          () => Effect.succeed({ runnable }),
+        ),
+        When('the gate examines the touched packages')('report', (s) =>
+          Cell.run(s.setup.runnable, {
+            root: RepoRoot.make('/repo'),
+            ref: GitRef.make('HEAD'),
+            strategy: 'paths',
+          })),
+        Then('the gate passes and the report names the deleted package')((s) => {
+          expect(s.report.ok).toBe(true)
+          expect(s.report.text).toContain('1 package(s) deleted, nothing left to release — @s/gone')
+        }),
+      ),
+    )
+  }
+
+  {
     const touched = [PackageName.make('@s/a')]
     const live = Layer.mergeAll(
       fakeWorkspaceStore(members),
-      fakeChangeEvidencePort({ members, touched, raw: null }),
+      fakeChangeEvidencePort({ members, touched, deleted: [], raw: null }),
       fakeChangesetStore({ intents: [intent('fix-a', [intentEntry('@s/a', 'patch')])] }).layer,
+      fakeLedgerPort(),
     )
     const runnable = Cell.provide(live)(gateChangesCell)
     scenario(
@@ -114,8 +148,9 @@ Feature('Changeset intents').body(({ scenario }) => {
     const touched = [PackageName.make('@s/a')]
     const live = Layer.mergeAll(
       fakeWorkspaceStore(members),
-      fakeChangeEvidencePort({ members, touched, raw: null }),
+      fakeChangeEvidencePort({ members, touched, deleted: [], raw: null }),
       fakeChangesetStore({ intents: [intent('other', [intentEntry('@s/b', 'none')])] }).layer,
+      fakeLedgerPort(),
     )
     const runnable = Cell.provide(live)(gateChangesCell)
     scenario(
@@ -141,8 +176,9 @@ Feature('Changeset intents').body(({ scenario }) => {
   {
     const live = Layer.mergeAll(
       fakeWorkspaceStore(members),
-      fakeChangeEvidencePort({ members, touched: [], raw: null }),
+      fakeChangeEvidencePort({ members, touched: [], deleted: [], raw: null }),
       fakeChangesetStore({ intents: [intent('ghost', [intentEntry('ghost-pkg', 'patch')])] }).layer,
+      fakeLedgerPort(),
     )
     const runnable = Cell.provide(live)(gateChangesCell)
     scenario(
@@ -167,8 +203,9 @@ Feature('Changeset intents').body(({ scenario }) => {
   {
     const live = Layer.mergeAll(
       fakeWorkspaceStore(members),
-      fakeChangeEvidencePort({ members, touched: [], raw: null }),
+      fakeChangeEvidencePort({ members, touched: [], deleted: [], raw: null }),
       fakeChangesetStore({ intents: [intent('ghost', [intentEntry('ghost-pkg', 'patch')])] }).layer,
+      fakeLedgerPort(),
     )
     const runnable = Cell.provide(live)(gateChangesCell)
     scenario(

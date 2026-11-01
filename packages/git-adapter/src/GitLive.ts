@@ -9,16 +9,18 @@ import {
   GitPort,
   GitRef,
   OwnerName,
+  PackageManifest,
   PackageName,
-  PullRequestBodyUnreadable,
+  PullRequestGitFailed,
   PullRequestHeadInvalid,
+  PullRequestTreeUnreadable,
   RelativePath,
   ReleaseTag,
   RepoName,
   StagedPath,
   StagedStateUnreadable,
-  TagCapturedMalformed,
   TagExcludedMalformed,
+  TagGitFailed,
 } from '@systemfsoftware/release-language'
 import type {
   GateRefusal,
@@ -27,6 +29,8 @@ import type {
   RemoteName,
   RepoSlug,
   StagedChecksRefusal,
+  TaggedManifest,
+  TaggedTree,
   TagRefusal,
 } from '@systemfsoftware/release-language'
 import { Effect, Layer, Option, Result } from 'effect'
@@ -37,9 +41,17 @@ import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 const currentBranchPath = FsPath.make('git:current-branch')
 const headShaPath = FsPath.make('git:head-sha')
 const remoteTagsPath = FsPath.make('git:remote-tags')
-const commitPath = FsPath.make('git:commit')
-const pushTagsPath = FsPath.make('git:push-tags')
-const writeTagPath = FsPath.make('git:write-tag')
+const RELEASE_BOT_IDENTITY: ReadonlyArray<string> = [
+  '-c',
+  'user.name=github-actions[bot]',
+  '-c',
+  'user.email=41898282+github-actions[bot]@users.noreply.github.com',
+]
+
+const gitFailed = (args: ReadonlyArray<string>) => (stderr: string): PullRequestGitFailed =>
+  PullRequestGitFailed.make({ command: `git ${args.join(' ')}`, stderr: stderr.trim() })
+const tagGitFailed = (args: ReadonlyArray<string>) => (stderr: string): TagGitFailed =>
+  TagGitFailed.make({ command: `git ${args.join(' ')}`, stderr: stderr.trim() })
 const repoSlugPath = FsPath.make('git:repo-slug')
 const diffPath = RelativePath.make('git:diff')
 
@@ -88,6 +100,12 @@ const declaredSlug = (): Option.Option<RepoSlug> => {
 
 const nonEmptyLines = (text: string): ReadonlyArray<string> =>
   text.split('\n').map((line) => line.trim()).filter((line) => line.length > 0)
+
+const annotationOf = (tagObject: string): string => {
+  const separator = tagObject.indexOf('\n\n')
+  if (separator === -1) return tagObject.trimEnd()
+  return tagObject.slice(separator + 2).trimEnd()
+}
 
 const listedTags = (text: string): ReadonlyArray<string> =>
   text.split('\n')
@@ -148,7 +166,7 @@ const makeGitPort = (
   ): Effect.Effect<A, TagRefusal> =>
     capture<A, TagRefusal>(
       args,
-      () => TagCapturedMalformed.make({ path }),
+      tagGitFailed(args),
       (stdout) =>
         Result.mapError(
           S.decodeUnknownResult(schema)(shape(stdout)),
@@ -158,9 +176,10 @@ const makeGitPort = (
 
   const readRepoSlug = (): Effect.Effect<RepoSlug, TagRefusal> =>
     Effect.gen(function*() {
-      const captured = yield* git(['remote', 'get-url', 'origin'])
+      const args = ['remote', 'get-url', 'origin']
+      const captured = yield* git(args)
       if (Result.isFailure(captured)) {
-        return yield* Effect.fail(TagCapturedMalformed.make({ path: repoSlugPath }))
+        return yield* Effect.fail(tagGitFailed(args)(captured.failure))
       }
       const slug = remoteSlug(captured.success.trim())
       if (Option.isNone(slug)) {
@@ -191,10 +210,31 @@ const makeGitPort = (
       remote: RemoteName,
     ): Effect.Effect<ReadonlyArray<ReleaseTag>, TagRefusal> =>
       tagValue(['ls-remote', '--tags', remote], remoteTagsPath, S.Array(ReleaseTag), listedTags),
-    commitAll: (message: PrTitle): Effect.Effect<CommitSha, PullRequestRefusal> =>
+    trackedChanges: (): Effect.Effect<Count, PullRequestRefusal> =>
+      capture(
+        ['status', '--porcelain', '--untracked-files=no'],
+        (failure) => PullRequestTreeUnreadable.make({ reason: failure.trim() }),
+        (stdout) => Result.succeed(Count.make(nonEmptyLines(stdout).length)),
+      ),
+    commitRelease: (
+      message: PrTitle,
+      created: ReadonlyArray<RelativePath>,
+    ): Effect.Effect<CommitSha, PullRequestRefusal> =>
       Effect.gen(function*() {
-        yield* run(['add', '-A'], () => PullRequestBodyUnreadable.make({ path: commitPath }))
-        yield* run(['commit', '-m', message], () => PullRequestBodyUnreadable.make({ path: commitPath }))
+        const step = (args: ReadonlyArray<string>) => run(args, gitFailed(args))
+        yield* step(['add', '--update'])
+        if (created.length > 0) {
+          const listArgs = ['--literal-pathspecs', 'ls-files', '-z', '--others', '--exclude-standard', '--', ...created]
+          const untracked = yield* capture(
+            listArgs,
+            gitFailed(listArgs),
+            (stdout) => Result.succeed(stdout.split('\0').filter((path) => path.length > 0)),
+          )
+          if (untracked.length > 0) {
+            yield* step(['--literal-pathspecs', 'add', '--', ...untracked])
+          }
+        }
+        yield* step([...RELEASE_BOT_IDENTITY, 'commit', '-m', message])
         return yield* capture(
           ['rev-parse', 'HEAD'],
           () => PullRequestHeadInvalid.make({ branch: headRef }),
@@ -208,19 +248,22 @@ const makeGitPort = (
     pushBranch: (
       branch: GitRef,
       remote: RemoteName,
-    ): Effect.Effect<void, PullRequestRefusal> =>
-      run(['push', '--force', remote, `HEAD:refs/heads/${branch}`], () => PullRequestHeadInvalid.make({ branch })),
+    ): Effect.Effect<void, PullRequestRefusal> => {
+      const args = ['push', '--force', remote, `HEAD:refs/heads/${branch}`]
+      return run(args, gitFailed(args))
+    },
     deleteRemoteBranch: (
       branch: GitRef,
       remote: RemoteName,
     ): Effect.Effect<BranchDeleted, PullRequestRefusal> =>
       Effect.gen(function*() {
-        const captured = yield* git(['push', remote, '--delete', branch])
+        const args = ['push', remote, '--delete', branch]
+        const captured = yield* git(args)
         if (Result.isFailure(captured)) {
           if (branchAlreadyGone(captured.failure)) {
             return BranchDeleted.make({ branch, deleted: false })
           }
-          return yield* Effect.fail(PullRequestHeadInvalid.make({ branch }))
+          return yield* Effect.fail(gitFailed(args)(captured.failure))
         }
         return BranchDeleted.make({ branch, deleted: true })
       }),
@@ -232,14 +275,86 @@ const makeGitPort = (
         if (tags.length === 0) {
           return Count.make(0)
         }
-        yield* run(['push', remote, ...tags.map((tag) => `refs/tags/${tag}`)], () =>
-          TagCapturedMalformed.make({ path: pushTagsPath }))
+        const args = ['push', remote, ...tags.map((tag) => `refs/tags/${tag}`)]
+        yield* run(args, tagGitFailed(args))
         return Count.make(tags.length)
       }),
-    writeTag: (tag: ReleaseTag): Effect.Effect<ReleaseTag, TagRefusal> =>
+    writeTag: (tag: ReleaseTag, message: string): Effect.Effect<ReleaseTag, TagRefusal> =>
       Effect.gen(function*() {
-        yield* run(['tag', tag], () => TagCapturedMalformed.make({ path: writeTagPath }))
+        const args = [...RELEASE_BOT_IDENTITY, 'tag', '-a', tag, '-m', message]
+        yield* run(args, tagGitFailed(args))
         return tag
+      }),
+    tagAnnotation: (
+      remote: RemoteName,
+      tag: ReleaseTag,
+    ): Effect.Effect<Option.Option<string>, TagRefusal> =>
+      Effect.gen(function*() {
+        const fetchArgs = ['fetch', '--force', '--no-tags', remote, `+refs/tags/${tag}:refs/tags/${tag}`]
+        yield* run(fetchArgs, tagGitFailed(fetchArgs))
+        const kindArgs = ['cat-file', '-t', `refs/tags/${tag}`]
+        const kind = yield* git(kindArgs)
+        if (Result.isFailure(kind)) {
+          return yield* Effect.fail(tagGitFailed(kindArgs)(kind.failure))
+        }
+        if (kind.success.trim() !== 'tag') {
+          return Option.none()
+        }
+        const bodyArgs = ['cat-file', '-p', `refs/tags/${tag}`]
+        const body = yield* git(bodyArgs)
+        if (Result.isFailure(body)) {
+          return yield* Effect.fail(tagGitFailed(bodyArgs)(body.failure))
+        }
+        return Option.some(annotationOf(body.success))
+      }),
+    tagCommit: (
+      remote: RemoteName,
+      tag: ReleaseTag,
+    ): Effect.Effect<Option.Option<CommitSha>, TagRefusal> =>
+      Effect.gen(function*() {
+        const fetchArgs = ['fetch', '--force', '--no-tags', remote, `+refs/tags/${tag}:refs/tags/${tag}`]
+        yield* run(fetchArgs, tagGitFailed(fetchArgs))
+        const peeled = yield* git(['rev-parse', '--verify', `refs/tags/${tag}^{commit}`])
+        if (Result.isFailure(peeled)) {
+          return Option.none()
+        }
+        return S.decodeUnknownOption(CommitSha)(peeled.success.trim())
+      }),
+    tagTree: (
+      remote: RemoteName,
+      tag: ReleaseTag,
+    ): Effect.Effect<Option.Option<TaggedTree>, TagRefusal> =>
+      Effect.gen(function*() {
+        const fetchArgs = ['fetch', '--force', '--no-tags', remote, `+refs/tags/${tag}:refs/tags/${tag}`]
+        yield* run(fetchArgs, tagGitFailed(fetchArgs))
+        const peeled = yield* git(['rev-parse', '--verify', `refs/tags/${tag}^{commit}`])
+        if (Result.isFailure(peeled)) {
+          return Option.none()
+        }
+        const decoded = S.decodeUnknownOption(CommitSha)(peeled.success.trim())
+        if (Option.isNone(decoded)) {
+          return Option.none()
+        }
+        const commit = decoded.value
+        const listedArgs = ['ls-tree', '-r', '--name-only', commit]
+        const listed = yield* git(listedArgs)
+        if (Result.isFailure(listed)) {
+          return yield* Effect.fail(tagGitFailed(listedArgs)(listed.failure))
+        }
+        const paths = listed.success
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line.endsWith('package.json') && !line.includes('node_modules/'))
+        const manifests: Array<TaggedManifest> = []
+        for (const file of paths) {
+          const shown = yield* git(['show', `${commit}:${file}`])
+          if (Result.isFailure(shown)) continue
+          const manifest = S.decodeUnknownOption(S.fromJsonString(PackageManifest))(shown.success)
+          const relative = S.decodeUnknownOption(RelativePath)(file)
+          if (Option.isNone(manifest) || Option.isNone(relative)) continue
+          manifests.push({ path: relative.value, manifest: manifest.value })
+        }
+        return Option.some({ commit, manifests })
       }),
     repoSlug: (): Effect.Effect<RepoSlug, TagRefusal> =>
       Effect.gen(function*() {

@@ -1,9 +1,9 @@
-import { Context, type Effect } from 'effect'
+import { Context, type Effect, type Option } from 'effect'
 import type { PrTitle } from './Config.schema.js'
 import type { GateRefusal } from './Gate.schema.js'
 import type { BranchDeleted, PullRequestRefusal } from './PullRequest.schema.js'
 import type { StagedChecksRefusal, StagedPath } from './StagedChecks.schema.js'
-import type { CommitSha, RemoteName, RepoSlug, TagRefusal } from './Tag.schema.js'
+import type { CommitSha, RemoteName, RepoSlug, TaggedTree, TagRefusal } from './Tag.schema.js'
 import type { Count, GitRef, RelativePath, ReleaseTag } from './Workspace.schema.js'
 
 export interface GitPort {
@@ -16,8 +16,10 @@ export interface GitPort {
   readonly remoteTags: (
     remote: RemoteName,
   ) => Effect.Effect<ReadonlyArray<ReleaseTag>, TagRefusal, never>
-  readonly commitAll: (
+  readonly trackedChanges: () => Effect.Effect<Count, PullRequestRefusal, never>
+  readonly commitRelease: (
     message: PrTitle,
+    created: ReadonlyArray<RelativePath>,
   ) => Effect.Effect<CommitSha, PullRequestRefusal, never>
   readonly pushBranch: (
     branch: GitRef,
@@ -33,7 +35,20 @@ export interface GitPort {
   ) => Effect.Effect<Count, TagRefusal, never>
   readonly writeTag: (
     tag: ReleaseTag,
+    message: string,
   ) => Effect.Effect<ReleaseTag, TagRefusal, never>
+  readonly tagAnnotation: (
+    remote: RemoteName,
+    tag: ReleaseTag,
+  ) => Effect.Effect<Option.Option<string>, TagRefusal, never>
+  readonly tagCommit: (
+    remote: RemoteName,
+    tag: ReleaseTag,
+  ) => Effect.Effect<Option.Option<CommitSha>, TagRefusal, never>
+  readonly tagTree: (
+    remote: RemoteName,
+    tag: ReleaseTag,
+  ) => Effect.Effect<Option.Option<TaggedTree>, TagRefusal, never>
   readonly repoSlug: () => Effect.Effect<RepoSlug, TagRefusal, never>
   readonly stagedPaths: () => Effect.Effect<
     ReadonlyArray<StagedPath>,

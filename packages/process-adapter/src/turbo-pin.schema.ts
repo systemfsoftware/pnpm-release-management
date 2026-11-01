@@ -1,5 +1,10 @@
 import * as S from 'effect/Schema'
 
+const PackageResolution = S.Struct({
+  integrity: S.optional(S.NonEmptyString),
+  tarball: S.optional(S.NonEmptyString),
+})
+
 export const PnpmLockfile = S.Struct({
   lockfileVersion: S.Literals(['9.0', 9]),
   importers: S.Record(
@@ -16,10 +21,12 @@ export const PnpmLockfile = S.Struct({
       ),
     }),
   ),
+  packages: S.optional(
+    S.Record(
+      S.String,
+      S.Struct({ resolution: S.optional(PackageResolution) }),
+    ),
+  ),
 })
 export type PnpmLockfile = S.Schema.Type<typeof PnpmLockfile>
-
-export const InstalledTurbo = S.Struct({
-  version: S.optional(S.NonEmptyString),
-})
-export type InstalledTurbo = S.Schema.Type<typeof InstalledTurbo>
+export type PackageResolution = S.Schema.Type<typeof PackageResolution>

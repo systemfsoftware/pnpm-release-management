@@ -1,5 +1,5 @@
-import type { Bump, Intent, Member, PackageName, ReleaseBump } from '@systemfsoftware/release-language'
-import { Count, PackageVersion, RelativePath } from '@systemfsoftware/release-language'
+import type { Bump, Intent, Member, PackageName, RelativePath, ReleaseBump } from '@systemfsoftware/release-language'
+import { Count, PackageVersion } from '@systemfsoftware/release-language'
 
 const RANK: Record<Bump, number> = { none: 0, patch: 1, minor: 2, major: 3 }
 
@@ -17,38 +17,14 @@ const nextCore = (current: string, rank: ReleaseBump): PackageVersion => {
   return PackageVersion.make(`${core[0]}.${core[1]}.${core[2] + 1}`)
 }
 
-const topRank = (ranks: ReadonlyArray<Bump>): Bump =>
-  ranks.reduce<Bump>((top, rank) => {
-    if (RANK[rank] > RANK[top]) return rank
-    return top
-  }, 'none')
-
-export type CollapsedPackage = {
-  readonly name: PackageName
-  readonly rank: Bump
-  readonly summaries: ReadonlyArray<string>
-}
-
-type MemberNext = { readonly name: PackageName; readonly next: PackageVersion }
-
-type ChangelogPath = { readonly name: PackageName; readonly path: RelativePath }
-
-type Collapsed = {
-  readonly packages: ReadonlyArray<CollapsedPackage>
+export type BumpDerivation = {
   readonly consolidated: Bump
+  readonly consolidatedNext: PackageVersion
+  readonly moved: ReadonlyArray<PackageName>
+  readonly changelogPaths: ReadonlyArray<{ readonly name: PackageName; readonly path: RelativePath }>
   readonly unknownPackage: PackageName | undefined
   readonly malformedPath: RelativePath | undefined
   readonly intentCount: Count
-}
-
-export type PnpmBumpDerivation = Collapsed & {
-  readonly nexts: ReadonlyArray<MemberNext>
-  readonly moved: ReadonlyArray<PackageName>
-  readonly changelogPaths: ReadonlyArray<ChangelogPath>
-}
-
-export type SurfacesBumpDerivation = PnpmBumpDerivation & {
-  readonly consolidatedNext: PackageVersion
 }
 
 export const fallbackSummaryOf = (intents: ReadonlyArray<Intent>): string =>
@@ -57,7 +33,7 @@ export const fallbackSummaryOf = (intents: ReadonlyArray<Intent>): string =>
 export const rootBulletsOf = (intents: ReadonlyArray<Intent>): string =>
   intents
     .filter((intent) => intent.packages.some((entry) => entry.bump !== 'none'))
-    .map((intent) => `  - ${intent.summary}`)
+    .map((intent) => `- ${intent.summary}`)
     .join('\n')
 
 export const summaryForPackage = (intents: ReadonlyArray<Intent>, name: PackageName): string => {
@@ -70,110 +46,47 @@ export const summaryForPackage = (intents: ReadonlyArray<Intent>, name: PackageN
   return fallbackSummaryOf(intents)
 }
 
-const collapse = (
-  intents: ReadonlyArray<Intent>,
-  members: ReadonlyArray<Member>,
-): Collapsed => {
-  const known = new Set(members.map((member) => member.name))
-  const byName = new Map<PackageName, { rank: Bump; summaries: Array<string> }>()
+export const deriveBump = (args: {
+  readonly intents: ReadonlyArray<Intent>
+  readonly members: ReadonlyArray<Member>
+  readonly manifestVersion: string
+  readonly changelogPathOf: (member: Member, version: PackageVersion) => RelativePath
+}): BumpDerivation => {
+  const known = new Set(args.members.map((member) => member.name))
+  let consolidated: Bump = 'none'
   let unknownPackage: PackageName | undefined
   let malformedPath: RelativePath | undefined
-  for (const intent of intents) {
+  for (const intent of args.intents) {
     if (intent.packages.length === 0 && malformedPath === undefined) malformedPath = intent.path
     for (const entry of intent.packages) {
       if (!known.has(entry.name) && unknownPackage === undefined) unknownPackage = entry.name
-      const slot = byName.get(entry.name) ?? { rank: 'none', summaries: [] }
-      if (RANK[entry.bump] > RANK[slot.rank]) slot.rank = entry.bump
-      if (entry.bump !== 'none') slot.summaries.push(intent.summary)
-      byName.set(entry.name, slot)
+      if (RANK[entry.bump] > RANK[consolidated]) consolidated = entry.bump
     }
   }
-  const packages = [...byName.entries()].map(([name, slot]) => ({
-    name,
-    rank: slot.rank,
-    summaries: slot.summaries,
-  }))
-  return {
-    packages,
-    consolidated: topRank(packages.map((entry) => entry.rank)),
-    unknownPackage,
-    malformedPath,
-    intentCount: Count.make(intents.length),
-  }
-}
-
-const memberNext = (
-  member: Member,
-  packages: ReadonlyArray<CollapsedPackage>,
-): MemberNext => {
-  const collapsed = packages.find((entry) => entry.name === member.name)
-  const rank = collapsed?.rank ?? 'none'
-  if (rank === 'none') return { name: member.name, next: member.manifest.version }
-  return { name: member.name, next: nextCore(member.manifest.version, rank) }
-}
-
-const movedMembersOf = (
-  members: ReadonlyArray<Member>,
-  nexts: ReadonlyArray<MemberNext>,
-): ReadonlyArray<PackageName> =>
-  nexts
-    .filter((entry) => {
-      const member = members.find((candidate) => candidate.name === entry.name)
-      return member !== undefined && entry.next !== member.manifest.version
-    })
-    .map((entry) => entry.name)
-
-const changelogPathsOf = (
-  changelogDir: string,
-  moved: ReadonlyArray<PackageName>,
-  nexts: ReadonlyArray<MemberNext>,
-): ReadonlyArray<ChangelogPath> =>
-  moved.map((name) => {
-    const entry = nexts.find((candidate) => candidate.name === name)
-    const version = entry?.next ?? ''
-    const flat = name.replaceAll('/', '!')
-    if (version === '') return { name, path: RelativePath.make(`${changelogDir}/${flat}.md`) }
-    return { name, path: RelativePath.make(`${changelogDir}/${flat}@${version}.md`) }
-  })
-
-export const derivePnpmBump = (args: {
-  readonly intents: ReadonlyArray<Intent>
-  readonly members: ReadonlyArray<Member>
-  readonly changelogDir: string
-}): PnpmBumpDerivation => {
-  const collapsed = collapse(args.intents, args.members)
-  if (collapsed.consolidated === 'none') {
-    return { ...collapsed, nexts: [], moved: [], changelogPaths: [] }
-  }
-  const nexts = args.members.map((member) => memberNext(member, collapsed.packages))
-  const moved = movedMembersOf(args.members, nexts)
-  return { ...collapsed, nexts, moved, changelogPaths: changelogPathsOf(args.changelogDir, moved, nexts) }
-}
-
-export const deriveSurfacesBump = (args: {
-  readonly intents: ReadonlyArray<Intent>
-  readonly members: ReadonlyArray<Member>
-  readonly changelogDir: string
-  readonly manifestVersion: string
-}): SurfacesBumpDerivation => {
-  const collapsed = collapse(args.intents, args.members)
-  if (collapsed.consolidated === 'none') {
+  const intentCount = Count.make(args.intents.length)
+  if (consolidated === 'none') {
     return {
-      ...collapsed,
+      consolidated,
       consolidatedNext: PackageVersion.make(args.manifestVersion),
-      nexts: [],
       moved: [],
       changelogPaths: [],
+      unknownPackage,
+      malformedPath,
+      intentCount,
     }
   }
-  const consolidatedNext = nextCore(args.manifestVersion, collapsed.consolidated)
-  const nexts = args.members.map((member): MemberNext => ({ name: member.name, next: consolidatedNext }))
-  const moved = nexts.map((entry) => entry.name)
+  const consolidatedNext = nextCore(args.manifestVersion, consolidated)
+  const moved = args.members.map((member) => member.name)
   return {
-    ...collapsed,
+    consolidated,
     consolidatedNext,
-    nexts,
     moved,
-    changelogPaths: changelogPathsOf(args.changelogDir, moved, nexts),
+    changelogPaths: args.members.map((member) => ({
+      name: member.name,
+      path: args.changelogPathOf(member, consolidatedNext),
+    })),
+    unknownPackage,
+    malformedPath,
+    intentCount,
   }
 }

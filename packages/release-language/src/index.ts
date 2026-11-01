@@ -1,6 +1,9 @@
 export { ChangeEvidencePort } from './ChangeEvidencePort.js'
 export type { ChangeEvidenceRefusal } from './ChangeEvidencePort.js'
 export { ChangelogStore } from './ChangelogStore.js'
+export { ChangesetsPort } from './ChangesetsPort.js'
+export type { ChangesetsRefusal } from './ChangesetsPort.js'
+export { PlannedBump, PlannedRelease } from './ChangesetsPort.schema.js'
 export { ChangesetStore } from './ChangesetStore.js'
 export {
   CommandArg,
@@ -12,11 +15,16 @@ export {
 } from './Command.schema.js'
 export { ConfigFieldInvalid, ConfigFieldMissing, ConfigMalformed, ConfigUnreadable } from './Config.schema.js'
 export {
+  CargoSurface,
+  ChangesetsVersioning,
   ConfigField,
   ConfigRefusal,
   Gate,
+  LegacyTags,
+  LegacyTagTemplate,
   PrTitle,
   ReleaseConfig,
+  SurfacesVersioning,
   TargetSuffix,
   TaskName,
   TomlHeader,
@@ -34,8 +42,10 @@ export {
   GateIntentMissing,
   GateRefusal,
   GateUnknownPackage,
+  PathsGateUnderTurbo,
   ProcessUnobservable,
   ProcessUnstartable,
+  TurboConfigFile,
   TurboDryRunDrifted,
   TurboDryRunUnreadable,
   TurboPinUnusable,
@@ -52,6 +62,19 @@ export {
 } from './GithubRelease.schema.js'
 export { GitPort } from './GitPort.js'
 export {
+  IntegrityFilesEmpty,
+  IntegrityNothingToVerify,
+  IntegrityRefusal,
+  TagAnnotationLightweight,
+  TagAnnotationMalformed,
+  TagIntegrityMismatch,
+  TarballDigest,
+  TarballIntegrity,
+  TarballMissing,
+  TarballRefusal,
+  TarballUnreadable,
+} from './Integrity.schema.js'
+export {
   Bump,
   Intent,
   IntentFrontmatter,
@@ -64,6 +87,30 @@ export {
   IntentUnknownPackage,
   ReleaseBump,
 } from './Intent.schema.js'
+export {
+  LedgerAppendChanged,
+  LedgerAppendRefusal,
+  LedgerAppendRemoved,
+  LedgerEntryMismatch,
+  LedgerIdentityRefusal,
+  LedgerMalformed,
+  LedgerRefusal,
+  LedgerTagMissing,
+  LedgerTagMoved,
+  LedgerUnreadable,
+  LedgerUnwritable,
+  MismatchedLedgerEntry,
+  PublishedLedgerEntry,
+  PublishedState,
+  ReleaseLedger,
+  ReleaseLedgerEntry,
+  UnpublishedLedgerEntry,
+  UnpublishedState,
+  VersionBurned,
+  VersionState,
+} from './Ledger.schema.js'
+export { LEDGER_PATH, LedgerPort } from './LedgerPort.js'
+export { memberChangelogPathOf, parkedChangelogOf, releaseNotesOf, withVersionSection } from './MemberChangelog.js'
 export {
   NewIntentInvalidBump,
   NewIntentPackageNameMalformed,
@@ -79,13 +126,28 @@ export {
   PullRequestAbsent,
   PullRequestBodyUnreadable,
   PullRequestFound,
+  PullRequestGitFailed,
   PullRequestHeadInvalid,
   PullRequestLookup,
   PullRequestNumber,
   PullRequestRefusal,
   PullRequestSummary,
+  PullRequestTreeUnreadable,
+  PullRequestUnversioned,
   ReleaseLabel,
 } from './PullRequest.schema.js'
+export {
+  AdoptionExcluded,
+  AdoptionFailure,
+  AdoptionTagUnresolved,
+  RegistryDownloadFailed,
+  RegistryFetchFailed,
+  RegistryIntegrityMismatch,
+  RegistryMetadata,
+  RegistryMetadataMalformed,
+  RegistryRefusal,
+} from './Registry.schema.js'
+export { RegistryPort } from './RegistryPort.js'
 export { ReleaseConfigStore } from './ReleaseConfigStore.js'
 export {
   CheckKind,
@@ -100,12 +162,19 @@ export { SurfaceStore } from './SurfaceStore.js'
 export { SurfaceWrite } from './Sync.schema.js'
 export {
   CommitSha,
+  LegacyRelease,
+  LegacyTagUnverified,
   RemoteName,
   RepoSlug,
   TagCapturedMalformed,
   TagExcludedMalformed,
+  TaggedManifest,
+  TaggedTree,
+  TagGitFailed,
   TagRefusal,
 } from './Tag.schema.js'
+export { TagAtOtherCommit } from './TagAtOtherCommit.schema.js'
+export { TarballPort } from './TarballPort.js'
 export {
   ChangelogFile,
   ChangelogRefusal,
@@ -114,13 +183,16 @@ export {
   MemberChangelogEntry,
   RootChangelogAppend,
   RootManifestUnwritable,
+  VersionCargoPackageMissing,
   VersionIntentMalformed,
+  VersionLockStale,
   VersionRefusal,
   VersionSurfaceMissing,
   VersionUnknownPackage,
 } from './Version.schema.js'
 export {
   ChangelogStorage,
+  CommandUnstartable,
   Count,
   FsPath,
   GitRef,

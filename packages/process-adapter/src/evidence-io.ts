@@ -3,8 +3,11 @@ import {
   EvidenceFileUnreadable,
   type Member,
   PackageManifest,
+  type PackageName,
+  PathsGateUnderTurbo,
   RelativePath,
   type RepoRoot,
+  TurboConfigFile,
 } from '@systemfsoftware/release-language'
 import { Effect, FileSystem, Option } from 'effect'
 import * as S from 'effect/Schema'
@@ -55,6 +58,25 @@ export const gitLines = (
     return out.stdout.split('\n').filter((line) => line.length > 0)
   })
 
+const turboConfigsAt = (
+  root: RepoRoot,
+  rev: string,
+): Effect.Effect<ReadonlyArray<string>, EvidenceCommandFailed | ProcessFault, ChildProcessSpawner> =>
+  gitLines(root, ['ls-tree', '--name-only', rev, '--', ...TurboConfigFile.literals])
+
+export const refuseUnderTurbo = (
+  root: RepoRoot,
+  base: string,
+  head: string,
+): Effect.Effect<void, PathsGateUnderTurbo | EvidenceCommandFailed | ProcessFault, ChildProcessSpawner> =>
+  Effect.gen(function*() {
+    const atHead = yield* turboConfigsAt(root, head)
+    const named = TurboConfigFile.literals.find((file) => atHead.includes(file))
+    if (named === undefined) return
+    if ((yield* turboConfigsAt(root, base)).length === 0) return
+    return yield* Effect.fail(new PathsGateUnderTurbo({ turboConfig: named }))
+  })
+
 const dirOf = (manifestPath: string): Option.Option<RelativePath> => {
   if (!manifestPath.endsWith(MANIFEST_SUFFIX)) {
     return Option.none()
@@ -99,4 +121,27 @@ export const membersAt = (
       members.push(member.value)
     }
     return members
+  })
+
+export const deletedAt = (
+  root: RepoRoot,
+  base: string,
+  changed: ReadonlyArray<string>,
+): Effect.Effect<
+  ReadonlyArray<PackageName>,
+  EvidenceCommandFailed | ProcessFault,
+  FileSystem.FileSystem | ChildProcessSpawner
+> =>
+  Effect.gen(function*() {
+    const fs = yield* FileSystem.FileSystem
+    const deleted: Array<PackageName> = []
+    for (const manifestPath of changed) {
+      const dir = dirOf(manifestPath)
+      if (Option.isNone(dir)) continue
+      if (yield* fs.exists(`${root}/${manifestPath}`).pipe(Effect.orElseSucceed(() => false))) continue
+      const shown = yield* gitLines(root, ['show', `${base}:${manifestPath}`])
+      const member = memberOf(dir.value, shown.join('\n'))
+      if (Option.isSome(member)) deleted.push(member.value.name)
+    }
+    return deleted.sort()
   })

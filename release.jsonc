@@ -12,6 +12,7 @@
     "strategy": "surfaces",
     "manifest": "package.json",
     "changelog": "CHANGELOG.md",
+    "surfaces": [],
   },
   "gate": { "strategy": "turbo", "task": "build" },
   "pr": {

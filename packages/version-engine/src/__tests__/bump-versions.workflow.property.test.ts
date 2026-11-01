@@ -1,14 +1,12 @@
 import { it } from '@effect/vitest'
-import { type Bump, Intent, Member, RelativePath } from '@systemfsoftware/release-language'
+import { type Bump, Intent, Member, memberChangelogPathOf, RelativePath } from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
-import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import * as fc from 'effect/testing/FastCheck'
-import { derivePnpmBump, deriveSurfacesBump } from '../bump-derive.js'
+import { deriveBump } from '../bump-derive.js'
 import { bumpVersions } from '../bump-versions.workflow.js'
-import { commandOf } from '../bump.js'
-import type { BumpCommand } from '../bump.schema.js'
+import { BumpCommand } from '../bump.schema.js'
 
 const RANK_ORDER: Record<string, number> = { none: 0, patch: 1, minor: 2, major: 3 }
 
@@ -65,53 +63,42 @@ type PlainIntent = {
   readonly summary: string
 }
 
-type CommandInput = {
+const toCommand = (input: {
+  readonly strategy: 'changesets' | 'surfaces'
   readonly intents: ReadonlyArray<unknown>
   readonly members: ReadonlyArray<unknown>
+  readonly manifestVersion: string
   readonly changelogDir: string
-}
-
-const toCommand = (
-  input:
-    | CommandInput & { readonly strategy: 'pnpm' }
-    | CommandInput & {
-      readonly strategy: 'surfaces'
-      readonly manifestVersion: string
-      readonly rootChangelog?: string
-    },
-): BumpCommand => {
+  readonly rootChangelog?: string
+}): BumpCommand => {
   const intents = S.decodeUnknownSync(S.Array(Intent))(input.intents)
   const members = S.decodeUnknownSync(S.Array(Member))(input.members)
-  const changelogDir = RelativePath.make(input.changelogDir)
-  if (input.strategy === 'pnpm') {
-    const derived = derivePnpmBump({ intents, members, changelogDir: input.changelogDir })
-    return commandOf({ versioning: { strategy: 'pnpm' }, intents, members, changelogDir, derived })
-  }
-  const derived = deriveSurfacesBump({
+  const derived = deriveBump({
     intents,
     members,
-    changelogDir: input.changelogDir,
     manifestVersion: input.manifestVersion,
+    changelogPathOf: (member, version) =>
+      memberChangelogPathOf('registry', RelativePath.make(input.changelogDir), member, version),
   })
-  const rootChangelog = Option.map(
-    Option.fromNullishOr(input.rootChangelog),
-    (path) => RelativePath.make(path),
-  )
-  return commandOf({
-    versioning: {
-      strategy: 'surfaces',
-      manifest: {
-        file: RelativePath.make('package.json'),
-        surface: { kind: 'json', path: RelativePath.make('package.json') },
-      },
-      surfaces: [],
-      rootChangelog: Option.getOrUndefined(rootChangelog),
-      consolidatedNext: derived.consolidatedNext,
-    },
+  return S.decodeUnknownSync(BumpCommand)({
+    _tag: 'BumpCommand',
+    strategy: input.strategy,
     intents,
     members,
-    changelogDir,
-    derived,
+    manifestVersion: input.manifestVersion,
+    changelogDir: input.changelogDir,
+    changelogStorage: 'registry',
+    rootChangelog: input.rootChangelog,
+    manifest: { file: 'package.json', surface: { kind: 'json', path: 'package.json' } },
+    surfaces: [],
+    consolidated: derived.consolidated,
+    consolidatedNext: derived.consolidatedNext,
+    moved: derived.moved,
+    changelogPaths: derived.changelogPaths,
+    unknownPackage: derived.unknownPackage,
+    malformedPath: derived.malformedPath,
+    intentCount: derived.intentCount,
+    planned: [],
   })
 }
 
@@ -119,11 +106,6 @@ const parseCore = (version: string): readonly [number, number, number] => {
   const hit = /^(\d+)\.(\d+)\.(\d+)/.exec(version)
   return [Number(hit?.[1] ?? 0), Number(hit?.[2] ?? 0), Number(hit?.[3] ?? 0)]
 }
-
-const compareCores = (
-  left: readonly [number, number, number],
-  right: readonly [number, number, number],
-): number => left[0] - right[0] || left[1] - right[1] || left[2] - right[2]
 
 const expectedNext = (
   core: readonly [number, number, number],
@@ -182,15 +164,15 @@ it.prop(
 )
 it.prop(
   '∀cmd_BumpVersions_⊥UnknownSucceeds',
-  [membersArb, relativePathArb, summaryArb],
-  ([members, changelogDir, summary]) => {
+  [membersArb, versionArb, relativePathArb, summaryArb],
+  ([members, manifestVersion, changelogDir, summary]) => {
     const foreign = `${'a'.repeat(30)}-unknown`
     const intents: ReadonlyArray<PlainIntent> = [{
       path: 'changeset/foreign.md',
       packages: [{ name: foreign, bump: 'minor' }],
       summary,
     }]
-    const command = toCommand({ strategy: 'pnpm', intents, members, changelogDir })
+    const command = toCommand({ strategy: 'surfaces', intents, members, manifestVersion, changelogDir })
     const outcome = bumpVersions(command)
     if (Result.isSuccess(outcome)) {
       return false
@@ -204,10 +186,10 @@ it.prop(
 
 it.prop(
   '∀cmd_BumpVersions_⊥EmptySucceeds',
-  [membersArb, relativePathArb, summaryArb, relativePathArb],
-  ([members, changelogDir, summary, emptyPath]) => {
+  [membersArb, versionArb, relativePathArb, summaryArb, relativePathArb],
+  ([members, manifestVersion, changelogDir, summary, emptyPath]) => {
     const intents: ReadonlyArray<PlainIntent> = [{ path: emptyPath, packages: [], summary }]
-    const command = toCommand({ strategy: 'pnpm', intents, members, changelogDir })
+    const command = toCommand({ strategy: 'surfaces', intents, members, manifestVersion, changelogDir })
     const outcome = bumpVersions(command)
     if (Result.isSuccess(outcome)) {
       return false
@@ -282,52 +264,6 @@ it.prop(
             path.endsWith(`@${bumped.version}.md`) &&
             path.includes((bumped.moved[index] ?? '').replaceAll('/', '!'))
           )
-      }),
-      Match.orElse(() => false),
-    )
-  },
-)
-
-it.prop(
-  '∀cmd_BumpVersions_≡HighestNext',
-  [membersArb, relativePathArb, summaryArb],
-  ([members, changelogDir, summary]) => {
-    const ranks = members.map((_, index): Bump => {
-      if (index % 2 === 0) {
-        return 'minor'
-      }
-      return 'patch'
-    })
-    const intents: ReadonlyArray<PlainIntent> = members.map((member, index) => ({
-      path: `changeset/pkg-${index}.md`,
-      packages: [{ name: member.name, bump: ranks[index] ?? 'patch' }],
-      summary,
-    }))
-    const command = toCommand({ strategy: 'pnpm', intents, members, changelogDir })
-    const outcome = bumpVersions(command)
-    if (Result.isFailure(outcome)) {
-      return false
-    }
-    return Match.value(outcome.success).pipe(
-      Match.tag('VersionBumped', (bumped) => {
-        const expectedAt = (index: number): string => {
-          const member = members[index]
-          if (member === undefined) {
-            return ''
-          }
-          return expectedNext(parseCore(member.manifest.version), ranks[index] ?? 'patch').join('.')
-        }
-        const first = expectedAt(0)
-        const second = expectedAt(1)
-        const third = expectedAt(2)
-        const decisionCore = parseCore(bumped.version)
-        const decisionText = decisionCore.join('.')
-        const coversFirst = compareCores(decisionCore, parseCore(first)) >= 0
-        const coversSecond = compareCores(decisionCore, parseCore(second)) >= 0
-        const coversThird = compareCores(decisionCore, parseCore(third)) >= 0
-        const isMember = decisionText === first || decisionText === second || decisionText === third
-        const isMaximum = coversFirst && coversSecond && coversThird && isMember
-        return isMaximum && bumped.moved.length === members.length
       }),
       Match.orElse(() => false),
     )

@@ -11,6 +11,7 @@ export interface ProcessRequest {
   readonly args: ReadonlyArray<string>
   readonly cwd: string | undefined
   readonly stdio: ProcessStdio
+  readonly env?: Readonly<Record<string, string>>
 }
 
 export interface ProcessOutcome {
@@ -32,6 +33,11 @@ const STDIO: Record<ProcessStdio, Stdio> = {
   streamed: { stdin: 'inherit', stdout: 'inherit', stderr: 'inherit' },
 }
 
+const envOf = (env: ProcessRequest['env']) => {
+  if (env === undefined) return {}
+  return { env: { ...env }, extendEnv: true }
+}
+
 export const runProcess = (
   request: ProcessRequest,
 ): Effect.Effect<ProcessOutcome, ProcessFault, ChildProcessSpawner> =>
@@ -50,7 +56,7 @@ export const runProcess = (
       const handle = yield* ChildProcess.make(
         request.program,
         [...request.args],
-        { cwd: request.cwd, ...STDIO[request.stdio] },
+        { cwd: request.cwd, ...STDIO[request.stdio], ...envOf(request.env) },
       ).pipe(Effect.mapError(unstartable))
       if (request.stdio === 'streamed') {
         const code = yield* handle.exitCode.pipe(Effect.mapError(unobservable))

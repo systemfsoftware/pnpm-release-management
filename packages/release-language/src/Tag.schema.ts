@@ -1,5 +1,14 @@
 import * as S from 'effect/Schema'
-import { FsPath, OwnerName, RepoName } from './Workspace.schema.js'
+import {
+  FsPath,
+  OwnerName,
+  PackageManifest,
+  PackageName,
+  PackageVersion,
+  RelativePath,
+  ReleaseTag,
+  RepoName,
+} from './Workspace.schema.js'
 
 export const RepoSlug = S.Struct({
   owner: OwnerName,
@@ -26,5 +35,38 @@ export const TagExcludedMalformed = S.TaggedStruct('TagExcludedMalformed', {
 })
 export type TagExcludedMalformed = S.Schema.Type<typeof TagExcludedMalformed>
 
-export const TagRefusal = S.Union([TagCapturedMalformed, TagExcludedMalformed])
+export const TagGitFailed = S.TaggedStruct('TagGitFailed', {
+  command: S.String,
+  stderr: S.String,
+})
+export type TagGitFailed = S.Schema.Type<typeof TagGitFailed>
+
+export const TagRefusal = S.Union([TagCapturedMalformed, TagExcludedMalformed, TagGitFailed])
 export type TagRefusal = S.Schema.Type<typeof TagRefusal>
+
+export const LegacyTagUnverified = S.TaggedStruct('LegacyTagUnverified', {
+  tag: ReleaseTag,
+  package: PackageName,
+  version: PackageVersion,
+  reason: S.String,
+})
+export type LegacyTagUnverified = S.Schema.Type<typeof LegacyTagUnverified>
+
+export const LegacyRelease = S.Struct({
+  tag: ReleaseTag,
+  package: PackageName,
+  version: PackageVersion,
+})
+export type LegacyRelease = S.Schema.Type<typeof LegacyRelease>
+
+export const TaggedManifest = S.Struct({
+  path: RelativePath,
+  manifest: PackageManifest,
+})
+export type TaggedManifest = S.Schema.Type<typeof TaggedManifest>
+
+export const TaggedTree = S.Struct({
+  commit: CommitSha,
+  manifests: S.Array(TaggedManifest),
+})
+export type TaggedTree = S.Schema.Type<typeof TaggedTree>

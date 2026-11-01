@@ -2,13 +2,14 @@ import {
   type ChangelogFile,
   ChangelogStore,
   type MemberChangelogEntry,
+  parkedChangelogOf,
   RelativePath,
   type RootChangelogAppend,
+  withVersionSection,
 } from '@systemfsoftware/release-language'
 import { Effect, Layer } from 'effect'
 
 export type FakeChangelogState = {
-  readonly rootChangelogs: Map<RelativePath, string>
   readonly memberChangelogs: Map<RelativePath, string>
 }
 
@@ -36,14 +37,16 @@ export const makeFakeChangelogStore = (
       }),
     writeMemberChangelog: (entry: MemberChangelogEntry) =>
       Effect.sync(() => {
-        const path = RelativePath.make(
-          `${entry.changelogDir}/${entry.name.replaceAll('/', '!')}@${entry.version}.md`,
-        )
-        const text = `# ${entry.name}@${entry.version}\n\n${entry.summary}\n`
-        memberChangelogs.set(path, text)
-        const file: ChangelogFile = { path, text }
+        const text = memberChangelogTextOf(entry, memberChangelogs.get(entry.path))
+        memberChangelogs.set(entry.path, text)
+        const file: ChangelogFile = { path: entry.path, text }
         return file
       }),
   })
-  return { layer, state: { rootChangelogs, memberChangelogs } }
+  return { layer, state: { memberChangelogs } }
+}
+
+const memberChangelogTextOf = (entry: MemberChangelogEntry, existing: string | undefined): string => {
+  if (entry.storage === 'registry') return parkedChangelogOf(entry.name, entry.version, entry.summary)
+  return withVersionSection(existing, entry.name, entry.version, entry.summary)
 }

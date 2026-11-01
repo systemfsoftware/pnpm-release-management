@@ -11,10 +11,6 @@ let
       target = "aarch64-unknown-linux-gnu";
       sha256 = "sha256-ALoK4hq8Zc8V7f7aatdGRvrs2tWxSCifO0ESEAgSvts=";
     };
-    aarch64-darwin = {
-      target = "aarch64-apple-darwin";
-      sha256 = "sha256-sKCN68ujR/m/I5GsDhL5nyfHo3WtVhuuzLNfATaazaQ=";
-    };
   };
 
   system = stdenvNoCC.hostPlatform.system;

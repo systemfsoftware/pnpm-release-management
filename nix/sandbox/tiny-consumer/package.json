@@ -1,0 +1,9 @@
+{
+  "name": "@sandbox-proof/tiny-consumer",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "pnpm@12.9.0",
+  "dependencies": {
+    "@sandbox-proof/tiny-lib": "file:.deps/tiny-lib-1.0.0.tgz"
+  }
+}

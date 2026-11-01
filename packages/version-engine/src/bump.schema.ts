@@ -1,10 +1,12 @@
 import {
   Bump,
+  ChangelogStorage,
   Count,
   Intent,
   Member,
   PackageName,
   PackageVersion,
+  PlannedRelease,
   RelativePath,
   VersionSurface,
 } from '@systemfsoftware/release-language'
@@ -15,61 +17,37 @@ const VersionTarget = S.Struct({
   surface: VersionSurface,
 })
 
-const PnpmInput = S.Struct({
-  strategy: S.Literal('pnpm'),
-  changelogDir: RelativePath,
-})
-
-const SurfacesInput = S.Struct({
-  strategy: S.Literal('surfaces'),
+export const BumpInput = S.Struct({
+  strategy: S.Literals(['changesets', 'surfaces']),
   changelogDir: RelativePath,
   rootChangelog: S.optional(RelativePath),
   manifest: VersionTarget,
   surfaces: S.Array(VersionTarget),
 })
-
-export const BumpInput = S.Union([PnpmInput, SurfacesInput])
 export type BumpInput = S.Schema.Type<typeof BumpInput>
-
-const PnpmVersioning = S.Struct({
-  strategy: S.Literal('pnpm'),
-})
-
-const SurfacesVersioning = S.Struct({
-  strategy: S.Literal('surfaces'),
-  manifest: VersionTarget,
-  surfaces: S.Array(VersionTarget),
-  rootChangelog: S.optional(RelativePath),
-  consolidatedNext: PackageVersion,
-})
-export type SurfacesVersioning = S.Schema.Type<typeof SurfacesVersioning>
-
-const CommandVersioning = S.Union([PnpmVersioning, SurfacesVersioning])
 
 export class BumpCommand extends S.TaggedClass<BumpCommand>()(
   'BumpCommand',
   {
-    versioning: CommandVersioning,
+    strategy: S.Literals(['changesets', 'surfaces']),
     intents: S.Array(Intent),
     members: S.Array(Member),
+    manifestVersion: PackageVersion,
     changelogDir: RelativePath,
+    changelogStorage: ChangelogStorage,
+    rootChangelog: S.optional(RelativePath),
+    manifest: VersionTarget,
+    surfaces: S.Array(VersionTarget),
     consolidated: Bump,
-    nexts: S.Array(S.Struct({
-      name: PackageName,
-      next: PackageVersion,
-    })),
+    consolidatedNext: PackageVersion,
     moved: S.Array(PackageName),
     changelogPaths: S.Array(S.Struct({
       name: PackageName,
       path: RelativePath,
     })),
-    packageRanks: S.Array(S.Struct({
-      name: PackageName,
-      rank: Bump,
-      summaries: S.Array(S.String),
-    })),
     unknownPackage: S.optional(PackageName),
     malformedPath: S.optional(RelativePath),
     intentCount: Count,
+    planned: S.Array(PlannedRelease),
   },
 ) {}

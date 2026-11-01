@@ -9,7 +9,8 @@
     "effect": "^4.0.0-rc.112",
     "testcontainers": "^12.1.0",
     "typescript": "^7",
-    "vitest": "^4"
+    "vitest": "^4",
+    "yaml": "^2.9.0"
   },
   "exports": {
     "./package.json": "./package.json"

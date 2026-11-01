@@ -46,6 +46,11 @@ export const createTextFile = (
   text: string,
 ): Effect.Effect<void, StoreFault> => fs.writeFileString(full, text, { flag: 'wx' }).pipe(Effect.mapError(faultOf))
 
+export const ensureDirectory = (
+  fs: FileSystem,
+  full: string,
+): Effect.Effect<void, StoreFault> => fs.makeDirectory(full, { recursive: true }).pipe(Effect.mapError(faultOf))
+
 export const overwriteTextFile = (
   fs: FileSystem,
   full: string,

@@ -8,16 +8,20 @@ import {
   OwnerName,
   RepoName,
 } from '@systemfsoftware/release-language'
-import { Effect, Layer } from 'effect'
+import { Effect, Layer, Option } from 'effect'
+import { FAKE_FILES, FAKE_INTEGRITY } from './FakeTarball.js'
 
 export interface FakeGitState {
   readonly tags?: Array<ReleaseTag>
   readonly owner?: string
   readonly repo?: string
+  readonly annotation?: string
+  readonly trackedChanges?: number
 }
 
 export interface FakeGitCalls {
   readonly writtenTags: Array<ReleaseTag>
+  readonly writtenAnnotations: Array<{ readonly tag: ReleaseTag; readonly message: string }>
   readonly pushed: Array<{ readonly tags: Array<ReleaseTag>; readonly remote: RemoteName }>
   readonly commits: Array<string>
   readonly branchesPushed: Array<{ readonly branch: GitRef; readonly remote: RemoteName }>
@@ -28,6 +32,7 @@ export const makeFakeGit = (state: FakeGitState = {}) => {
   const tags = [...(state.tags ?? [])]
   const calls: FakeGitCalls = {
     writtenTags: [],
+    writtenAnnotations: [],
     pushed: [],
     commits: [],
     branchesPushed: [],
@@ -38,7 +43,8 @@ export const makeFakeGit = (state: FakeGitState = {}) => {
     headSha: () => Effect.succeed(CommitSha.make('deadbeef')),
     changedPaths: () => Effect.succeed([]),
     remoteTags: () => Effect.succeed([...tags]),
-    commitAll: (message) => {
+    trackedChanges: () => Effect.succeed(Count.make(state.trackedChanges ?? 0)),
+    commitRelease: (message) => {
       calls.commits.push(message)
       return Effect.succeed(CommitSha.make('deadbeef'))
     },
@@ -54,13 +60,18 @@ export const makeFakeGit = (state: FakeGitState = {}) => {
       calls.pushed.push({ tags: [...pushed], remote })
       return Effect.succeed(Count.make(pushed.length))
     },
-    writeTag: (tag) => {
+    writeTag: (tag, message) => {
       calls.writtenTags.push(tag)
+      calls.writtenAnnotations.push({ tag, message })
       if (!tags.includes(tag)) {
         tags.push(tag)
       }
       return Effect.succeed(tag)
     },
+    tagAnnotation: () =>
+      Effect.succeed(Option.some(state.annotation ?? JSON.stringify({ integrity: FAKE_INTEGRITY, files: FAKE_FILES }))),
+    tagCommit: () => Effect.succeed(Option.some(CommitSha.make('deadbeef'))),
+    tagTree: () => Effect.succeed(Option.none()),
     repoSlug: () =>
       Effect.succeed({
         owner: OwnerName.make(state.owner ?? 'acme'),

@@ -6,5 +6,5 @@
     "types": ["node"]
   },
   "extends": "@systemfsoftware/tsconfig/tsc/no-dom/library-monorepo",
-  "include": ["src"]
+  "include": ["src", "tests"]
 }

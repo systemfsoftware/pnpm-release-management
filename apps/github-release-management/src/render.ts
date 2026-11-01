@@ -1,32 +1,40 @@
 import { Reporter, type WorkspaceRootNotAbsolute } from '@systemfsoftware/cli-adapter'
 import {
+  AdoptionRefused,
+  type AdoptionReport,
   type GithubReleaseDecision,
   type PlanReport,
   type PullRequestDecision,
   type TagDecision,
 } from '@systemfsoftware/github-release-engine'
 import {
+  type AdoptionFailure,
   type ConfigRefusal,
   FsPath,
   type GithubReleaseRefusal,
+  type GitRef,
+  type IntegrityRefusal,
   type IntentRefusal,
+  type LedgerIdentityRefusal,
+  type LedgerRefusal,
+  type LegacyTagUnverified,
   type MemberRefusal,
   type PlanDeferredUnknown,
   type PlanRefusal,
   type PullRequestRefusal,
+  type ReleaseLedgerEntry,
   type ReleaseTag,
+  type TagAtOtherCommit,
   type TagRefusal,
+  type TarballRefusal,
+  type VersionBurned,
+  type VersionIntentMalformed,
+  type VersionState,
+  type VersionUnknownPackage,
 } from '@systemfsoftware/release-language'
-import type { VersionDecision } from '@systemfsoftware/version-engine'
 import { Effect, FileSystem } from 'effect'
 import * as Match from 'effect/Match'
-import {
-  type BoundaryRefusal,
-  type BumpRefusal,
-  OutputUnreadable,
-  OutputUnwritable,
-  type VersionStageRefused,
-} from './boundary.schema.js'
+import { type BoundaryRefusal, OutputUnreadable, OutputUnwritable } from './boundary.schema.js'
 
 type PlatformRefusal = ConfigRefusal | BoundaryRefusal | WorkspaceRootNotAbsolute
 
@@ -36,26 +44,39 @@ export type PlanFailure =
   | MemberRefusal
   | PlanRefusal
   | TagRefusal
+  | LegacyTagUnverified
+  | IntegrityRefusal
+  | LedgerRefusal
+  | LedgerIdentityRefusal
+  | VersionBurned
+  | VersionIntentMalformed
+  | VersionUnknownPackage
 
 export type TagFailure =
   | PlatformRefusal
   | MemberRefusal
+  | LedgerRefusal
   | PlanDeferredUnknown
   | TagRefusal
+  | LegacyTagUnverified
+  | TarballRefusal
+  | VersionBurned
+  | TagAtOtherCommit
 
 export type ReleaseFailure =
   | PlatformRefusal
   | MemberRefusal
   | PlanRefusal
   | TagRefusal
+  | LegacyTagUnverified
   | GithubReleaseRefusal
 
 export type PullRequestFailure =
   | PlatformRefusal
   | IntentRefusal
+  | MemberRefusal
   | TagRefusal
   | PullRequestRefusal
-  | VersionStageRefused
 
 const refuse = (text: string): Effect.Effect<void, never, Reporter> =>
   Effect.flatMap(Reporter, (reporter) => Effect.andThen(reporter.annotateError(text), () => reporter.exitCode(1)))
@@ -88,26 +109,8 @@ const appendFile = (
     )
   })
 
-export const versionStageText = (refusal: BumpRefusal): string =>
-  Match.value(refusal).pipe(
-    Match.tagsExhaustive({
-      ChangelogUnreadable: (unreadable) => `ChangelogUnreadable: path=${unreadable.path}`,
-      ChangelogUnwritable: (unwritable) => `ChangelogUnwritable: path=${unwritable.path} reason=${unwritable.reason}`,
-      IntentFrontmatterMalformed: (malformed) => `IntentFrontmatterMalformed: path=${malformed.path}`,
-      IntentUnknownPackage: (unknown) => `IntentUnknownPackage: package=${unknown.package}`,
-      IntentSlugTaken: (taken) => `IntentSlugTaken: slug=${taken.slug}`,
-      ManifestUnreadable: (unreadable) => `ManifestUnreadable: path=${unreadable.path}`,
-      ManifestInvalid: (invalid) => `ManifestInvalid: path=${invalid.path} reason=${invalid.reason}`,
-      CommandRefused: (refusedCommand) =>
-        `CommandRefused: command=${refusedCommand.command.program} ${
-          refusedCommand.command.args.join(' ')
-        } reason=${refusedCommand.reason}`,
-      RootManifestUnwritable: (unwritable) => `RootManifestUnwritable: path=${unwritable.path}`,
-      VersionIntentMalformed: (malformed) => `VersionIntentMalformed: path=${malformed.path}`,
-      VersionSurfaceMissing: (missing) => `VersionSurfaceMissing: path=${missing.path}`,
-      VersionUnknownPackage: (unknown) => `VersionUnknownPackage: package=${unknown.package}`,
-    }),
-  )
+const legacyTagUnverifiedText = (unverified: LegacyTagUnverified): string =>
+  `refused: legacy-tag-unverified, tag: ${unverified.tag}, package: ${unverified.package}@${unverified.version}, reason: ${unverified.reason}`
 
 export const renderPlanRefusal = (refusal: PlanFailure): Effect.Effect<void, never, Reporter> =>
   refuse(
@@ -126,10 +129,36 @@ export const renderPlanRefusal = (refusal: PlanFailure): Effect.Effect<void, nev
         IntentSlugTaken: () => 'refused: intent-slug-taken',
         ManifestUnreadable: (unreadable) => `refused: manifest-unreadable, path: ${unreadable.path}`,
         ManifestInvalid: (invalid) => `refused: manifest-invalid, path: ${invalid.path}`,
+        CommandUnstartable: (unstartable) => `${unstartable.command} could not be started: ${unstartable.reason}`,
         PlanDeferredUnknown: (unknown) => `unknown deferred package(s): ${unknown.packages.join(', ')}`,
         PlanCapturedMalformed: (malformed) => `refused: plan-captured-malformed, path: ${malformed.path}`,
         TagCapturedMalformed: (malformed) => `refused: tag-captured-malformed, path: ${malformed.path}`,
         TagExcludedMalformed: (malformed) => `refused: tag-excluded-malformed, path: ${malformed.path}`,
+        TagGitFailed: (failed) => `git command failed: ${failed.command}\n${failed.stderr}`,
+        LegacyTagUnverified: legacyTagUnverifiedText,
+        TagIntegrityMismatch: (mismatch) =>
+          `refused: tag-integrity-mismatch, package: ${mismatch.package}@${mismatch.version}, recorded: ${mismatch.recorded}, current: ${mismatch.current}, file: ${mismatch.file}`,
+        IntegrityNothingToVerify: () => 'refused: integrity-nothing-to-verify',
+        IntegrityFilesEmpty: (empty) =>
+          `refused: integrity-files-empty, package: ${empty.package}@${empty.version}, side: ${empty.side}`,
+        TagAnnotationMalformed: (malformed) =>
+          `refused: tag-annotation-malformed, tag: ${malformed.tag}, reason: ${malformed.reason}`,
+        TagAnnotationLightweight: (lightweight) => `refused: tag-annotation-lightweight, tag: ${lightweight.tag}`,
+        TarballMissing: (missing) => `refused: tarball-missing, package: ${missing.package}@${missing.version}`,
+        TarballUnreadable: (unreadable) =>
+          `refused: tarball-unreadable, path: ${unreadable.path}, reason: ${unreadable.reason}`,
+        LedgerUnreadable: (unreadable) => `cannot read release ledger ${unreadable.path}: ${unreadable.reason}`,
+        LedgerMalformed: (malformed) => `cannot parse release ledger ${malformed.path}: ${malformed.reason}`,
+        LedgerUnwritable: (unwritable) => `cannot write release ledger ${unwritable.path}: ${unwritable.reason}`,
+        LedgerTagMissing: (missing) => `refused: ledger-tag-missing, tag: ${missing.tag}`,
+        LedgerTagMoved: (moved) =>
+          `refused: ledger-tag-moved, tag: ${moved.tag}, recorded: ${moved.recorded}, current: ${moved.current}`,
+        LedgerEntryMismatch: (mismatch) =>
+          `refused: ledger-entry-mismatch, tag: ${mismatch.tag}, recorded: ${mismatch.recorded}, current: ${mismatch.current}`,
+        VersionBurned: (burned) =>
+          `refused: version-burned, package: ${burned.package}@${burned.version}, url: ${burned.url}, status: ${burned.status}, fetchedAt: ${burned.fetchedAt}`,
+        VersionIntentMalformed: (malformed) => `refused: version-intent-malformed, path: ${malformed.path}`,
+        VersionUnknownPackage: (unknown) => `refused: version-unknown-package, package: ${unknown.package}`,
       }),
     ),
   )
@@ -148,9 +177,22 @@ export const renderTagRefusal = (refusal: TagFailure): Effect.Effect<void, never
         WorkspaceRootNotAbsolute: (notAbsolute) => `refused: workspace-root-not-absolute, path: ${notAbsolute.given}`,
         ManifestUnreadable: (unreadable) => `refused: manifest-unreadable, path: ${unreadable.path}`,
         ManifestInvalid: (invalid) => `refused: manifest-invalid, path: ${invalid.path}`,
+        CommandUnstartable: (unstartable) => `${unstartable.command} could not be started: ${unstartable.reason}`,
         PlanDeferredUnknown: (unknown) => `unknown excluded package(s): ${unknown.packages.join(', ')}`,
+        LedgerUnreadable: (unreadable) => `cannot read release ledger ${unreadable.path}: ${unreadable.reason}`,
+        LedgerMalformed: (malformed) => `cannot parse release ledger ${malformed.path}: ${malformed.reason}`,
+        LedgerUnwritable: (unwritable) => `cannot write release ledger ${unwritable.path}: ${unwritable.reason}`,
         TagCapturedMalformed: (malformed) => `cannot read captured file: ${malformed.path}`,
         TagExcludedMalformed: (malformed) => `cannot read exclude file: ${malformed.path}`,
+        TagGitFailed: (failed) => `git command failed: ${failed.command}\n${failed.stderr}`,
+        LegacyTagUnverified: legacyTagUnverifiedText,
+        TarballMissing: (missing) => `refused: tarball-missing, package: ${missing.package}@${missing.version}`,
+        TarballUnreadable: (unreadable) =>
+          `refused: tarball-unreadable, path: ${unreadable.path}, reason: ${unreadable.reason}`,
+        VersionBurned: (burned) =>
+          `refused: version-burned, package: ${burned.package}@${burned.version}, url: ${burned.url}, status: ${burned.status}, fetchedAt: ${burned.fetchedAt}`,
+        TagAtOtherCommit: (other) =>
+          `refused: tag-at-other-commit, tag: ${other.tag} already exists on the remote at ${other.found}, this release tags ${other.expected}`,
       }),
     ),
   )
@@ -169,10 +211,13 @@ export const renderReleaseRefusal = (refusal: ReleaseFailure): Effect.Effect<voi
         WorkspaceRootNotAbsolute: (notAbsolute) => `refused: workspace-root-not-absolute, path: ${notAbsolute.given}`,
         ManifestUnreadable: (unreadable) => `refused: manifest-unreadable, path: ${unreadable.path}`,
         ManifestInvalid: (invalid) => `refused: manifest-invalid, path: ${invalid.path}`,
+        CommandUnstartable: (unstartable) => `${unstartable.command} could not be started: ${unstartable.reason}`,
         PlanDeferredUnknown: (unknown) => `refused: plan-deferred-unknown, packages: ${unknown.packages.join(', ')}`,
         PlanCapturedMalformed: (malformed) => `refused: plan-captured-malformed, path: ${malformed.path}`,
         TagCapturedMalformed: (malformed) => `refused: tag-captured-malformed, path: ${malformed.path}`,
         TagExcludedMalformed: (malformed) => `refused: tag-excluded-malformed, path: ${malformed.path}`,
+        TagGitFailed: (failed) => `git command failed: ${failed.command}\n${failed.stderr}`,
+        LegacyTagUnverified: legacyTagUnverifiedText,
         ReleaseChangelogMissing: (missing) =>
           `Missing changelog for ${missing.package}@${missing.version}: expected ${missing.changelog} to hold the generated changelog. Did the version step run before this one?`,
         ReleaseChangelogEmpty: (empty) =>
@@ -197,12 +242,19 @@ export const renderPullRequestRefusal = (
         WorkspaceRootNotAbsolute: (notAbsolute) => `refused: workspace-root-not-absolute, path: ${notAbsolute.given}`,
         IntentFrontmatterMalformed: (malformed) => `refused: intent-frontmatter-malformed, path: ${malformed.path}`,
         IntentUnknownPackage: () => 'refused: intent-unknown-package',
+        ManifestUnreadable: (unreadable) => `refused: manifest-unreadable, path: ${unreadable.path}`,
+        ManifestInvalid: (invalid) => `refused: manifest-invalid, path: ${invalid.path}`,
+        CommandUnstartable: (unstartable) => `${unstartable.command} could not be started: ${unstartable.reason}`,
         IntentSlugTaken: () => 'refused: intent-slug-taken',
         TagCapturedMalformed: (malformed) => `refused: tag-captured-malformed, path: ${malformed.path}`,
         TagExcludedMalformed: (malformed) => `refused: tag-excluded-malformed, path: ${malformed.path}`,
+        TagGitFailed: (failed) => `git command failed: ${failed.command}\n${failed.stderr}`,
         PullRequestBodyUnreadable: (unreadable) => `cannot read body file: ${unreadable.path}`,
         PullRequestHeadInvalid: (invalid) => `invalid pull request head: ${invalid.branch}`,
-        VersionStageRefused: (stage) => versionStageText(stage.refusal),
+        PullRequestUnversioned: (unversioned) =>
+          `refused: pull-request-unversioned, pending intents: ${unversioned.pending}. Run \`version-management bump\` first: pr opens the release PR from the bumped tree`,
+        PullRequestTreeUnreadable: (unreadable) => `cannot read the working tree: ${unreadable.reason}`,
+        PullRequestGitFailed: (failed) => `git command failed: ${failed.command}\n${failed.stderr}`,
       }),
     ),
   )
@@ -280,6 +332,14 @@ export const renderPlan = (
       (name) => note(`${name} is listed as deferred but is not a package in this workspace; ignoring it.`),
       { discard: true },
     )
+    yield* Effect.forEach(
+      report.legacy,
+      (release) =>
+        note(
+          `plan-release: legacy release ${release.tag} (${release.package}@${release.version}), identity not recorded`,
+        ),
+      { discard: true },
+    )
     yield* note(
       `plan-release: pending_intents=${report.pendingIntents} this_cycle=${report.thisCycle} ` +
         `deferred=${report.deferred} -> phase=${report.phase}`,
@@ -298,6 +358,108 @@ export const renderPlan = (
       return
     }
     yield* appendFile(output, block)
+  })
+
+export type AdoptFailure = PlatformRefusal | MemberRefusal | TagRefusal | LedgerRefusal | AdoptionRefused
+
+export const renderAdoptRefusal = (refusal: AdoptFailure): Effect.Effect<void, never, Reporter> =>
+  refuse(
+    Match.value(refusal).pipe(
+      Match.tagsExhaustive({
+        AdoptionRefused: (refused) =>
+          [
+            ...refused.failures.map(adoptionFailureText),
+            ...ledgerEntryNotes(refused.ledgered),
+            ...refused.excluded.map((entry) => `${entry.tag}: ${entry.reason}`),
+            adoptionCountsLine(refused.ledgered, refused.failures.length),
+          ].join('\n'),
+        ConfigUnreadable: (unreadable) => `${unreadable.path}: cannot be read`,
+        ConfigMalformed: (malformed) => `${malformed.path}: ${malformed.reason}`,
+        ConfigFieldMissing: (missing) => `${missing.path}: missing field ${missing.field}`,
+        ConfigFieldInvalid: (invalid) => `${invalid.path}: invalid field ${invalid.field}: ${invalid.reason}`,
+        InvalidFlags: (invalid) => `invalid flags: ${invalid.reason}`,
+        OutputUnwritable: (unwritable) => `cannot write ${unwritable.path}: ${unwritable.reason}`,
+        OutputUnreadable: (unreadable) => `cannot read ${unreadable.path}: ${unreadable.reason}`,
+        WorkspaceRootNotAbsolute: (notAbsolute) => `refused: workspace-root-not-absolute, path: ${notAbsolute.given}`,
+        ManifestUnreadable: (unreadable) => `refused: manifest-unreadable, path: ${unreadable.path}`,
+        ManifestInvalid: (invalid) => `refused: manifest-invalid, path: ${invalid.path}`,
+        CommandUnstartable: (unstartable) => `${unstartable.command} could not be started: ${unstartable.reason}`,
+        TagCapturedMalformed: (malformed) => `refused: tag-captured-malformed, path: ${malformed.path}`,
+        TagExcludedMalformed: (malformed) => `refused: tag-excluded-malformed, path: ${malformed.path}`,
+        TagGitFailed: (failed) => `git command failed: ${failed.command}\n${failed.stderr}`,
+        LedgerUnreadable: (unreadable) => `cannot read release ledger ${unreadable.path}: ${unreadable.reason}`,
+        LedgerMalformed: (malformed) => `cannot parse release ledger ${malformed.path}: ${malformed.reason}`,
+        LedgerUnwritable: (unwritable) => `cannot write release ledger ${unwritable.path}: ${unwritable.reason}`,
+      }),
+    ),
+  )
+
+const adoptionFailureText = (failure: AdoptionFailure): string =>
+  Match.value(failure).pipe(
+    Match.tagsExhaustive({
+      RegistryFetchFailed: (fetched) => `${fetched.package}@${fetched.version}: ${fetched.reason}`,
+      RegistryMetadataMalformed: (malformed) => `${malformed.package}@${malformed.version}: ${malformed.reason}`,
+      RegistryIntegrityMismatch: (mismatch) =>
+        `${mismatch.package}@${mismatch.version}: dist.integrity ${mismatch.expected} but the download hashes to ${mismatch.actual}`,
+      AdoptionTagUnresolved: (unresolved) => `${unresolved.tag}: ${unresolved.reason}`,
+    }),
+  )
+
+const ledgerCounts = (
+  entries: ReadonlyArray<ReleaseLedgerEntry>,
+): { readonly published: number; readonly unpublished: number; readonly mismatched: number } => {
+  let published = 0
+  let unpublished = 0
+  let mismatched = 0
+  for (const entry of entries) {
+    Match.value(entry).pipe(
+      Match.tag('published', () => (published += 1)),
+      Match.tag('unpublished', () => (unpublished += 1)),
+      Match.tag('mismatched', () => (mismatched += 1)),
+      Match.exhaustive,
+    )
+  }
+  return { published, unpublished, mismatched }
+}
+
+const stateText = (state: VersionState): string =>
+  Match.value(state).pipe(
+    Match.tag('published', () => 'published'),
+    Match.tag('unpublished', (unpublished) => `unpublished (${unpublished.url} -> ${unpublished.status})`),
+    Match.exhaustive,
+  )
+
+const ledgerEntryNotes = (entries: ReadonlyArray<ReleaseLedgerEntry>): ReadonlyArray<string> =>
+  entries.flatMap((entry) =>
+    Match.value(entry).pipe(
+      Match.tag('published', () => []),
+      Match.tag('unpublished', (unpublished) => [
+        `${unpublished.tag}: ${unpublished.package}@${unpublished.version} unpublished (${unpublished.url} -> ${unpublished.status})`,
+      ]),
+      Match.tag('mismatched', (mismatched) => [
+        `mismatched ${mismatched.tag}: claims ${mismatched.claimedVersion} ${
+          stateText(mismatched.claimed)
+        }, manifest ${mismatched.manifestVersion} ${stateText(mismatched.manifest)}`,
+      ]),
+      Match.exhaustive,
+    )
+  )
+
+const adoptionCountsLine = (entries: ReadonlyArray<ReleaseLedgerEntry>, errors: number): string => {
+  const counts = ledgerCounts(entries)
+  return `adopted ${counts.published} published, ${counts.unpublished} unpublished, ${counts.mismatched} mismatched, ${errors} errors`
+}
+
+export const renderAdoption = (report: AdoptionReport): Effect.Effect<void, never, Reporter> =>
+  Effect.gen(function*() {
+    const reporter = yield* Reporter
+    for (const line of ledgerEntryNotes(report.entries)) {
+      yield* reporter.emit(line)
+    }
+    for (const entry of report.excluded) {
+      yield* reporter.note(`${entry.tag}: ${entry.reason}`)
+    }
+    yield* reporter.emit(adoptionCountsLine(report.entries, 0))
   })
 
 export const renderRelease = (decision: GithubReleaseDecision): Effect.Effect<void, never, Reporter> =>
@@ -320,29 +482,45 @@ export const renderRelease = (decision: GithubReleaseDecision): Effect.Effect<vo
     }),
   )
 
-export const renderPullRequest = (decision: PullRequestDecision): Effect.Effect<void, never, Reporter> =>
+const pullRequestLines = (decision: PullRequestDecision): Effect.Effect<void, never, Reporter> =>
   Match.value(decision).pipe(
     Match.tagsExhaustive({
       PullRequestCreated: (created) => emit(`created release PR #${created.number}`),
       PullRequestUpdated: (updated) => emit(`updated release PR #${updated.number}`),
       PullRequestClosed: (closed) =>
         Effect.gen(function*() {
-          yield* emit('no pending change intents — nothing to release')
+          yield* emit('no version changes on the tree — nothing to release')
           if (closed.branch.deleted) {
             yield* note(`closed release PR #${closed.number} and deleted ${closed.branch.branch}`)
             return
           }
           yield* note(`closed release PR #${closed.number}; ${closed.branch.branch} was already gone`)
         }),
-      PullRequestVacant: () => emit('no pending change intents — nothing to release'),
+      PullRequestVacant: () => emit('no version changes on the tree — nothing to release'),
     }),
   )
 
-export const renderVersion = (decision: VersionDecision): Effect.Effect<void, never, Reporter> =>
+const pullRequestOutputs = (decision: PullRequestDecision, branch: GitRef): ReadonlyArray<string> =>
   Match.value(decision).pipe(
     Match.tagsExhaustive({
-      VersionBumped: () => emit('versioned packages'),
-      VersionConsumed: () => emit('consumed intents without a version bump'),
-      VersionIdle: () => note('no change intents; nothing to version'),
+      PullRequestCreated: (created) => ['outcome=created', `number=${created.number}`, `branch=${branch}`],
+      PullRequestUpdated: (updated) => ['outcome=updated', `number=${updated.number}`, `branch=${branch}`],
+      PullRequestClosed: (closed) => ['outcome=closed', `number=${closed.number}`, `branch=${closed.branch.branch}`],
+      PullRequestVacant: (vacant) => ['outcome=vacant', `branch=${vacant.branch}`],
     }),
   )
+
+export interface PullRequestOptions {
+  readonly branch: GitRef
+  readonly output: string | undefined
+}
+
+export const renderPullRequest = (
+  decision: PullRequestDecision,
+  options: PullRequestOptions,
+): Effect.Effect<void, OutputUnwritable, Reporter | FileSystem.FileSystem> =>
+  Effect.gen(function*() {
+    yield* pullRequestLines(decision)
+    if (options.output === undefined) return
+    yield* appendFile(options.output, pullRequestOutputs(decision, options.branch).join('\n'))
+  })

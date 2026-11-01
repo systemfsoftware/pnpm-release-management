@@ -1,7 +1,7 @@
 FROM docker.io/library/node:24-bookworm-slim
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl git jq nginx openssl unzip \
+  && apt-get install -y --no-install-recommends ca-certificates cargo curl git jq nginx openssl unzip \
   && rm -rf /var/lib/apt/lists/*
 
 ARG DENO_VERSION=2.9.5

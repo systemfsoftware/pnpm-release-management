@@ -1,1 +1,1 @@
-{ "extends": "@systemfsoftware/tsconfig/node", "include": ["tsdown.config.ts"] }
+{ "extends": "@systemfsoftware/tsconfig/node", "include": ["tsdown.config.ts", "vitest.config.ts"] }

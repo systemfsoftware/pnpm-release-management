@@ -7,6 +7,7 @@ import {
   PrTitle,
   PullRequestLookup,
   PullRequestNumber,
+  RelativePath,
   ReleaseLabel,
   RemoteName,
   RepoSlug,
@@ -60,10 +61,17 @@ export class PullRequestHeadInvalid extends S.TaggedError<PullRequestHeadInvalid
   { branch: GitRef },
 ) {}
 
+export class PullRequestUnversioned extends S.TaggedError<PullRequestUnversioned>()(
+  'PullRequestUnversioned',
+  { pending: Count },
+) {}
+
 export class PullRequestCommand extends S.TaggedClass<PullRequestCommand>()(
   'PullRequestCommand',
   {
     pending: Count,
+    changes: Count,
+    created: S.Array(RelativePath),
     existing: PullRequestLookup,
     branch: GitRef,
     base: GitRef,
@@ -84,12 +92,14 @@ export type PullRequestDecision =
 
 const BodyBadCase = S.TaggedStruct('BodyBad', { path: FsPath })
 const HeadBadCase = S.TaggedStruct('HeadBad', { branch: GitRef })
+const UnversionedCase = S.TaggedStruct('Unversioned', { pending: Count })
 const RefreshingCase = S.TaggedStruct('Refreshing', { number: PullRequestNumber })
 const ClosingCase = S.TaggedStruct('Closing', { number: PullRequestNumber, branch: GitRef })
 const VacantCase = S.TaggedStruct('Vacant', { branch: GitRef })
 const PullRequestCase = S.Union([
   BodyBadCase,
   HeadBadCase,
+  UnversionedCase,
   RefreshingCase,
   ClosingCase,
   VacantCase,
@@ -105,9 +115,12 @@ const pullRequestCaseOf = (command: PullRequestCommand): PullRequestCase => {
   if (branch === command.base) {
     return HeadBadCase.make({ branch })
   }
+  if (command.pending > 0) {
+    return UnversionedCase.make({ pending: command.pending })
+  }
   return Match.value(command.existing).pipe(
     Match.tag('PullRequestFound', (found): PullRequestCase => {
-      if (command.pending > 0) {
+      if (command.changes > 0) {
         return RefreshingCase.make({ number: found.number })
       }
       return ClosingCase.make({ number: found.number, branch })
@@ -123,12 +136,15 @@ export const pullRequest = Workflow.make(
     command,
   ): Result.Result<
     PullRequestCreated | PullRequestUpdated | PullRequestClosed | PullRequestVacant,
-    PullRequestBodyUnreadable | PullRequestHeadInvalid
+    PullRequestBodyUnreadable | PullRequestHeadInvalid | PullRequestUnversioned
   > =>
     Match.value(pullRequestCaseOf(command)).pipe(
       Match.tag('BodyBad', (bad) => Result.fail(PullRequestBodyUnreadable.make({ path: bad.path }))),
       Match.tag('HeadBad', (bad) => Result.fail(PullRequestHeadInvalid.make({ branch: bad.branch }))),
-      Match.tag('Refreshing', (refreshing) => Result.succeed(PullRequestUpdated.make({ number: refreshing.number }))),
+      Match.tag('Unversioned', (unversioned) =>
+        Result.fail(PullRequestUnversioned.make({ pending: unversioned.pending }))),
+      Match.tag('Refreshing', (refreshing) =>
+        Result.succeed(PullRequestUpdated.make({ number: refreshing.number }))),
       Match.tag('Closing', (closing) =>
         Result.succeed(
           PullRequestClosed.make({

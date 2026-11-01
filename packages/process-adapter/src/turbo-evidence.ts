@@ -3,12 +3,13 @@ import {
   EvidenceCommandFailed,
   type EvidenceRefusal,
   type Member,
+  type PackageName,
+  type RegistryPort,
   type RelativePath,
   type RepoRoot,
   type TaskName,
   TurboDryRunDrifted,
   TurboDryRunUnreadable,
-  TurboPinUnusable,
   WorktreeUnavailable,
 } from '@systemfsoftware/release-language'
 import { Effect, FileSystem } from 'effect'
@@ -21,9 +22,10 @@ import type { ChildProcessSpawner } from 'effect/unstable/process/ChildProcessSp
 import { verdictTouched } from './change-verdict.js'
 import { gitLines, MANIFEST_GLOB, MANIFEST_SUFFIX, memberOf, membersAt, readText } from './evidence-io.js'
 import { runProcess } from './ProcessRun.js'
+import { type FetchedTurbo, fetchTurbo, TURBO_ENV } from './turbo-fetch.js'
+import type { TurboPin } from './turbo-pin.js'
 import { DryRunDocument } from './TurboDryRun.schema.js'
 
-const TURBO_BIN = 'node_modules/.bin/turbo'
 const WORKTREE_PREFIX = 'changeset-base-'
 
 type Requirements = FileSystem.FileSystem | ChildProcessSpawner
@@ -96,110 +98,103 @@ const dryRunView = (
 
 const dryRunAt = (
   cwd: string,
-  root: RepoRoot,
+  turbo: FetchedTurbo,
   task: TaskName,
-  pinned: string,
 ): Effect.Effect<DryRun, EvidenceRefusal, Requirements> =>
   Effect.gen(function*() {
-    const fs = yield* FileSystem.FileSystem
-    const turboBin = `${root}/${TURBO_BIN}`
-    const installed = yield* fs.stat(turboBin).pipe(
-      Effect.as(true),
-      Effect.orElseSucceed(() => false),
-    )
-    if (!installed) {
-      return yield* Effect.fail(
-        new TurboPinUnusable({
-          detail: `turbo not present at ${turboBin} — run 'pnpm install --frozen-lockfile'`,
-        }),
-      )
-    }
     const out = yield* runProcess({
-      program: turboBin,
+      program: turbo.program,
       args: ['run', task, '--dry=json'],
       cwd,
       stdio: 'captured',
+      env: TURBO_ENV,
     })
     if (out.code !== 0) {
       const tail = out.stderr.trim().split('\n').slice(-5).join('\n')
       return yield* Effect.fail(
         new EvidenceCommandFailed({
-          program: turboBin,
+          program: `turbo (${turbo.key})`,
           detail: `dry run in ${cwd} failed:\n${tail}`,
         }),
       )
     }
     const document = yield* Effect.fromResult(decodeDryRun(out.stdout, cwd))
-    const run = yield* Effect.fromResult(dryRunView(document, cwd, task))
-    if (
-      run.document.turboVersion !== undefined &&
-      run.document.turboVersion !== pinned
-    ) {
-      return yield* Effect.fail(
-        new TurboPinUnusable({
-          detail:
-            `turbo in ${cwd} self-reports version ${run.document.turboVersion}, not the lockfile pin ${pinned} — run 'pnpm install --frozen-lockfile'`,
-        }),
-      )
-    }
-    return run
+    return yield* Effect.fromResult(dryRunView(document, cwd, task))
   })
+
+interface TurboMembers {
+  readonly members: ReadonlyArray<Member>
+  readonly deleted: ReadonlyArray<PackageName>
+}
+
+const headMembersWhen = (
+  root: RepoRoot,
+  needed: boolean,
+): Effect.Effect<ReadonlyArray<Member>, EvidenceRefusal, Requirements> => {
+  if (!needed) return Effect.succeed([])
+  return Effect.flatMap(gitLines(root, MANIFEST_GLOB), (paths) => membersAt(root, paths))
+}
+
+const manifestAt = (present: boolean, atHead: string, atBase: string): string => {
+  if (present) return atHead
+  return atBase
+}
 
 const turboMembers = (
   root: RepoRoot,
+  baseDir: string,
   runs: ReadonlyArray<DryRun>,
-): Effect.Effect<ReadonlyArray<Member>, EvidenceRefusal, Requirements> =>
+): Effect.Effect<TurboMembers, EvidenceRefusal, Requirements> =>
   Effect.gen(function*() {
-    let dirs = HashMap.empty<string, RelativePath>()
-    for (const run of runs) {
-      for (const [name, dir] of HashMap.toEntries(run.dirs)) {
-        dirs = HashMap.set(dirs, name, dir)
-      }
-    }
+    const fs = yield* FileSystem.FileSystem
+    const fromRuns = HashMap.fromIterable(runs.flatMap((run) => [...HashMap.toEntries(run.dirs)]))
     const turboNames = HashSet.fromIterable(
       runs.flatMap((run) => run.document.packages),
     )
-    if ([...turboNames].some((name) => !HashMap.has(dirs, name))) {
-      const found = yield* membersAt(
-        root,
-        yield* gitLines(root, MANIFEST_GLOB),
-      )
-      for (const member of found) {
-        if (!HashSet.has(turboNames, member.name)) continue
-        if (HashMap.has(dirs, member.name)) continue
-        dirs = HashMap.set(dirs, member.name, member.dir)
-      }
-    }
+    const unplaced = [...turboNames].some((name) => !HashMap.has(fromRuns, name))
+    const found = yield* headMembersWhen(root, unplaced)
+    const placed = found.filter((member, index) =>
+      HashSet.has(turboNames, member.name) &&
+      !HashMap.has(fromRuns, member.name) &&
+      found.findIndex((other) => other.name === member.name) === index
+    )
+    const dirs = HashMap.union(
+      HashMap.fromIterable(placed.map((member): readonly [string, RelativePath] => [member.name, member.dir])),
+      fromRuns,
+    )
     const members: Array<Member> = []
+    const deleted: Array<PackageName> = []
     for (const [, dir] of HashMap.toEntries(dirs)) {
-      const member = memberOf(
-        dir,
-        yield* readText(`${root}/${dir}${MANIFEST_SUFFIX}`),
-      )
+      const atHead = `${root}/${dir}${MANIFEST_SUFFIX}`
+      const present = yield* fs.exists(atHead).pipe(Effect.orElseSucceed(() => false))
+      const member = memberOf(dir, yield* readText(manifestAt(present, atHead, `${baseDir}/${dir}${MANIFEST_SUFFIX}`)))
       if (Option.isNone(member)) continue
-      members.push(member.value)
+      if (present) members.push(member.value)
+      else deleted.push(member.value.name)
     }
-    return members
+    return { members, deleted: deleted.sort() }
   })
 
 const dryRunEvidence = (
   root: RepoRoot,
   baseDir: string,
   task: TaskName,
-  pinned: string,
+  turbo: FetchedTurbo,
+  version: string,
   changedFiles: ReadonlyArray<RelativePath>,
 ): Effect.Effect<ChangeEvidence, EvidenceRefusal, Requirements> =>
   Effect.gen(function*() {
     const [baseRun, headRun] = yield* Effect.all(
       [
-        dryRunAt(baseDir, root, task, pinned),
-        dryRunAt(root, root, task, pinned),
+        dryRunAt(baseDir, turbo, task),
+        dryRunAt(root, turbo, task),
       ],
       { concurrency: 2 },
     )
-    const members = yield* turboMembers(root, [baseRun, headRun])
+    const { members, deleted } = yield* turboMembers(root, baseDir, [baseRun, headRun])
     const evidence: ChangeEvidence = {
       members: [...members],
+      deleted: [...deleted],
       touched: verdictTouched(
         baseRun.matrix,
         headRun.matrix,
@@ -211,7 +206,7 @@ const dryRunEvidence = (
         task,
         base: Object.fromEntries(HashMap.toEntries(baseRun.matrix)),
         head: Object.fromEntries(HashMap.toEntries(headRun.matrix)),
-        engineVersion: headRun.document.turboVersion ?? null,
+        engineVersion: version,
       },
     }
     return evidence
@@ -221,10 +216,11 @@ export const collectTurboEvidence = (
   root: RepoRoot,
   baseSha: string,
   task: TaskName,
-  pinned: string,
+  pin: TurboPin,
   changedFiles: ReadonlyArray<RelativePath>,
-): Effect.Effect<ChangeEvidence, EvidenceRefusal, Requirements> =>
-  Effect.gen(function*() {
+): Effect.Effect<ChangeEvidence, EvidenceRefusal, Requirements | RegistryPort> =>
+  Effect.scoped(Effect.gen(function*() {
+    const turbo = yield* fetchTurbo(pin)
     const fs = yield* FileSystem.FileSystem
     const baseDir = yield* fs.makeTempDirectory({
       prefix: WORKTREE_PREFIX,
@@ -250,7 +246,7 @@ export const collectTurboEvidence = (
       )
     }
     return yield* Effect.ensuring(
-      dryRunEvidence(root, baseDir, task, pinned, changedFiles),
+      dryRunEvidence(root, baseDir, task, turbo, pin.version, changedFiles),
       runProcess({
         program: 'git',
         args: ['worktree', 'remove', '--force', baseDir],
@@ -258,4 +254,4 @@ export const collectTurboEvidence = (
         stdio: 'captured',
       }).pipe(Effect.ignore),
     )
-  })
+  }))

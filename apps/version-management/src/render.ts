@@ -1,7 +1,6 @@
 import { Reporter, type WorkspaceRootNotAbsolute } from '@systemfsoftware/cli-adapter'
 import type {
   ChangelogRefusal,
-  CommandRefusal,
   ConfigRefusal,
   IntentRefusal,
   MemberRefusal,
@@ -30,7 +29,6 @@ export type AppRefusal =
   | MemberRefusal
   | VersionRefusal
   | ChangelogRefusal
-  | CommandRefusal
   | PinRefusal
   | SchemaError
 
@@ -146,9 +144,13 @@ export const renderRefusal = (refusal: AppRefusal): Effect.Effect<void, never, R
       ManifestUnreadable: (unreadable) => refuse(fields('ManifestUnreadable', [['path', unreadable.path]])),
       ManifestInvalid: (invalid) =>
         refuse(fields('ManifestInvalid', [['path', invalid.path], ['reason', invalid.reason]])),
+      CommandUnstartable: (unstartable) =>
+        refuse(fields('CommandUnstartable', [['command', unstartable.command], ['reason', unstartable.reason]])),
       VersionIntentMalformed: (malformed) => refuse(fields('VersionIntentMalformed', [['path', malformed.path]])),
       VersionUnknownPackage: (unknown) => refuse(fields('VersionUnknownPackage', [['package', unknown.package]])),
       VersionSurfaceMissing: (missing) => refuse(fields('VersionSurfaceMissing', [['path', missing.path]])),
+      VersionLockStale: (stale) => refuse(fields('VersionLockStale', [['path', stale.path]])),
+      VersionCargoPackageMissing: (missing) => refuse(fields('VersionCargoPackageMissing', [['path', missing.path]])),
       RootManifestUnwritable: (unwritable) => refuse(fields('RootManifestUnwritable', [['path', unwritable.path]])),
       ChangelogUnreadable: (unreadable) => refuse(fields('ChangelogUnreadable', [['path', unreadable.path]])),
       ChangelogUnwritable: (unwritable) =>
@@ -156,13 +158,6 @@ export const renderRefusal = (refusal: AppRefusal): Effect.Effect<void, never, R
           fields('ChangelogUnwritable', [
             ['path', unwritable.path],
             ['reason', unwritable.reason],
-          ]),
-        ),
-      CommandRefused: (command) =>
-        refuse(
-          fields('CommandRefused', [
-            ['command', `${command.command.program} ${command.command.args.join(' ')}`],
-            ['reason', command.reason],
           ]),
         ),
       PinVersionUnusable: (unusable) =>
@@ -192,6 +187,8 @@ export const renderSyncRefusal = (
       VersionIntentMalformed: (malformed) => refuse(fields('VersionIntentMalformed', [['path', malformed.path]])),
       VersionUnknownPackage: (unknown) => refuse(fields('VersionUnknownPackage', [['package', unknown.package]])),
       VersionSurfaceMissing: (missing) => refuse(fields('VersionSurfaceMissing', [['path', missing.path]])),
+      VersionLockStale: (stale) => refuse(fields('VersionLockStale', [['path', stale.path]])),
+      VersionCargoPackageMissing: (missing) => refuse(fields('VersionCargoPackageMissing', [['path', missing.path]])),
       RootManifestUnwritable: (unwritable) => refuse(fields('RootManifestUnwritable', [['path', unwritable.path]])),
       SchemaError: (schema) => refuse(fields('SchemaError', [['message', schema.message]])),
     }),
