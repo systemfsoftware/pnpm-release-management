@@ -14,7 +14,7 @@ A member that carries two identities: the workspace's own declaration and an npm
 
 ### Root manifest
 
-The manifest at the repository root. It declares the repository's own metadata rather than a member's, and where the package manager is pnpm it holds the dependency graph that task-level resolution consults before any task in the workspace runs.
+The manifest at the repository root. It declares the repository's own metadata rather than a member's, and where the package manager is pnpm it holds the dependency graph that task-level resolution consults before any task in the workspace runs. It may declare no version at all: versioning that moves each member on its own plan never reads it, while versioning that keeps one consolidated version reads it as the source of that version.
 
 ### Root-importer row
 
