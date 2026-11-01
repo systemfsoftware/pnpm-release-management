@@ -79,6 +79,9 @@ const dependencyLineOf = (
   return `Updated dependency ${first} to ${newVersionOf(releases, first)}`
 }
 
+const joinAsMarkdownBlocks = (summaries: ReadonlyArray<string>): string =>
+  summaries.map((text) => text.trim()).filter((text) => text !== '').join('\n\n')
+
 export const projectPlan = (args: {
   readonly packages: ReadonlyArray<PackageEntry>
   readonly changesets: ReadonlyArray<PlanChangeset>
@@ -96,7 +99,7 @@ export const projectPlan = (args: {
     const own = release.changesets
       .map((id) => summaryById.get(id))
       .filter((summary): summary is string => summary !== undefined)
-    let summary = own.join(' ')
+    let summary = joinAsMarkdownBlocks(own)
     if (own.length === 0) summary = dependencyLineOf(release, releasable, dependenciesByName)
     releases.push({
       name: PackageName.make(release.name),
