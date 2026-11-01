@@ -180,7 +180,8 @@ A surface is one of:
 surface, and appends the release summary to the root changelog. `changesets`
 versioning drives the changesets libraries per package: the assembled release
 plan decides each member's bump, workspace dependents move with it, and the
-consumed intents are removed.
+consumed intents are removed. The workspace root's `package.json` is not read, so
+a private root with no `version` field versions like any other.
 
 A `cargo` surface rewrites `[workspace.package] version` in the named manifest,
 any workspace member that pins a literal `[package] version`, and every

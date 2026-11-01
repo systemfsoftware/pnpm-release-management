@@ -1,8 +1,11 @@
 import { Cell } from '@systemfsoftware/effect-cell-types'
 import { Gherkin, Given, it, layer, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
 import {
+  ChangesetsPort,
+  Count,
   Intent,
   Member,
+  PackageName,
   PackageVersion,
   RelativePath,
   RepoRoot,
@@ -1209,6 +1212,66 @@ Feature('Versioning packages').body(({ scenario }) => {
               )
             }),
             Match.tag('decided', () => failUnexpected('expected a refusal')),
+            Match.exhaustive,
+          )
+        }),
+      ),
+    )
+  }
+
+  {
+    const members = membersOf([{ name: 'a', version: '1.2.3' }])
+    const surfaces = makeFakeSurfaceStore(new Map(), new Set([brandPath('package.json')]))
+    const workspace = makeFakeWorkspaceStore(members, brandRoot('/test'))
+    const changesets = makeFakeChangesetStore()
+    const changelogs = makeFakeChangelogStore()
+    const applied: Array<string> = []
+    const port = Layer.succeed(ChangesetsPort, {
+      plan: () =>
+        Effect.succeed({
+          changesets: Count.make(1),
+          releases: [{
+            name: PackageName.make('a'),
+            type: 'patch' as const,
+            oldVersion: brandVersion('1.2.3'),
+            newVersion: brandVersion('1.2.4'),
+            summary: 'fix a',
+          }],
+        }),
+      apply: () => Effect.sync(() => void applied.push('apply')),
+    })
+    const live = Layer.mergeAll(surfaces.layer, workspace.layer, changesets.layer, changelogs.layer, port)
+    scenario(
+      'A versionless root manifest does not block a changesets bump',
+      { scenarioLayer: live },
+      Gherkin.Do.pipe(
+        Given('a changesets workspace whose private root manifest declares no version')(
+          'input',
+          () => Effect.succeed(bumpInputOf({ strategy: 'changesets', changelogDir: 'changelog', surfaces: [] })),
+        ),
+        When('the release plan is versioned per package')(
+          'outcome',
+          (s) =>
+            Effect.match(Cell.run(Cell.provide(bumpCell, live), s.input), {
+              onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
+              onSuccess: (decision) => ({ _tag: 'decided' as const, decision }),
+            }),
+        ),
+        Then('the member moves and the root manifest is left unread')((s) => {
+          Match.value(s.outcome).pipe(
+            Match.tag('decided', (decided) =>
+              Match.value(decided.decision).pipe(
+                Match.tag('VersionBumped', (bumped) => {
+                  expect(bumped.version).toEqual('1.2.4')
+                  expect([...bumped.moved]).toEqual(['a'])
+                  expect(applied).toEqual(['apply'])
+                  expect(surfaces.state.reads).toEqual([])
+                }),
+                Match.tag('VersionConsumed', () => failUnexpected('expected a bump')),
+                Match.tag('VersionIdle', () => failUnexpected('expected a bump')),
+                Match.exhaustive,
+              )),
+            Match.tag('refused', (refused) => failUnexpected(`expected a bump, got ${refused.refusal._tag}`)),
             Match.exhaustive,
           )
         }),

@@ -1,5 +1,12 @@
 import { it } from '@effect/vitest'
-import { type Bump, Intent, Member, memberChangelogPathOf, RelativePath } from '@systemfsoftware/release-language'
+import {
+  type Bump,
+  Intent,
+  Member,
+  memberChangelogPathOf,
+  PackageVersion,
+  RelativePath,
+} from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
@@ -64,12 +71,10 @@ type PlainIntent = {
 }
 
 const toCommand = (input: {
-  readonly strategy: 'changesets' | 'surfaces'
   readonly intents: ReadonlyArray<unknown>
   readonly members: ReadonlyArray<unknown>
   readonly manifestVersion: string
   readonly changelogDir: string
-  readonly rootChangelog?: string
 }): BumpCommand => {
   const intents = S.decodeUnknownSync(S.Array(Intent))(input.intents)
   const members = S.decodeUnknownSync(S.Array(Member))(input.members)
@@ -80,25 +85,27 @@ const toCommand = (input: {
     changelogPathOf: (member, version) =>
       memberChangelogPathOf('registry', RelativePath.make(input.changelogDir), member, version),
   })
-  return S.decodeUnknownSync(BumpCommand)({
-    _tag: 'BumpCommand',
-    strategy: input.strategy,
-    intents,
-    members,
-    manifestVersion: input.manifestVersion,
-    changelogDir: input.changelogDir,
+  return BumpCommand.make({
+    versioning: {
+      strategy: 'surfaces',
+      manifest: {
+        file: RelativePath.make('package.json'),
+        surface: { kind: 'json', path: RelativePath.make('package.json') },
+      },
+      surfaces: [],
+      manifestVersion: PackageVersion.make(input.manifestVersion),
+      consolidated: derived.consolidated,
+      consolidatedNext: derived.consolidatedNext,
+    },
+    intents: [...intents],
+    members: [...members],
+    changelogDir: RelativePath.make(input.changelogDir),
     changelogStorage: 'registry',
-    rootChangelog: input.rootChangelog,
-    manifest: { file: 'package.json', surface: { kind: 'json', path: 'package.json' } },
-    surfaces: [],
-    consolidated: derived.consolidated,
-    consolidatedNext: derived.consolidatedNext,
     moved: derived.moved,
     changelogPaths: derived.changelogPaths,
     unknownPackage: derived.unknownPackage,
     malformedPath: derived.malformedPath,
     intentCount: derived.intentCount,
-    planned: [],
   })
 }
 
@@ -151,7 +158,7 @@ it.prop(
   '∀cmd_BumpVersions_≡IdleZero',
   [membersArb, versionArb, relativePathArb],
   ([members, manifestVersion, changelogDir]) => {
-    const command = toCommand({ strategy: 'surfaces', intents: [], members, manifestVersion, changelogDir })
+    const command = toCommand({ intents: [], members, manifestVersion, changelogDir })
     const outcome = bumpVersions(command)
     if (Result.isFailure(outcome)) {
       return false
@@ -172,7 +179,7 @@ it.prop(
       packages: [{ name: foreign, bump: 'minor' }],
       summary,
     }]
-    const command = toCommand({ strategy: 'surfaces', intents, members, manifestVersion, changelogDir })
+    const command = toCommand({ intents, members, manifestVersion, changelogDir })
     const outcome = bumpVersions(command)
     if (Result.isSuccess(outcome)) {
       return false
@@ -189,7 +196,7 @@ it.prop(
   [membersArb, versionArb, relativePathArb, summaryArb, relativePathArb],
   ([members, manifestVersion, changelogDir, summary, emptyPath]) => {
     const intents: ReadonlyArray<PlainIntent> = [{ path: emptyPath, packages: [], summary }]
-    const command = toCommand({ strategy: 'surfaces', intents, members, manifestVersion, changelogDir })
+    const command = toCommand({ intents, members, manifestVersion, changelogDir })
     const outcome = bumpVersions(command)
     if (Result.isSuccess(outcome)) {
       return false
@@ -211,7 +218,7 @@ it.prop(
       packages: names.map((name) => ({ name, bump: 'none' as const })),
       summary,
     }))
-    const command = toCommand({ strategy: 'surfaces', intents, members, manifestVersion, changelogDir })
+    const command = toCommand({ intents, members, manifestVersion, changelogDir })
     const outcome = bumpVersions(command)
     if (Result.isFailure(outcome)) {
       return false
@@ -239,7 +246,7 @@ it.prop(
     ]
     const ranks = collapseRanks(intents)
     const consolidated = topOf(ranks.values())
-    const command = toCommand({ strategy: 'surfaces', intents, members, manifestVersion, changelogDir })
+    const command = toCommand({ intents, members, manifestVersion, changelogDir })
     const outcome = bumpVersions(command)
     if (Result.isFailure(outcome)) {
       return false

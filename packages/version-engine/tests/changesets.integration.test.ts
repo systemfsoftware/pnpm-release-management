@@ -56,8 +56,6 @@ const CARGO_MANIFEST =
   `[workspace]\nmembers = ["crates/*"]\n\n[workspace.package]\nversion = "0.3.0"\nedition = "2021"\n`
 const CARGO_MEMBER = `[package]\nname = "gritlint"\nversion = "0.3.0"\nedition = "2021"\n`
 
-const MANIFEST_TARGET = { file: 'package.json', surface: { kind: 'json' as const, path: 'package.json' } }
-
 const resetTo = (files: ReadonlyArray<readonly [string, string]>) =>
   Effect.gen(function*() {
     const fs = yield* FileSystem
@@ -121,7 +119,6 @@ Feature('Changesets versioning').body(({ scenario }) => {
         runBump(bumpInputOf({
           strategy: 'changesets',
           changelogDir,
-          manifest: MANIFEST_TARGET,
           surfaces: [],
         }))),
       Then('each member moves and carries its changelog, and the intents are gone')((s) =>
@@ -181,7 +178,6 @@ Feature('Changesets versioning').body(({ scenario }) => {
         runBump(bumpInputOf({
           strategy: 'changesets',
           changelogDir,
-          manifest: MANIFEST_TARGET,
           surfaces: [],
         }))),
       Then('the unknown package is refused and the intent is kept')((s) =>
@@ -230,7 +226,6 @@ Feature('Changesets versioning').body(({ scenario }) => {
         runBump(bumpInputOf({
           strategy: 'changesets',
           changelogDir,
-          manifest: MANIFEST_TARGET,
           surfaces: [{
             file: 'Cargo.toml',
             surface: { kind: 'cargo', path: 'Cargo.toml', package: '@e2e/gritlint' },
@@ -280,7 +275,6 @@ Feature('Changesets versioning').body(({ scenario }) => {
         runBump(bumpInputOf({
           strategy: 'changesets',
           changelogDir: 'release/notes/changelogs',
-          manifest: MANIFEST_TARGET,
           surfaces: [],
         }))),
       Then('the member moves and its changelog is parked in the new directory')((s) =>
@@ -319,7 +313,6 @@ Feature('Changesets versioning').body(({ scenario }) => {
         runBump(bumpInputOf({
           strategy: 'changesets',
           changelogDir,
-          manifest: MANIFEST_TARGET,
           surfaces: [],
         }))),
       Then('versioning is refused as an unwritable changelog at the parked path')((s) =>
