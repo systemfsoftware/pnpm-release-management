@@ -38,6 +38,12 @@ A comparison whose base and head revisions both hold a root Turbo config, so Tur
 
 ## Versioning
 
+### Intent
+
+A pending note of one change to release. Its frontmatter names the members it affects and the bump each takes (major, minor, patch, or none), and its markdown body describes the change for readers of the changelog. A bump consumes every pending intent and removes it.
+
+The body keeps its own block structure, paragraphs and lists included, so text assembled from several intents is joined as separate blocks, never inline.
+
 ### Parked changelog
 
 A member's changelog for one released version, written by the version bump under the changelog directory rather than beside the member, when the release config stores changelogs in the registry. Its name joins the member name, with `/` replaced by `!`, to the version. The release step later turns it into that version's GitHub Release notes. The changelog directory is the tool's own: a fresh checkout does not have it, and the bump creates it.
