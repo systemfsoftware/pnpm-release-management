@@ -16,7 +16,7 @@ const Feature = makeFeature({ it, layer })
 
 const TAG = '@scope/alpha@v1.0.0'
 const REJECTION = 'refusing tag pushes in this fixture'
-const EXPECTED_COMMAND = `git push origin refs/tags/${TAG}`
+const EXPECTED_COMMAND = `git -c core.hooksPath=/dev/null push origin refs/tags/${TAG}`
 
 const git = (cwd: string, ...args: ReadonlyArray<string>) =>
   Effect.scoped(

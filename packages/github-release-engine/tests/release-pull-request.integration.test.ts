@@ -64,6 +64,26 @@ const committedRepo = (files: ReadonlyArray<readonly [string, string]>) =>
     return { root: RepoRoot.make(root), remote }
   })
 
+const withConsumerHusky = (files: ReadonlyArray<readonly [string, string]>) =>
+  Effect.gen(function*() {
+    const repo = yield* committedRepo(files)
+    const fs = yield* FileSystem
+    const path = yield* Path
+    yield* writeFiles(repo.root, [
+      ['.husky/pre-commit', '#!/bin/sh\nexit 1\n'],
+      ['.husky/commit-msg', '#!/bin/sh\nexit 1\n'],
+      ['.husky/prepare-commit-msg', '#!/bin/sh\nprintf "hook-was-here\\n" >> "$1"\n'],
+      ['.husky/pre-push', '#!/bin/sh\nexit 1\n'],
+    ])
+    yield* Effect.forEach(
+      ['pre-commit', 'commit-msg', 'prepare-commit-msg', 'pre-push'],
+      (hook) => fs.chmod(path.join(repo.root, '.husky', hook), 0o755),
+      { discard: true },
+    )
+    yield* git(repo.root, 'config', 'core.hooksPath', '.husky')
+    return repo
+  })
+
 const bump = (root: RepoRoot) =>
   Effect.gen(function*() {
     const bumpLayer = Layer.mergeAll(
@@ -173,6 +193,37 @@ Feature('The release PR is opened from the tree the version step bumped').body((
   )
 
   scenario(
+    'Consumer hooksPath hooks that exit 1 do not stop the release commit',
+    { scenarioLayer: NodeServices.layer },
+    Gherkin.Do.pipe(
+      Given('a committed workspace whose dev shell routes git hooks to a failing .husky')(
+        'repo',
+        () => withConsumerHusky(PENDING_FILES),
+      ),
+      When('the version step bumps and pr runs with the consumer hooksPath set')(
+        'run',
+        (s) => Effect.andThen(bump(s.repo.root), openReleasePullRequest(s.repo.root)),
+      ),
+      Then('the release PR opens with the release title and bot identity untouched by hooks')((s) =>
+        Effect.gen(function*() {
+          Match.value(s.run.outcome).pipe(
+            Match.tag('decided', ({ decision }) => expect(decision._tag).toEqual('PullRequestCreated')),
+            Match.tag('refused', ({ refusal }) => expect.fail(`expected a created PR, got ${JSON.stringify(refusal)}`)),
+            Match.exhaustive,
+          )
+          expect(s.run.forge.calls.createdPullRequests.map((created) => created.head)).toEqual(['release'])
+          const bot = 'github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>'
+          expect(yield* git(s.repo.remote, 'log', '-1', '--format=%s', 'release')).toEqual(title)
+          expect(yield* git(s.repo.remote, 'log', '-1', '--format=%B', 'release')).toEqual(title)
+          expect(yield* git(s.repo.remote, 'log', '-1', '--format=%an <%ae>%n%cn <%ce>', 'release')).toEqual(
+            [bot, bot].join('\n'),
+          )
+        })
+      ),
+    ),
+  )
+
+  scenario(
     'A failed git command is refused with the command and git stderr',
     { scenarioLayer: NodeServices.layer },
     Gherkin.Do.pipe(
@@ -191,7 +242,7 @@ Feature('The release PR is opened from the tree the version step bumped').body((
             Match.tag('refused', ({ refusal }) => {
               expect(refusal).toMatchObject({
                 _tag: 'PullRequestGitFailed',
-                command: 'git push --force origin HEAD:refs/heads/release',
+                command: 'git -c core.hooksPath=/dev/null push --force origin HEAD:refs/heads/release',
               })
               expect(JSON.stringify(refusal)).toContain('does not appear to be a git repository')
             }),
