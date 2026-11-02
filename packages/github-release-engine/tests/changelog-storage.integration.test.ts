@@ -83,7 +83,6 @@ const bumpThenRelease = (root: RepoRoot) =>
     const input = yield* S.decodeUnknownEffect(BumpInput)({
       strategy: 'changesets',
       changelogDir,
-      manifest: { file: 'package.json', surface: { kind: 'json', path: 'package.json' } },
       surfaces: [],
     })
     yield* Cell.run(Cell.provide(bumpCell, bumpLayer), input)
