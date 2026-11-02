@@ -47,6 +47,7 @@ const RELEASE_BOT_IDENTITY: ReadonlyArray<string> = [
   '-c',
   'user.email=41898282+github-actions[bot]@users.noreply.github.com',
 ]
+const RELEASE_HOOKS_OFF: ReadonlyArray<string> = ['-c', 'core.hooksPath=/dev/null']
 
 const gitFailed = (args: ReadonlyArray<string>) => (stderr: string): PullRequestGitFailed =>
   PullRequestGitFailed.make({ command: `git ${args.join(' ')}`, stderr: stderr.trim() })
@@ -234,7 +235,7 @@ const makeGitPort = (
             yield* step(['--literal-pathspecs', 'add', '--', ...untracked])
           }
         }
-        yield* step([...RELEASE_BOT_IDENTITY, 'commit', '-m', message])
+        yield* step([...RELEASE_BOT_IDENTITY, ...RELEASE_HOOKS_OFF, 'commit', '-m', message])
         return yield* capture(
           ['rev-parse', 'HEAD'],
           () => PullRequestHeadInvalid.make({ branch: headRef }),
@@ -249,7 +250,7 @@ const makeGitPort = (
       branch: GitRef,
       remote: RemoteName,
     ): Effect.Effect<void, PullRequestRefusal> => {
-      const args = ['push', '--force', remote, `HEAD:refs/heads/${branch}`]
+      const args = [...RELEASE_HOOKS_OFF, 'push', '--force', remote, `HEAD:refs/heads/${branch}`]
       return run(args, gitFailed(args))
     },
     deleteRemoteBranch: (
@@ -257,7 +258,7 @@ const makeGitPort = (
       remote: RemoteName,
     ): Effect.Effect<BranchDeleted, PullRequestRefusal> =>
       Effect.gen(function*() {
-        const args = ['push', remote, '--delete', branch]
+        const args = [...RELEASE_HOOKS_OFF, 'push', remote, '--delete', branch]
         const captured = yield* git(args)
         if (Result.isFailure(captured)) {
           if (branchAlreadyGone(captured.failure)) {
@@ -275,7 +276,7 @@ const makeGitPort = (
         if (tags.length === 0) {
           return Count.make(0)
         }
-        const args = ['push', remote, ...tags.map((tag) => `refs/tags/${tag}`)]
+        const args = [...RELEASE_HOOKS_OFF, 'push', remote, ...tags.map((tag) => `refs/tags/${tag}`)]
         yield* run(args, tagGitFailed(args))
         return Count.make(tags.length)
       }),
