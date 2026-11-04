@@ -1,4 +1,4 @@
-{ lib, writeShellApplication, bubblewrap, socat, nodejs_24, cacert, coreutils, git, bash, nix }:
+{ lib, writeShellApplication, bubblewrap, socat, nodejs_24, cacert, coreutils, git, bash, nix, pnpm_12 }:
 let
   substitutions = {
     node = lib.getExe nodejs_24;
@@ -13,7 +13,7 @@ let
 in
 writeShellApplication {
   name = "sandbox";
-  runtimeInputs = [ coreutils git ];
+  runtimeInputs = [ coreutils git pnpm_12 ];
   text = lib.replaceStrings
     (map (name: "@${name}@") (builtins.attrNames substitutions))
     (map toString (builtins.attrValues substitutions))
