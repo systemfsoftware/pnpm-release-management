@@ -422,6 +422,15 @@ fixed-output fetches as above; the `pnpm` and `@pnpm/exe.*` entries of pnpm
 12's env document are skipped, because the sandbox never lets pnpm fetch
 itself.
 
+The store reads `supportedArchitectures` from `pnpm-workspace.yaml` and fetches
+optional registry packages for all configured OS, CPU and libc values.
+Required packages are retained regardless of platform. `current` refers to the
+platform running pnpm. Unrestricted or unrecognized platform settings are
+kept rather than excluded. If `src` is a derivation, pass an evaluation-readable
+`workspaceFile` separately; otherwise the builder keeps all registry packages
+when it cannot read the workspace configuration. `lockFile` can likewise be
+passed separately from a derivation-backed `src`.
+
 A workspace that publishes its own packages and also consumes tarballs this way
 passes the same `files` to `lib.mkPnpmWorkspacePackages`. Its tarball build
 installs from the lockfile too, so without them the build fails on the first
