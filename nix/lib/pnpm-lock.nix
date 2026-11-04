@@ -130,7 +130,7 @@ let
         };
       parsed = builtins.foldl' (state: line:
         let
-          entry = builtins.match "  (.*):[[:space:]]*([{][}])?[[:space:]]*" line;
+          entry = builtins.match "  ([^ ].*):[[:space:]]*([{][}])?[[:space:]]*" line;
           top = builtins.match "[^[:space:]#-][^:]*:.*" line;
         in
         if builtins.match "snapshots:[[:space:]]*" line != null then
