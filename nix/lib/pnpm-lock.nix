@@ -12,7 +12,7 @@
 let
   trim = lib.trim;
   platforms = import ./pnpm-platforms.nix { inherit lib; platform = null; };
-
+  readLines = lockFile: lib.splitString "\n" (builtins.readFile lockFile);
 
   unquote =
     value:
@@ -40,7 +40,7 @@ let
   # Keep resolutions and platform restrictions together, including entries
   # without a resolution so they fail before any platform filtering.
   entriesOf =
-    lockFile:
+    lines:
     (builtins.foldl'
       (
         state: line:
@@ -94,19 +94,21 @@ let
         documents = 0;
         entries = { };
       }
-      (lib.splitString "\n" (builtins.readFile lockFile))).entries;
+      lines).entries;
 
-  unresolvedPackages =
-    lockFile:
-    builtins.attrNames (lib.filterAttrs (_: entry: entry.resolution == null) (entriesOf lockFile));
+  unresolvedEntries =
+    entries:
+    builtins.attrNames (lib.filterAttrs (_: entry: entry.resolution == null) entries);
+
+  unresolvedPackages = lockFile: unresolvedEntries (entriesOf (readLines lockFile));
 
   packagesOf =
-    lockFile:
+    entries:
     let
-      unresolved = unresolvedPackages lockFile;
+      unresolved = unresolvedEntries entries;
     in
     if unresolved == [ ] then
-      entriesOf lockFile
+      entries
     else
       throw (
         lib.concatMapStringsSep "\n" (
@@ -116,7 +118,7 @@ let
 
   # pnpm warns but still installs required packages on an incompatible
   # platform. Filter only packages whose every snapshot is optional.
-  optionalPackages = lockFile:
+  optionalPackages = lines:
     let
       finish = state:
         if state.current == null then state else
@@ -145,7 +147,7 @@ let
           state // { isOptional = true; }
         else state
       ) { inSnapshots = false; current = null; isOptional = false; optional = { }; }
-        (lib.splitString "\n" (builtins.readFile lockFile));
+        lines;
     in (finish parsed).optional;
 
   # A `file:` tarball and a `directory` link are workspace-local: pnpm resolves
@@ -180,11 +182,19 @@ let
     '');
 
   fetched = supported: lockFile:
-    let optional = optionalPackages lockFile;
+    let
+      lines = readLines lockFile;
+      optional = optionalPackages lines;
+      entries = entriesOf lines;
     in lib.filterAttrs (name: entry:
       !(isLocal name entry.resolution)
       && (!(optional.${name} or false) || platforms.compatible supported entry)
-    ) (packagesOf lockFile);
+    ) (packagesOf entries);
+
+  tarballCacheDataFor = supported: lockFile:
+    lib.mapAttrs'
+      (name: entry: lib.nameValuePair (urlOf name entry.resolution) { hash = integrityOf name entry.resolution; })
+      (fetched supported lockFile);
 in
 {
   # Names of `packages:` entries that carry no `resolution:` line, for callers
@@ -192,13 +202,6 @@ in
   inherit unresolvedPackages;
 
   # The shape `mitm-cache.fetch` consumes: tarball URL -> { hash = integrity; }.
-  tarballCacheData = lockFile:
-    lib.mapAttrs'
-      (name: entry: lib.nameValuePair (urlOf name entry.resolution) { hash = integrityOf name entry.resolution; })
-      (fetched { } lockFile);
-
-  tarballCacheDataFor = supported: lockFile:
-    lib.mapAttrs'
-      (name: entry: lib.nameValuePair (urlOf name entry.resolution) { hash = integrityOf name entry.resolution; })
-      (fetched supported lockFile);
+  tarballCacheData = tarballCacheDataFor { };
+  inherit tarballCacheDataFor;
 }
