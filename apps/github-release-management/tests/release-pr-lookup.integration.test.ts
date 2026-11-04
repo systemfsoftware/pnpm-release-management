@@ -56,6 +56,15 @@ const releasePull = (): Pull => ({
   state: 'open',
 })
 
+const foreignReleasePull = (): Pull => ({
+  number: 130,
+  head: RELEASE_BRANCH,
+  owner: 'forker',
+  title: 'feat: a contribution from a fork',
+  body: 'Opened from a fork whose branch is also named changeset-release/main.',
+  state: 'open',
+})
+
 type HeadFilter = 'github-owner-qualified-only' | 'ignored'
 
 interface Emulator {
@@ -225,6 +234,10 @@ const untouchedDependabot = (pulls: ReadonlyArray<Pull>): void => {
   expect(pulls.find((pull) => pull.number === 128)).toEqual(dependabotPull())
 }
 
+const untouchedForeign = (pulls: ReadonlyArray<Pull>): void => {
+  expect(pulls.find((pull) => pull.number === 130)).toEqual(foreignReleasePull())
+}
+
 Feature('The release PR lookup only ever finds the release branch PR').body(({ scenario }) => {
   scenario(
     'Another open PR is listed first and GitHub ignores a bare head filter',
@@ -285,6 +298,63 @@ Feature('The release PR lookup only ever finds the release branch PR').body(({ s
           expect(s.run.pulls.find((pull) => pull.number === 7)).toMatchObject({
             title: RELEASE_TITLE,
             body: RELEASE_BODY,
+          })
+          expect(s.run.pulls).toHaveLength(2)
+        })
+      ),
+    ),
+  )
+
+  scenario(
+    'A fork PR on the release branch name listed first is not the release PR',
+    { scenarioLayer: NodeServices.layer },
+    Gherkin.Do.pipe(
+      Given('an open fork PR whose head is the release branch name, listed before a Dependabot PR, with no release PR')(
+        'seed',
+        () => Effect.succeed([foreignReleasePull(), dependabotPull()]),
+      ),
+      When('pr runs on the bumped tree on a host that returns every open PR')(
+        'run',
+        (s) => openReleasePullRequest(s.seed, 'ignored'),
+      ),
+      Then('a new release PR is opened and the fork and Dependabot PRs keep their title, body and state')((s) =>
+        Effect.sync(() => {
+          expect(s.run.decision).toMatchObject({ _tag: 'PullRequestCreated', number: 131 })
+          untouchedForeign(s.run.pulls)
+          untouchedDependabot(s.run.pulls)
+          expect(s.run.pulls.find((pull) => pull.number === 131)).toMatchObject({
+            head: RELEASE_BRANCH,
+            owner: OWNER,
+            title: RELEASE_TITLE,
+            body: RELEASE_BODY,
+            state: 'open',
+          })
+          expect(s.run.pulls).toHaveLength(3)
+        })
+      ),
+    ),
+  )
+
+  scenario(
+    'The repository release PR listed after a fork PR on the same branch name is the one updated',
+    { scenarioLayer: NodeServices.layer },
+    Gherkin.Do.pipe(
+      Given('an open fork PR whose head is the release branch name, listed before the open release PR')(
+        'seed',
+        () => Effect.succeed([foreignReleasePull(), releasePull()]),
+      ),
+      When('pr runs on the bumped tree on a host that returns every open PR')(
+        'run',
+        (s) => openReleasePullRequest(s.seed, 'ignored'),
+      ),
+      Then('the release PR gets the release title and body, the fork PR is untouched and no PR is opened')((s) =>
+        Effect.sync(() => {
+          expect(s.run.decision).toMatchObject({ _tag: 'PullRequestUpdated', number: 7 })
+          untouchedForeign(s.run.pulls)
+          expect(s.run.pulls.find((pull) => pull.number === 7)).toMatchObject({
+            title: RELEASE_TITLE,
+            body: RELEASE_BODY,
+            state: 'open',
           })
           expect(s.run.pulls).toHaveLength(2)
         })
