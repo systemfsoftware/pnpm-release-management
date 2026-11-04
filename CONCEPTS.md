@@ -14,7 +14,7 @@ A member that carries two identities: the workspace's own declaration and an npm
 
 ### Root manifest
 
-The manifest at the repository root. It declares the repository's own metadata rather than a member's, and where the package manager is pnpm it holds the dependency graph that task-level resolution consults before any task in the workspace runs.
+The manifest at the repository root. It declares the repository's own metadata rather than a member's, and where the package manager is pnpm it holds the dependency graph that task-level resolution consults before any task in the workspace runs. It may declare no version at all: versioning that moves each member on its own plan never reads it, while versioning that keeps one consolidated version reads it as the source of that version.
 
 ### Root-importer row
 
@@ -37,6 +37,12 @@ A repository picks one strategy in its release config. `paths` cannot see a buil
 A comparison whose base and head revisions both hold a root Turbo config, so Turbo can produce change evidence for both sides. A pull request that adds or removes the config is not Turbo-driven, because Turbo cannot evaluate the side without one. The paths gate refuses a Turbo-driven comparison and names the `turbo` gate strategy as the fix.
 
 ## Versioning
+
+### Intent
+
+A pending note of one change to release. Its frontmatter names the members it affects and the bump each takes (major, minor, patch, or none), and its markdown body describes the change for readers of the changelog. A bump consumes every pending intent and removes it.
+
+The body keeps its own block structure, paragraphs and lists included, so text assembled from several intents is joined as separate blocks, never inline.
 
 ### Parked changelog
 

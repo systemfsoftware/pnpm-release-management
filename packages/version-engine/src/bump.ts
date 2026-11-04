@@ -24,7 +24,7 @@ import * as Result from 'effect/Result'
 import { deriveBump, rootBulletsOf, summaryForPackage } from './bump-derive.js'
 import type { VersionBumped, VersionDecision } from './bump-versions.workflow.js'
 import { bumpVersions } from './bump-versions.workflow.js'
-import { BumpCommand, type BumpInput } from './bump.schema.js'
+import { BumpCommand, type BumpInput, type ChangesetsVersioning, type SurfacesVersioning } from './bump.schema.js'
 
 const read = (
   request: BumpInput,
@@ -35,7 +35,6 @@ const read = (
 > =>
   Effect.gen(function*() {
     const workspace = yield* WorkspaceStore
-    const surfaces = yield* SurfaceStore
     const members = yield* workspace.listMembers()
     const storage = yield* workspace.changelogStorage()
     const changelogPathOf = (member: Member, version: PackageVersion): RelativePath =>
@@ -51,10 +50,6 @@ const read = (
         return yield* Effect.fail(VersionUnknownPackage.make({ package: named }))
       }
     }
-    const manifestVersion = yield* surfaces.readSurface(
-      request.manifest.file,
-      request.manifest.surface,
-    )
 
     if (request.strategy === 'changesets') {
       const port = yield* ChangesetsPort
@@ -66,26 +61,28 @@ const read = (
         return Effect.succeed({ name: release.name, path: changelogPathOf(member, release.newVersion) })
       })
       return BumpCommand.make({
-        strategy: request.strategy,
+        versioning: {
+          strategy: 'changesets',
+          surfaces: [...request.surfaces],
+          planned: [...planned.releases],
+        },
         intents: [],
         members: [...members],
-        manifestVersion,
         changelogDir: request.changelogDir,
         changelogStorage: storage,
-        rootChangelog: request.rootChangelog,
-        manifest: request.manifest,
-        surfaces: [...request.surfaces],
-        consolidated: 'none',
-        consolidatedNext: manifestVersion,
         moved,
         changelogPaths,
         unknownPackage: undefined,
         malformedPath: undefined,
         intentCount: planned.changesets,
-        planned: [...planned.releases],
       })
     }
 
+    const surfaces = yield* SurfaceStore
+    const manifestVersion = yield* surfaces.readSurface(
+      request.manifest.file,
+      request.manifest.surface,
+    )
     const changesets = yield* ChangesetStore
     const paths = yield* changesets.listIntents()
     const intents = yield* Effect.forEach(paths, (path) => changesets.readIntent(path))
@@ -96,23 +93,24 @@ const read = (
       changelogPathOf,
     })
     return BumpCommand.make({
-      strategy: request.strategy,
+      versioning: {
+        strategy: 'surfaces',
+        manifest: request.manifest,
+        surfaces: [...request.surfaces],
+        rootChangelog: request.rootChangelog,
+        manifestVersion,
+        consolidated: derived.consolidated,
+        consolidatedNext: derived.consolidatedNext,
+      },
       intents: [...intents],
       members: [...members],
-      manifestVersion,
       changelogDir: request.changelogDir,
       changelogStorage: storage,
-      rootChangelog: request.rootChangelog,
-      manifest: request.manifest,
-      surfaces: [...request.surfaces],
-      consolidated: derived.consolidated,
-      consolidatedNext: derived.consolidatedNext,
       moved: derived.moved,
       changelogPaths: derived.changelogPaths,
       unknownPackage: derived.unknownPackage,
       malformedPath: derived.malformedPath,
       intentCount: derived.intentCount,
-      planned: [],
     })
   })
 
@@ -149,24 +147,25 @@ const writeMemberChangelogs = (
 
 const writeSurfaces = (
   command: BumpCommand,
+  versioning: SurfacesVersioning,
   bumped: VersionBumped,
 ): Effect.Effect<void, VersionRefusal | ChangelogRefusal, SurfaceStore | ChangelogStore> =>
   Effect.gen(function*() {
     const surfaces = yield* SurfaceStore
     const changelogs = yield* ChangelogStore
     yield* surfaces.writeSurface(
-      command.manifest.file,
-      command.manifest.surface,
+      versioning.manifest.file,
+      versioning.manifest.surface,
       bumped.version,
     )
     yield* Effect.forEach(
-      command.surfaces,
+      versioning.surfaces,
       (surface) => surfaces.writeSurface(surface.file, surface.surface, bumped.version),
       { discard: true },
     )
-    if (command.rootChangelog !== undefined) {
+    if (versioning.rootChangelog !== undefined) {
       yield* changelogs.appendReleaseSummary({
-        path: command.rootChangelog,
+        path: versioning.rootChangelog,
         version: bumped.version,
         summary: rootBulletsOf(command.intents),
       })
@@ -181,12 +180,13 @@ const writeSurfaces = (
 
 const writeChangesets = (
   command: BumpCommand,
+  versioning: ChangesetsVersioning,
   bumped: VersionBumped,
 ): Effect.Effect<void, VersionRefusal | ChangelogRefusal, SurfaceStore | ChangelogStore> =>
   Effect.gen(function*() {
     const surfaces = yield* SurfaceStore
     const versionOf = (name: PackageName): PackageVersion => {
-      const release = command.planned.find((candidate) => candidate.name === name)
+      const release = versioning.planned.find((candidate) => candidate.name === name)
       if (release !== undefined) return release.newVersion
       const member = command.members.find((candidate) => candidate.name === name)
       if (member !== undefined) return member.manifest.version
@@ -197,7 +197,7 @@ const writeChangesets = (
       return versionOf(named)
     }
     yield* Effect.forEach(
-      command.surfaces.flatMap((target) => {
+      versioning.surfaces.flatMap((target) => {
         if (target.surface.kind === 'cargo') return [{ target, named: target.surface.package }]
         return []
       }),
@@ -208,7 +208,7 @@ const writeChangesets = (
       command,
       bumped.moved,
       (name) => versionOf(name),
-      (name) => plannedSummaryOf(command.planned, name),
+      (name) => plannedSummaryOf(versioning.planned, name),
     )
   })
 
@@ -222,12 +222,13 @@ const write = (
 > => {
   if (Result.isFailure(output)) return Effect.fail(output.failure)
   const decision = output.success
-  if (command.strategy === 'changesets') {
+  const { versioning } = command
+  if (versioning.strategy === 'changesets') {
     return Effect.gen(function*() {
       const port = yield* ChangesetsPort
       yield* port.apply()
       yield* Match.value(decision).pipe(
-        Match.tag('VersionBumped', (bumped) => writeChangesets(command, bumped)),
+        Match.tag('VersionBumped', (bumped) => writeChangesets(command, versioning, bumped)),
         Match.tag('VersionConsumed', () => Effect.void),
         Match.tag('VersionIdle', () => Effect.void),
         Match.exhaustive,
@@ -238,7 +239,7 @@ const write = (
   return Effect.gen(function*() {
     const changesets = yield* ChangesetStore
     yield* Match.value(decision).pipe(
-      Match.tag('VersionBumped', (bumped) => writeSurfaces(command, bumped)),
+      Match.tag('VersionBumped', (bumped) => writeSurfaces(command, versioning, bumped)),
       Match.tag('VersionConsumed', () => Effect.void),
       Match.tag('VersionIdle', () => Effect.void),
       Match.exhaustive,

@@ -17,29 +17,51 @@ const VersionTarget = S.Struct({
   surface: VersionSurface,
 })
 
-export const BumpInput = S.Struct({
-  strategy: S.Literals(['changesets', 'surfaces']),
+const ChangesetsInput = S.Struct({
+  strategy: S.Literal('changesets'),
+  changelogDir: RelativePath,
+  surfaces: S.Array(VersionTarget),
+})
+
+const SurfacesInput = S.Struct({
+  strategy: S.Literal('surfaces'),
   changelogDir: RelativePath,
   rootChangelog: S.optional(RelativePath),
   manifest: VersionTarget,
   surfaces: S.Array(VersionTarget),
 })
+
+export const BumpInput = S.Union([ChangesetsInput, SurfacesInput])
 export type BumpInput = S.Schema.Type<typeof BumpInput>
+
+const ChangesetsVersioning = S.Struct({
+  strategy: S.Literal('changesets'),
+  surfaces: S.Array(VersionTarget),
+  planned: S.Array(PlannedRelease),
+})
+export type ChangesetsVersioning = S.Schema.Type<typeof ChangesetsVersioning>
+
+const SurfacesVersioning = S.Struct({
+  strategy: S.Literal('surfaces'),
+  manifest: VersionTarget,
+  surfaces: S.Array(VersionTarget),
+  rootChangelog: S.optional(RelativePath),
+  manifestVersion: PackageVersion,
+  consolidated: Bump,
+  consolidatedNext: PackageVersion,
+})
+export type SurfacesVersioning = S.Schema.Type<typeof SurfacesVersioning>
+
+const CommandVersioning = S.Union([ChangesetsVersioning, SurfacesVersioning])
 
 export class BumpCommand extends S.TaggedClass<BumpCommand>()(
   'BumpCommand',
   {
-    strategy: S.Literals(['changesets', 'surfaces']),
+    versioning: CommandVersioning,
     intents: S.Array(Intent),
     members: S.Array(Member),
-    manifestVersion: PackageVersion,
     changelogDir: RelativePath,
     changelogStorage: ChangelogStorage,
-    rootChangelog: S.optional(RelativePath),
-    manifest: VersionTarget,
-    surfaces: S.Array(VersionTarget),
-    consolidated: Bump,
-    consolidatedNext: PackageVersion,
     moved: S.Array(PackageName),
     changelogPaths: S.Array(S.Struct({
       name: PackageName,
@@ -48,6 +70,5 @@ export class BumpCommand extends S.TaggedClass<BumpCommand>()(
     unknownPackage: S.optional(PackageName),
     malformedPath: S.optional(RelativePath),
     intentCount: Count,
-    planned: S.Array(PlannedRelease),
   },
 ) {}
