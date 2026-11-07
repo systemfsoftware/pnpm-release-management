@@ -69,7 +69,13 @@ case "$1" in
     fi
     case "$3" in
       "github:${WORKFLOW_REPOSITORY}/${WORKFLOW_SHA}#release-tools") echo ${WORKFLOW_RELEASE_TOOLS} ;;
-      .#workspace-tarballs) echo ${WORKSPACE_TARBALLS} ;;
+      .#workspace-tarballs)
+        if [ ! -d ${WORKSPACE_TARBALLS} ]; then
+          echo "error: flake does not provide attribute 'workspace-tarballs'" >&2
+          exit 1
+        fi
+        echo ${WORKSPACE_TARBALLS}
+        ;;
       *)
         echo "nix stub: no flake output for $3" >&2
         exit 1

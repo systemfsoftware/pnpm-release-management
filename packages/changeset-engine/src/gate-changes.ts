@@ -1,8 +1,9 @@
 import { Cell, Wire } from '@systemfsoftware/effect-cell-types'
 import {
-  ChangeEvidencePort,
+  type ChangeEvidencePort,
   type ChangeEvidenceRefusal,
   ChangesetStore,
+  evidenceOf,
   type GateIntentMissing,
   type GateUnknownPackage,
   GitRef,
@@ -57,8 +58,6 @@ type GateVerdict = Result.Result<
   GateIntentMissing | GateUnknownPackage
 >
 
-const buildTask = (): TaskName => TaskName.make('build')
-
 const read = (
   request: GateRequestInput,
 ): Effect.Effect<
@@ -67,12 +66,7 @@ const read = (
   ChangeEvidencePort | WorkspaceStore | ChangesetStore | LedgerPort
 > =>
   Effect.gen(function*() {
-    const evidence = yield* Effect.flatMap(ChangeEvidencePort, (port) => {
-      if (request.strategy === 'turbo') {
-        return port.turboEvidence(request.root, request.ref, request.task ?? buildTask())
-      }
-      return port.pathsEvidence(request.root, request.ref)
-    })
+    const evidence = yield* evidenceOf(request.root, request.ref, request.strategy, request.task)
     const workspace = yield* WorkspaceStore
     const store = yield* ChangesetStore
     const members = yield* workspace.listMembers()

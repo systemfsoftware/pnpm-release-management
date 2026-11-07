@@ -1,5 +1,6 @@
 import type { GateReport } from '@systemfsoftware/changeset-engine'
 import { Reporter, type WorkspaceRootNotAbsolute } from '@systemfsoftware/cli-adapter'
+import { evidenceRefusalLines } from '@systemfsoftware/process-adapter'
 import type {
   ChangeEvidenceRefusal,
   ConfigRefusal,
@@ -48,18 +49,7 @@ export const renderRefusal = (refusal: AppRefusal): Effect.Effect<void, never, R
         NewIntentSummaryMissing: () => '--summary is required, and must be one line',
         NewIntentPackagesEmpty: () => 'name at least one package',
         NewIntentPackageNameMalformed: (malformed) => `not workspace packages: ${malformed.given}`,
-        GateUnknownPackage: (unknown) => `${unknown.path} names non-member package "${unknown.package}"`,
-        GateIntentMissing: (missing) => `no intent names: ${missing.packages.join(', ')}`,
-        EvidenceFileUnreadable: (unreadable) => `cannot read ${unreadable.path}`,
-        EvidenceCommandFailed: (failed) => `${failed.program} failed: ${failed.detail}`,
-        TurboPinUnusable: (unusable) => `turbo pin unusable: ${unusable.detail}`,
-        PathsGateUnderTurbo: (refused) =>
-          `paths gate refused: ${refused.turboConfig} makes turbo the source of change evidence — set "gate": { "strategy": "turbo" } in release.jsonc`,
-        WorktreeUnavailable: (unavailable) => `worktree unavailable: ${unavailable.detail}`,
-        ProcessUnstartable: (unstartable) => `cannot start ${unstartable.program}: ${unstartable.reason}`,
-        ProcessUnobservable: (unobservable) => `cannot read ${unobservable.program} output: ${unobservable.reason}`,
-        TurboDryRunUnreadable: (unreadable) => `turbo dry-run unreadable (${unreadable.context}): ${unreadable.reason}`,
-        TurboDryRunDrifted: (drifted) => `turbo dry-run drifted (${drifted.context}): ${drifted.reason}`,
+        ...evidenceRefusalLines,
         WorkspaceRootNotAbsolute: (notAbsolute) => `repository root "${notAbsolute.given}" is not an absolute path`,
         LedgerUnreadable: (unreadable) => `cannot read release ledger ${unreadable.path}: ${unreadable.reason}`,
         LedgerMalformed: (malformed) => `cannot parse release ledger ${malformed.path}: ${malformed.reason}`,

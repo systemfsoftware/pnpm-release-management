@@ -8,6 +8,7 @@ export {
 } from './adopt-release.workflow.js'
 export { adoptCell, AdoptionRequest } from './adopt.js'
 export { AdoptionReport } from './adopt.schema.js'
+export { UnreleasedListed, UnreleasedMatched, UnreleasedVacant } from './compare-unreleased-tarballs.workflow.js'
 export { githubReleaseCell, GithubReleaseRequest } from './github-release.js'
 export {
   GithubReleaseAsserted,
@@ -46,3 +47,8 @@ export {
 } from './tag-packages.workflow.js'
 export { TagAnnotation } from './tag-packages.workflow.js'
 export { tagCell, TagRequest } from './tag.js'
+export {
+  unreleasedTarballsCell,
+  type UnreleasedTarballsDecision,
+  UnreleasedTarballsRequest,
+} from './unreleased-tarballs.js'
