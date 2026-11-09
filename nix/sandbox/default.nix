@@ -1,5 +1,6 @@
-{ lib, writeShellApplication, bubblewrap, socat, nodejs_24, cacert, coreutils, git, bash, nix }:
+args@{ lib, writeShellApplication, bubblewrap, socat, nodejs_24, cacert, coreutils, git, bash, nix, ... }:
 let
+  pnpm = args.pnpm or null;
   substitutions = {
     node = lib.getExe nodejs_24;
     egressProxy = builtins.path { path = ./egress-proxy.mjs; name = "egress-proxy.mjs"; };
@@ -13,7 +14,7 @@ let
 in
 writeShellApplication {
   name = "sandbox";
-  runtimeInputs = [ coreutils git ];
+  runtimeInputs = [ coreutils git ] ++ lib.optional (pnpm != null) pnpm;
   text = lib.replaceStrings
     (map (name: "@${name}@") (builtins.attrNames substitutions))
     (map toString (builtins.attrValues substitutions))

@@ -33,11 +33,11 @@
       # The store a consumer's sandbox installs from: the lockfile's registry
       # packages plus the workspace tarballs it names as `file:` dependencies,
       # passed as `files` (directory relative to src -> derivation of *.tgz).
-      # `lockFile` is read at evaluation for the registry fetches; pass it apart
+      # `lockFile` and `workspaceFile` are read at evaluation; pass them apart
       # from src when src is itself a derivation.
-      lib.mkPnpmConsumerStore = { pkgs, src, pname ? "consumer", pnpm ? pkgs.pnpm_12, files ? { }, lockFile ? src + "/pnpm-lock.yaml" }:
+      lib.mkPnpmConsumerStore = { pkgs, src, pname ? "consumer", pnpm ? pkgs.pnpm_12, files ? { }, lockFile ? src + "/pnpm-lock.yaml", workspaceFile ? if pkgs.lib.isDerivation src then null else src + "/pnpm-workspace.yaml" }:
         (import ./nix/lib/pnpm-store.nix {
-          inherit pkgs src pname pnpm files lockFile;
+          inherit pkgs src pname pnpm files lockFile workspaceFile;
           inherit (iplFor pkgs.stdenv.hostPlatform.system) iplConfigHook;
         }).store;
 

@@ -6,13 +6,21 @@
   pname,
   version ? "0",
   lockFile ? src + "/pnpm-lock.yaml",
+  workspaceFile ? if pkgs.lib.isDerivation src then null else src + "/pnpm-workspace.yaml",
   # Directories the lockfile's `file:` tarballs live in, by path relative to
   # src, e.g. { ".sfs-deps" = <derivation holding *.tgz>; }. They have no URL
   # to fetch, so the store takes them from here.
   files ? { },
 }:
 let
-  tarballCacheData = (import ./pnpm-lock.nix { inherit (pkgs) lib; }).tarballCacheData lockFile;
+  platforms = import ./pnpm-platforms.nix {
+    inherit (pkgs) lib;
+    platform = pkgs.stdenv.buildPlatform;
+  };
+  supported = if workspaceFile == null || !(builtins.pathExists workspaceFile)
+    then { }
+    else platforms.fromWorkspace workspaceFile;
+  tarballCacheData = (import ./pnpm-lock.nix { inherit (pkgs) lib; }).tarballCacheDataFor supported lockFile;
 
   # One fixed-output derivation per tarball, keyed by the integrity the lockfile
   # records. mitm-cache replays them as a registry, so pnpm installs offline.
@@ -28,8 +36,8 @@ let
     cp -r ${source}/. ${pkgs.lib.escapeShellArg dir}/
   '') files);
 
-  # Not a fixed-output derivation: the cache above holds every tarball, and pnpm
-  # only reads it. The store dir itself is the output, in the layout pnpm writes
+  # Not a fixed-output derivation: the cache holds the selected tarballs, and
+  # pnpm only reads it. The store dir is the output, in the layout pnpm writes
   # (`v*/files` next to `v*/index.db`).
   store = pkgs.stdenvNoCC.mkDerivation {
     pname = "${pname}-pnpm-store";
