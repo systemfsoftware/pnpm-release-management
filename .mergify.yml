@@ -17,3 +17,11 @@ queue_rules:
       - check-success = containerised release pipeline
       - check-success = sandbox proofs
       - check-success = tarballs rebuild bit-for-bit
+  - name: release
+    # The release PR (changeset-release/* head, opened by the release bot) reports only `check`: the other pull_request
+    # workflows wait on the workflow-approval gate for that actor, and the changeset intent check skips release heads.
+    queue_conditions:
+      - head ~= ^changeset-release/
+      - check-success = check
+    merge_conditions:
+      - check-success = check
