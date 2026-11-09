@@ -1,0 +1,31 @@
+# Mergify: policy lives in systemfsoftware/.github (.mergify.yml). This file only names this repo's CI checks.
+extends: .github
+
+queue_rules:
+  - name: default
+    # Checked on the PR itself before it enters the queue.
+    queue_conditions:
+      - check-success = check
+      - check-success = containerised release pipeline
+      - check-success = sandbox proofs
+      - check-success = tarballs rebuild bit-for-bit
+      - or:
+          - check-success = check / a publishable-package change needs an intent
+          - check-skipped = check / a publishable-package change needs an intent
+    # Checked on Mergify's queue draft PR (mergify/merge-queue/*), i.e. CI on the PR rebased with main and any batch.
+    # The changeset intent check runs on every draft and goes red on a release diff (the PR-level arm above already
+    # enforces it for ordinary PRs), so it stays out of these conditions.
+    merge_conditions:
+      - check-success = check
+      - check-success = containerised release pipeline
+      - check-success = sandbox proofs
+      - check-success = tarballs rebuild bit-for-bit
+
+  - name: release
+    # Release PRs (changeset-release/* heads opened by the release bot) only ever report `check`: the other
+    # pull_request workflows sit `action_required` behind the workflow-approval gate for that actor.
+    queue_conditions:
+      - head ~= ^changeset-release/
+      - check-success = check
+    merge_conditions:
+      - check-success = check
