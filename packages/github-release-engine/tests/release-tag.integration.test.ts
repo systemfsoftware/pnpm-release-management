@@ -9,8 +9,6 @@ import { Effect, Layer, Result } from 'effect'
 import { FileSystem } from 'effect/FileSystem'
 import { Path } from 'effect/Path'
 import { expect, vi } from 'vitest'
-import { makeFakeLedger } from './__fixtures__/FakeLedger.js'
-import { fakeDigest, makeFakeTarball } from './__fixtures__/FakeTarball.js'
 import { git, insideRepo, SEED_IDENTITY, withoutGitIdentity, writeFiles } from './__fixtures__/RealGit.js'
 
 const Feature = makeFeature({ it, layer })
@@ -35,7 +33,6 @@ const FILES: ReadonlyArray<readonly [string, string]> = [
 interface Repo {
   readonly root: RepoRoot
   readonly remote: string
-  readonly tarballs: FsPath
   readonly captured: FsPath
 }
 
@@ -56,7 +53,6 @@ const releasedRepo = Effect.gen(function*() {
   const repo: Repo = {
     root: RepoRoot.make(root),
     remote,
-    tarballs: FsPath.make(path.join(scratch, 'tarballs')),
     captured: FsPath.make(path.join(scratch, 'captured.json')),
   }
   return repo
@@ -68,13 +64,10 @@ const runTag = (repo: Repo, step: { readonly output?: FsPath; readonly captured?
       WorkspaceStoreLive(repo.root),
       GitLive,
       CycleStoreLive,
-      makeFakeTarball([fakeDigest('@e2e/alpha', '1.0.0'), fakeDigest('@e2e/beta', '2.0.0')]),
-      makeFakeLedger(),
     ).pipe(Layer.provide(NodeServices.layer))
     return yield* withoutGitIdentity(insideRepo(
       repo.root,
       Effect.result(Cell.run(Cell.provide(tagCell, live), {
-        tarballs: repo.tarballs,
         dryRun: false,
         json: false,
         changelogDir,

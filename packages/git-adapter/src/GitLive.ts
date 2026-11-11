@@ -102,12 +102,6 @@ const declaredSlug = (): Option.Option<RepoSlug> => {
 const nonEmptyLines = (text: string): ReadonlyArray<string> =>
   text.split('\n').map((line) => line.trim()).filter((line) => line.length > 0)
 
-const annotationOf = (tagObject: string): string => {
-  const separator = tagObject.indexOf('\n\n')
-  if (separator === -1) return tagObject.trimEnd()
-  return tagObject.slice(separator + 2).trimEnd()
-}
-
 const listedTags = (text: string): ReadonlyArray<string> =>
   text.split('\n')
     .filter((line) => line.length > 0)
@@ -285,28 +279,6 @@ const makeGitPort = (
         const args = [...RELEASE_BOT_IDENTITY, 'tag', '-a', tag, '-m', message]
         yield* run(args, tagGitFailed(args))
         return tag
-      }),
-    tagAnnotation: (
-      remote: RemoteName,
-      tag: ReleaseTag,
-    ): Effect.Effect<Option.Option<string>, TagRefusal> =>
-      Effect.gen(function*() {
-        const fetchArgs = ['fetch', '--force', '--no-tags', remote, `+refs/tags/${tag}:refs/tags/${tag}`]
-        yield* run(fetchArgs, tagGitFailed(fetchArgs))
-        const kindArgs = ['cat-file', '-t', `refs/tags/${tag}`]
-        const kind = yield* git(kindArgs)
-        if (Result.isFailure(kind)) {
-          return yield* Effect.fail(tagGitFailed(kindArgs)(kind.failure))
-        }
-        if (kind.success.trim() !== 'tag') {
-          return Option.none()
-        }
-        const bodyArgs = ['cat-file', '-p', `refs/tags/${tag}`]
-        const body = yield* git(bodyArgs)
-        if (Result.isFailure(body)) {
-          return yield* Effect.fail(tagGitFailed(bodyArgs)(body.failure))
-        }
-        return Option.some(annotationOf(body.success))
       }),
     tagCommit: (
       remote: RemoteName,

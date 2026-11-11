@@ -1,9 +1,11 @@
-import { HttpUrl, RegistryPort, type TurboPinUnusable } from '@systemfsoftware/release-language'
-import { parseTar } from '@systemfsoftware/tarball-adapter'
+import { HttpUrl, type TurboPinUnusable } from '@systemfsoftware/release-language'
 import { Effect, FileSystem, Result, type Scope } from 'effect'
 import * as S from 'effect/Schema'
+import * as HttpClient from 'effect/unstable/http/HttpClient'
+import * as HttpClientResponse from 'effect/unstable/http/HttpClientResponse'
 import type { ChildProcessSpawner } from 'effect/unstable/process/ChildProcessSpawner'
 import { type ProcessFault, runProcess } from './ProcessRun.js'
+import { parseTar } from './tar.js'
 import { LOCKFILE, pinUnusable, type TurboPin } from './turbo-pin.js'
 
 const REGISTRY = 'https://registry.npmjs.org'
@@ -53,13 +55,29 @@ export interface FetchedTurbo {
   readonly program: string
   readonly key: string
 }
+const reasonOf = (cause: unknown): string => {
+  if (cause instanceof Error) return cause.message
+  return 'registry request failed'
+}
+
+const downloadTurbo = (url: HttpUrl): Effect.Effect<Uint8Array, string, HttpClient.HttpClient> =>
+  Effect.gen(function*() {
+    const client = yield* HttpClient.HttpClient
+    const response = yield* client.get(url).pipe(Effect.mapError(reasonOf))
+    if (response.status === 404) {
+      return yield* Effect.fail(`registry has no tarball at ${url}`)
+    }
+    const ok = yield* HttpClientResponse.filterStatusOk(response).pipe(Effect.mapError(reasonOf))
+    const buffer = yield* ok.arrayBuffer.pipe(Effect.mapError(reasonOf))
+    return new Uint8Array(buffer)
+  })
 
 export const fetchTurbo = (
   pin: TurboPin,
 ): Effect.Effect<
   FetchedTurbo,
   TurboPinUnusable | ProcessFault,
-  RegistryPort | FileSystem.FileSystem | ChildProcessSpawner | Scope.Scope
+  HttpClient.HttpClient | FileSystem.FileSystem | ChildProcessSpawner | Scope.Scope
 > =>
   Effect.gen(function*() {
     const binary = yield* Effect.fromResult(binaryFor(process.platform, process.arch))
@@ -78,9 +96,8 @@ export const fetchTurbo = (
       Effect.fromResult(tarballUrl(binary.name, pin.version, recorded)),
       () => pinUnusable(`cannot fetch ${key} from ${recorded}: not an http(s) URL`),
     )
-    const registry = yield* RegistryPort
-    const bytes = yield* registry.download(url).pipe(
-      Effect.mapError((failed) => pinUnusable(`cannot fetch ${key} from ${url}: ${failed.reason}`)),
+    const bytes = yield* downloadTurbo(url).pipe(
+      Effect.mapError((reason) => pinUnusable(`cannot fetch ${key} from ${url}: ${reason}`)),
     )
     const actual = yield* integrityOf(bytes)
     if (actual !== expected) {

@@ -1,5 +1,4 @@
 import { NodeServices } from '@effect/platform-node'
-import { LedgerLive } from '@systemfsoftware/adoption-adapter'
 import { Reporter } from '@systemfsoftware/cli-adapter'
 import { Cell } from '@systemfsoftware/effect-cell-types'
 import { Gherkin, Given, it, layer, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
@@ -7,7 +6,6 @@ import { GitLive } from '@systemfsoftware/git-adapter'
 import { planCell, type PlanDecision, tagCell } from '@systemfsoftware/github-release-engine'
 import { renderPlan, renderPlanRefusal } from '@systemfsoftware/github-release-management/render'
 import {
-  ChangesetsPort,
   ChangesetStore,
   Count,
   CycleStore,
@@ -23,7 +21,6 @@ import {
   RepoRoot,
   WorkspaceStore,
 } from '@systemfsoftware/release-language'
-import { TarballLive } from '@systemfsoftware/tarball-adapter'
 import { Effect, Layer, Ref, Result } from 'effect'
 import { FileSystem } from 'effect/FileSystem'
 import * as Match from 'effect/Match'
@@ -51,7 +48,6 @@ interface Repo {
   readonly scratch: string
   readonly root: string
   readonly remote: string
-  readonly tarballs: string
   readonly member: Member
 }
 
@@ -75,9 +71,7 @@ const releasedRepo = (commits: ReadonlyArray<Commit>) =>
     const scratch = yield* fs.makeTempDirectory({ prefix: 'legacy-tags-' })
     const root = path.join(scratch, 'work')
     const remote = path.join(scratch, 'origin.git')
-    const tarballs = path.join(scratch, 'tarballs')
     yield* fs.makeDirectory(path.join(root, 'packages', 'alpha'), { recursive: true })
-    yield* fs.makeDirectory(tarballs, { recursive: true })
     yield* git(scratch, 'init', '-q', '--bare', remote)
     yield* git(root, 'init', '-q', '-b', 'main')
     yield* git(root, 'config', 'commit.gpgsign', 'false')
@@ -107,20 +101,10 @@ const releasedRepo = (commits: ReadonlyArray<Commit>) =>
       }
     }
     yield* git(root, 'push', '-q', 'origin', 'main', '--tags')
-    yield* git(
-      root,
-      'archive',
-      '--format=tar.gz',
-      '--prefix=package/',
-      '-o',
-      path.join(tarballs, 'alpha.tgz'),
-      'HEAD:packages/alpha',
-    )
     const repo: Repo = {
       scratch,
       root,
       remote,
-      tarballs,
       member: {
         name: NAME,
         dir: RelativePath.make('packages/alpha'),
@@ -136,8 +120,6 @@ const unused = () => Effect.die(new Error('unused store operation'))
 const adaptersOf = (root: string, member: Member) =>
   Layer.mergeAll(
     GitLive,
-    TarballLive,
-    LedgerLive(RepoRoot.make(root)),
     Layer.succeed(WorkspaceStore, {
       root: RepoRoot.make(root),
       listMembers: () => Effect.succeed([member]),
@@ -147,10 +129,6 @@ const adaptersOf = (root: string, member: Member) =>
       },
       readFileFromRoot: () => Effect.fail(ManifestUnreadable.make({ path: FsPath.make('/') })),
       changelogStorage: () => Effect.succeed('registry' as const),
-    }),
-    Layer.succeed(ChangesetsPort, {
-      plan: () => Effect.succeed({ changesets: Count.make(0), releases: [] }),
-      apply: () => Effect.void,
     }),
     Layer.succeed(ChangesetStore, {
       listIntents: () => Effect.succeed([]),
@@ -183,7 +161,6 @@ const plan = (repo: Repo, legacyTags: LegacyTags | undefined) =>
     repo.root,
     Effect.result(
       Cell.run(Cell.provide(planCell, adaptersOf(repo.root, repo.member)), {
-        tarballs: FsPath.make(repo.tarballs),
         changelogDir,
         legacyTags,
       }),
@@ -195,7 +172,6 @@ const tag = (repo: Repo) =>
     repo.root,
     Effect.result(
       Cell.run(Cell.provide(tagCell, adaptersOf(repo.root, repo.member)), {
-        tarballs: FsPath.make(repo.tarballs),
         dryRun: false,
         json: false,
         changelogDir,
@@ -276,7 +252,7 @@ Feature('Recognising releases cut under a legacy tag scheme').body(({ scenario }
             expect(planned.thisCycle).toEqual(Count.make(0))
             expect(planned.legacy).toEqual([{ tag: 'v1.0.0', package: NAME, version: '1.0.0' }])
             expect(s.run.printed.lines).toContain(
-              `plan-release: legacy release v1.0.0 (${NAME}@1.0.0), identity not recorded`,
+              `plan-release: legacy release v1.0.0 (${NAME}@1.0.0)`,
             )
             expect(succeeded(s.run.tagged)).toMatchObject({ _tag: 'TagUpToDate' })
             expect(s.run.after).toEqual(s.run.before)
@@ -328,14 +304,14 @@ Feature('Recognising releases cut under a legacy tag scheme').body(({ scenario }
           const legacyKind = yield* git(s.repo.remote, 'cat-file', '-t', 'refs/tags/v1.1.0')
           return { planned, tagged, kind, annotation, legacyKind }
         })),
-      Then('the origin gains an annotated alpha@v1.1.0 carrying the tarball integrity, and v1.1.0 is untouched')(
+      Then('the origin gains an annotated alpha@v1.1.0 named by its own tag, and v1.1.0 is untouched')(
         (s) =>
           Effect.ensuring(
             Effect.sync(() => {
               expect(cycleTags(succeeded(s.run.planned).decision)).toEqual([OWN_TAG('1.1.0')])
               expect(succeeded(s.run.tagged)).toMatchObject({ _tag: 'TagPushed', tags: [OWN_TAG('1.1.0')] })
               expect(s.run.kind).toEqual('tag')
-              expect(s.run.annotation).toContain('"integrity":"sha512-')
+              expect(s.run.annotation.split('\n\n').at(-1)).toEqual(OWN_TAG('1.1.0'))
               expect(s.run.legacyKind).toEqual('commit')
             }),
             cleanUp(s.repo.scratch),

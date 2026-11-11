@@ -4,11 +4,11 @@ import {
   ChangeEvidencePort,
   EvidenceCommandFailed,
   GitPort,
-  RegistryPort,
   type TagRefusal,
 } from '@systemfsoftware/release-language'
 import { Effect, Layer } from 'effect'
 import * as Match from 'effect/Match'
+import * as HttpClient from 'effect/unstable/http/HttpClient'
 import { pathsTouched } from './change-verdict.js'
 import { deletedAt, gitLines, MANIFEST_GLOB, membersAt, refuseUnderTurbo } from './evidence-io.js'
 import { collectTurboEvidence } from './turbo-evidence.js'
@@ -26,7 +26,7 @@ const branchFault = (refusal: TagRefusal): EvidenceCommandFailed =>
     detail: `current branch unreadable: ${refusalDetail(refusal)}`,
   })
 
-const evidencePort = (git: GitPort, registry: RegistryPort): ChangeEvidencePort => ({
+const evidencePort = (git: GitPort, client: HttpClient.HttpClient): ChangeEvidencePort => ({
   pathsEvidence: (root, ref) =>
     Effect.gen(function*() {
       const head = yield* git.currentBranch().pipe(Effect.mapError(branchFault))
@@ -62,12 +62,13 @@ const evidencePort = (git: GitPort, registry: RegistryPort): ChangeEvidencePort 
       }
       const changed = yield* git.changedPaths(ref, head)
       return yield* collectTurboEvidence(root, baseSha, task, pinned, changed)
-    }).pipe(Effect.provideService(RegistryPort, registry), Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provideService(HttpClient.HttpClient, client), Effect.provide(NodeServices.layer)),
 })
 
-export const ChangeEvidenceLive: Layer.Layer<ChangeEvidencePort, never, GitPort | RegistryPort> = Layer.effect(
-  ChangeEvidencePort,
-  Effect.gen(function*() {
-    return evidencePort(yield* GitPort, yield* RegistryPort)
-  }),
-)
+export const ChangeEvidenceLive: Layer.Layer<ChangeEvidencePort, never, GitPort | HttpClient.HttpClient> = Layer
+  .effect(
+    ChangeEvidencePort,
+    Effect.gen(function*() {
+      return evidencePort(yield* GitPort, yield* HttpClient.HttpClient)
+    }),
+  )

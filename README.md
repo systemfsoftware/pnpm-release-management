@@ -135,17 +135,16 @@ The dev shell copies the tarballs into `.deps/`, which goes in `.gitignore`. The
 
 ## Documentation
 
-| Document                                             | Covers                                                                       |
-| ---------------------------------------------------- | ---------------------------------------------------------------------------- |
-| [docs/configuration.md](docs/configuration.md)       | `release.jsonc` keys, versioning surfaces, the Turbo gate                    |
-| [docs/change-intents.md](docs/change-intents.md)     | Writing `.changeset/` intents and the `none` bump                            |
-| [docs/commands.md](docs/commands.md)                 | Every app subcommand and its flags                                           |
-| [docs/ci.md](docs/ci.md)                             | The two reusable workflows, their inputs and the permissions a caller grants |
-| [docs/distribution.md](docs/distribution.md)         | Producing and consuming packages through Nix                                 |
-| [docs/release-identity.md](docs/release-identity.md) | Tag identity and tarball integrity across releases                           |
-| [docs/adoption.md](docs/adoption.md)                 | Adopting into a repository with existing tags, and legacy tags               |
-| [docs/sandbox.md](docs/sandbox.md)                   | The sandbox that runs dependency code                                        |
-| [CONTRIBUTING.md](CONTRIBUTING.md)                   | Dev shell, checks, commit messages, adding a subcommand, the end-to-end test |
+| Document                                         | Covers                                                                       |
+| ------------------------------------------------ | ---------------------------------------------------------------------------- |
+| [docs/configuration.md](docs/configuration.md)   | `release.jsonc` keys, versioning surfaces, the Turbo gate                    |
+| [docs/change-intents.md](docs/change-intents.md) | Writing `.changeset/` intents and the `none` bump                            |
+| [docs/commands.md](docs/commands.md)             | Every app subcommand and its flags                                           |
+| [docs/ci.md](docs/ci.md)                         | The two reusable workflows, their inputs and the permissions a caller grants |
+| [docs/distribution.md](docs/distribution.md)     | Producing and consuming packages through Nix                                 |
+| [docs/legacy-tags.md](docs/legacy-tags.md)       | Counting releases cut under an earlier tag scheme as released                |
+| [docs/sandbox.md](docs/sandbox.md)               | The sandbox that runs dependency code                                        |
+| [CONTRIBUTING.md](CONTRIBUTING.md)               | Dev shell, checks, commit messages, adding a subcommand, the end-to-end test |
 
 ## Contributing
 

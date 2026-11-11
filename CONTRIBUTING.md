@@ -110,7 +110,6 @@ contexts and fails when either is empty:
 tools=$(nix build --no-link --print-out-paths \
   "github:${WORKFLOW_REPOSITORY:?job.workflow_repository is empty}/${WORKFLOW_SHA:?job.workflow_sha is empty}#release-tools")
 nix develop --command "$tools/bin/github-release-management" plan \
-  --tarballs "$(nix build --no-link --print-out-paths .#workspace-tarballs)" \
   --output "$GITHUB_OUTPUT"
 ```
 

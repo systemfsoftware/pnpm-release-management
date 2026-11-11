@@ -10,7 +10,6 @@ Every app subcommand and its flags.
 | `version sync`      | `check` or `bump <version>` across every declared surface                                                     |
 | `version sync-root` | Stamps the launcher manifest with the released version                                                        |
 | `release pr`        | Commits the bumped tree to the release branch, opens, refreshes, or closes the release PR                     |
-| `release adopt`     | Records every pre-adoption release tag's bytes in the adoption ledger                                         |
 | `release plan`      | Derives the release phase from repository state                                                               |
 | `release tag`       | Captures the cycle, then pushes one tag per released package                                                  |
 | `release release`   | Creates GitHub Releases from the generated changelogs                                                         |
@@ -27,7 +26,6 @@ Flags worth knowing:
 | ------------------- | --------------------------------------------------------------------------------------------- |
 | `changeset check`   | `<base-sha-or-ref>`, `--base`, `--skip-liveness`                                              |
 | `release plan`      | `--output <file>`, `--deferred <file>`, `--remote <name>`                                     |
-| `release adopt`     | `--registry <url>`, `--output <file>`, `--remote <name>`                                      |
 | `release tag`       | `--captured <file>`, `--output <file>`, `--exclude`, `--json`, `--dry-run`, `--remote <name>` |
 | `release release`   | `--captured <file>`, `--assert`, `--dry-run`                                                  |
 | `version sync`      | `check \| bump <version>`                                                                     |

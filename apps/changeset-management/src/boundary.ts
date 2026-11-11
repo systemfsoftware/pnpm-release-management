@@ -1,4 +1,3 @@
-import { LedgerLive } from '@systemfsoftware/adoption-adapter'
 import { resolveWorkspaceRoot } from '@systemfsoftware/cli-adapter'
 import {
   type Gate,
@@ -30,7 +29,6 @@ export const storesOf = (workspace: Workspace) =>
   Layer.mergeAll(
     WorkspaceStoreLive(workspace.root),
     ChangesetStoreLive({ root: workspace.root, changesetDir: workspace.release.changesetDir }),
-    LedgerLive(workspace.root),
   )
 
 export const taskOf = (gate: Gate): TaskName | undefined => {

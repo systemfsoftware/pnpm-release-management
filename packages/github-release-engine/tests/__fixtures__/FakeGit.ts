@@ -9,13 +9,11 @@ import {
   RepoName,
 } from '@systemfsoftware/release-language'
 import { Effect, Layer, Option } from 'effect'
-import { FAKE_FILES, FAKE_INTEGRITY } from './FakeTarball.js'
 
 export interface FakeGitState {
   readonly tags?: Array<ReleaseTag>
   readonly owner?: string
   readonly repo?: string
-  readonly annotation?: string
   readonly trackedChanges?: number
 }
 
@@ -68,8 +66,6 @@ export const makeFakeGit = (state: FakeGitState = {}) => {
       }
       return Effect.succeed(tag)
     },
-    tagAnnotation: () =>
-      Effect.succeed(Option.some(state.annotation ?? JSON.stringify({ integrity: FAKE_INTEGRITY, files: FAKE_FILES }))),
     tagCommit: () => Effect.succeed(Option.some(CommitSha.make('deadbeef'))),
     tagTree: () => Effect.succeed(Option.none()),
     repoSlug: () =>
