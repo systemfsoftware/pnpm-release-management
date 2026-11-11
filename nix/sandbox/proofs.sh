@@ -127,9 +127,9 @@ fi
 
 consumer_of() {
   local dir="$project/$1"
-  mkdir -p "$dir/.deps"
+  mkdir -p "$dir/.tarballs"
   cp -R "@tinyConsumer@/." "$dir/"
-  cp "@tinyLib@/tiny-lib-1.0.0.tgz" "$dir/.deps/"
+  cp "@tinyLib@/tiny-lib-1.0.0.tgz" "$dir/.tarballs/tiny-lib.tgz"
   chmod -R u+w "$dir"
   if [ -n "${2:-}" ]; then
     (cd "$dir" && node -e 'const fs = require("fs"); const m = JSON.parse(fs.readFileSync("package.json", "utf8")); m.packageManager = process.argv[1]; fs.writeFileSync("package.json", JSON.stringify(m, null, 2) + "\n")' "$2")

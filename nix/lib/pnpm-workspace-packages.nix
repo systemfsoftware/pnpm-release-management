@@ -7,10 +7,11 @@
   nodejs ? pkgs.nodejs_24,
   buildScript ? "build",
   nativeBuildInputs ? [ ],
-  # Directories the lockfile's `file:` tarballs live in, by path relative to
-  # src, as for mkPnpmConsumerStore. Both the store and the tarball build
-  # install from the lockfile, so both get them.
-  files ? { },
+  # Flakes whose `workspace-tarballs` this workspace installs from as `file:`
+  # dependencies, as for mkPnpmConsumerStore. Both the store and the tarball
+  # build install from the lockfile, so both get them.
+  producers ? [ ],
+  tarballsDir ? ".tarballs",
   # The public members to build and pack, by package name. Null packs every
   # public member.
   members ? null,
@@ -92,8 +93,10 @@ let
     assert pinnedPnpm == null || pinnedPnpm == pnpm.version
       || throw "mkPnpmWorkspacePackages: package.json pins pnpm@${pinnedPnpm} but the build uses pnpm ${pnpm.version}; pin the version Nix provides so every pnpm run resolves the same way";
     import ./pnpm-store.nix ({
-      inherit pkgs pname pnpm src iplConfigHook files;
+      inherit pkgs pname pnpm src iplConfigHook tarballs tarballsDir;
     } // lib.optionalAttrs (lock != null) { lockFile = lock; });
+
+  tarballs = if producers == [ ] then null else import ./consumer-tarballs.nix { inherit pkgs producers; };
 
   deps = storeOf null;
   buildDeps = if lockFile == null then deps else storeOf lockFile;
@@ -148,7 +151,7 @@ let
       version = "0";
       inherit src;
       inherit (buildDeps) mitmCache;
-      postPatch = buildDeps.copyFiles + lib.optionalString (lockFile != null) restrictToLockFile;
+      postPatch = buildDeps.copyTarballs + lib.optionalString (lockFile != null) restrictToLockFile;
       preInstall = lib.optionalString (lockFile != null) restoreManifests;
       prePnpmInstall = import ./pnpm-mitm-replay.nix;
 

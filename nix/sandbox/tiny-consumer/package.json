@@ -4,6 +4,6 @@
   "private": true,
   "packageManager": "pnpm@12.9.0",
   "dependencies": {
-    "@sandbox-proof/tiny-lib": "file:.deps/tiny-lib-1.0.0.tgz"
+    "@sandbox-proof/tiny-lib": "file:.tarballs/tiny-lib.tgz"
   }
 }

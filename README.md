@@ -73,8 +73,11 @@ flowchart LR
 GitHub Release body, which is why the order matters: the release notes are
 authored with the version bump, not reconstructed at release time.
 
-Nothing is published to a registry. Consumers take a package from the
-repository's own Nix flake at a tag or revision.
+**<https://nix.systemfsoftware.com> is the package registry for @systemfsoftware
+packages: producers push package tarballs there from `main`, consumers
+substitute them through flake inputs, and nothing goes to npm.** The release
+tooling here tags and creates GitHub Releases; it never publishes. See
+[Distribution through Nix](#distribution-through-nix).
 
 ## Quick start
 
@@ -347,8 +350,10 @@ calls the check with no inputs.
 
 ## Distribution through Nix
 
-A repository ships its public workspace packages as flake outputs. Nothing goes
-to a registry. One call in `flake.nix`:
+**<https://nix.systemfsoftware.com> is the package registry for @systemfsoftware
+packages: producers push package tarballs there from `main`, consumers
+substitute them through flake inputs, and nothing goes to npm.** A repository
+ships its public workspace packages as flake outputs; [the producer pushes them to the registry](#the-registry) and [consumers substitute them](#the-consumer-route). One call in `flake.nix`:
 
 ```nix
 packages = forEachSystem (pkgs:
@@ -398,29 +403,106 @@ every tarball plus an `index.json` of `{ name, file }`.
   `pnpm-store` still installs the whole workspace from `pnpm-lock.yaml`. Check
   the cut lockfile in CI by writing it again and diffing, or it drifts.
 
-A consumer takes the flake as an input pinned by `flake.lock`. A pull
-request's head revision is a snapshot, and a release tag is a stable version.
-It builds the tarballs it needs and depends on them with `file:` paths, so each
-tarball's integrity lands in the consumer's `pnpm-lock.yaml`.
+### The registry
 
-The consumer's sandbox installs from one store holding both its registry
-packages and those tarballs. A store with only the registry packages fails the
-install: pnpm tries to add the tarball to the read-only store. Build it with
-`lib.mkPnpmConsumerStore`:
+<https://nix.systemfsoftware.com> is a Nix binary cache, and it is where the
+tarballs live. Its signing key is
+`nix-cache-1:wXA8I4DayNW9q6enUyQA/P/nT38pGSTLt374t3gsn7M=`. Every flake that
+produces or consumes tarballs trusts it and falls back to building when it has
+no entry:
 
 ```nix
-pnpm-store = pnpm-release-management.lib.mkPnpmConsumerStore {
-  inherit pkgs;
-  src = self; # holds package.json, pnpm-lock.yaml, pnpm-workspace.yaml
-  files.".deps" = producer.packages.${system}.workspace-tarballs;
+nixConfig = {
+  extra-substituters = "https://nix.systemfsoftware.com";
+  extra-trusted-public-keys = "nix-cache-1:wXA8I4DayNW9q6enUyQA/P/nT38pGSTLt374t3gsn7M=";
+  fallback = true;
 };
 ```
 
-`files` maps a directory relative to `src` to a derivation holding the
-`*.tgz` the lockfile names there. Third-party tarballs come from per-tarball
-fixed-output fetches as above; the `pnpm` and `@pnpm/exe.*` entries of pnpm
-12's env document are skipped, because the sandbox never lets pnpm fetch
-itself.
+A producer's `main` CI builds its `packages.<system>.workspace-tarballs` for
+each system it supports and copies the result, signed with that key, to the
+cache. `workspace-tarballs` is the whole push set for a package consumer: it
+holds every public member's tarball, so no member is listed by name and a
+member added later is pushed without a CI edit. A consumer pins the producer
+flake, so each tarball is a substitution of a path the producer already built,
+never a local build.
+
+### The consumer route
+
+A consumer takes each producer as a flake input pinned by `flake.lock`, with the
+registry as its substituter. A pull request's head revision is a snapshot, and a
+release tag is a stable version. `lib.mkPnpmConsumerTarballs` turns the
+producers into the tarballs the consumer's lockfile installs, one
+`<package>.tgz` per public member, named for the package and not its version:
+
+```nix
+nixConfig = {
+  extra-substituters = "https://nix.systemfsoftware.com";
+  extra-trusted-public-keys = "nix-cache-1:wXA8I4DayNW9q6enUyQA/P/nT38pGSTLt374t3gsn7M=";
+  fallback = true;
+};
+
+inputs.core.url = "github:systemfsoftware/systemfsoftware";
+
+outputs = { self, nixpkgs, core, pnpm-release-management, ... }:
+  let
+    producers = [ core ];
+    tarballs = pkgs: pnpm-release-management.lib.mkPnpmConsumerTarballs { inherit pkgs producers; };
+  in {
+    packages = forEachSystem (pkgs: {
+      tarballs = tarballs pkgs; # what CI copies into `.tarballs/` before `pnpm install`
+      pnpm-store = pnpm-release-management.lib.mkPnpmConsumerStore {
+        inherit pkgs producers;
+        src = self; # holds package.json, pnpm-lock.yaml, pnpm-workspace.yaml
+      };
+    });
+    devShells = forEachSystem (pkgs: {
+      default = pkgs.mkShell {
+        shellHook = pnpm-release-management.lib.mkPnpmTarballsHook {
+          inherit pkgs;
+          tarballs = tarballs pkgs;
+        };
+      };
+    });
+  };
+```
+
+A producer is a flake that exports `packages.<system>.workspace-tarballs` as
+`mkPnpmWorkspacePackages` builds it. A package two producers both ship is an
+evaluation error naming it.
+
+Take a producer's inputs as it locked them. A `follows` on a producer's input
+(`inputs.nixpkgs.follows`, say) changes every derivation of the producer, so
+its paths are not the ones its CI pushed: the cache has no entry and the
+consumer builds the producer locally.
+
+The tarballs are the same bytes on every system, so a shell on a system the
+producer does not build for (macOS) passes `system = "aarch64-linux"` to
+`mkPnpmConsumerTarballs` and substitutes the Linux outputs.
+
+The manifests and lockfile name each tarball at its stable path, in
+`.tarballs/` by default (`tarballsDir` changes it; gitignore the directory):
+
+```yaml
+# pnpm-workspace.yaml
+overrides:
+  "@systemfsoftware/effect-cell-types": file:.tarballs/effect-cell-types.tgz
+```
+
+Moving to a newer producer release is one step: update the flake input, enter
+the dev shell and run `pnpm install --update-checksums`. The shell hook
+replaces `.tarballs/` when the tarballs' store path changed, and pnpm records
+the new integrity and version in the lockfile. The `file:` paths and the
+overrides do not move. A lockfile recorded against other bytes fails the store
+build and the install on an integrity mismatch.
+
+The consumer's sandbox installs from one store holding both its registry
+packages and those tarballs. A store with only the registry packages fails the
+install: pnpm tries to add the tarball to the read-only store. `mkPnpmConsumerStore`
+builds it with the same `producers`. Third-party tarballs come from per-tarball
+fixed-output fetches as above, and the sandbox's store holds nothing a registry
+or the cache did not serve. The `pnpm` and `@pnpm/exe.*` entries of pnpm 12's
+env document are skipped, because the sandbox never lets pnpm fetch itself.
 
 The store reads `supportedArchitectures` from `pnpm-workspace.yaml` and fetches
 optional registry packages for all configured OS, CPU and libc values.
@@ -432,9 +514,13 @@ when it cannot read the workspace configuration. `lockFile` can likewise be
 passed separately from a derivation-backed `src`.
 
 A workspace that publishes its own packages and also consumes tarballs this way
-passes the same `files` to `lib.mkPnpmWorkspacePackages`. Its tarball build
+passes the same `producers` to `lib.mkPnpmWorkspacePackages`. Its tarball build
 installs from the lockfile too, so without them the build fails on the first
 `file:` path it cannot open.
+
+To check that a consumer builds nothing from a producer, run
+`nix build --dry-run .#pnpm-store` with the cache as substituter: the producers'
+`workspace-tarballs` are listed as fetched, none as built.
 
 Resolving the lockfile is the one step that runs on the host: `pnpm install
 --lockfile-only` needs registry metadata, which no store carries. It reads

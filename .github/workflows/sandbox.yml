@@ -46,10 +46,10 @@ jobs:
             exit 1
           fi
 
-      - name: A lockfile package with no resolution is refused; workspace globs resolve as pnpm's do; a workspace packs with file tarball dependencies; a cut lockfile builds only its members
+      - name: A lockfile package with no resolution is refused; workspace globs resolve as pnpm's do; a workspace packs with its producers' tarballs; producers' tarballs lay out by package name; a cut lockfile builds only its members
         run: |
           system="$(nix eval --impure --raw --expr builtins.currentSystem)"
-          nix build -L ".#checks.$system.pnpm-lock-parser" ".#checks.$system.workspace-globs" ".#checks.$system.workspace-file-deps" ".#checks.$system.workspace-lockfile-members"
+          nix build -L ".#checks.$system.pnpm-lock-parser" ".#checks.$system.workspace-globs" ".#checks.$system.workspace-file-deps" ".#checks.$system.consumer-tarballs" ".#checks.$system.workspace-lockfile-members"
 
       - name: Install through the sandbox, offline from the Nix pnpm store
         run: nix develop --command sandbox -- pnpm install

@@ -7,10 +7,11 @@
   version ? "0",
   lockFile ? src + "/pnpm-lock.yaml",
   workspaceFile ? if pkgs.lib.isDerivation src then null else src + "/pnpm-workspace.yaml",
-  # Directories the lockfile's `file:` tarballs live in, by path relative to
-  # src, e.g. { ".sfs-deps" = <derivation holding *.tgz>; }. They have no URL
+  # The producers' tarballs (nix/lib/consumer-tarballs.nix), laid into src at
+  # `tarballsDir` where the lockfile's `file:` paths name them. They have no URL
   # to fetch, so the store takes them from here.
-  files ? { },
+  tarballs ? null,
+  tarballsDir ? ".tarballs",
 }:
 let
   platforms = import ./pnpm-platforms.nix {
@@ -29,12 +30,11 @@ let
     data = tarballCacheData;
   };
 
-  # Lays each `files` derivation's tarballs into src where the lockfile's
-  # `file:` paths name them.
-  copyFiles = pkgs.lib.concatStrings (pkgs.lib.mapAttrsToList (dir: source: ''
-    mkdir -p ${pkgs.lib.escapeShellArg dir}
-    cp -r ${source}/. ${pkgs.lib.escapeShellArg dir}/
-  '') files);
+  # Lays the tarballs into src where the lockfile's `file:` paths name them.
+  copyTarballs = pkgs.lib.optionalString (tarballs != null) ''
+    mkdir -p ${pkgs.lib.escapeShellArg tarballsDir}
+    find ${tarballs}/ -name '*.tgz' -exec cp -L --no-preserve=mode -t ${pkgs.lib.escapeShellArg tarballsDir} {} +
+  '';
 
   # Not a fixed-output derivation: the cache holds the selected tarballs, and
   # pnpm only reads it. The store dir is the output, in the layout pnpm writes
@@ -42,7 +42,7 @@ let
   store = pkgs.stdenvNoCC.mkDerivation {
     pname = "${pname}-pnpm-store";
     inherit version src mitmCache;
-    postPatch = copyFiles;
+    postPatch = copyTarballs;
     # A consumer's packageManager pin names whatever pnpm it uses on the host;
     # the store is built by the pnpm passed here, which must not fetch another.
     pnpm_config_manage_package_manager_versions = "false";
@@ -59,5 +59,5 @@ let
   };
 in
 {
-  inherit mitmCache store copyFiles;
+  inherit mitmCache store copyTarballs;
 }

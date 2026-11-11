@@ -36,14 +36,39 @@
           { inherit (ipl) iplConfigHook; } // args
         );
 
+      # The tarballs a consumer installs as `file:` dependencies: one
+      # `<package>.tgz` per public member of each producer's
+      # `packages.<system>.workspace-tarballs`, with no package named by hand.
+      # Two producers shipping one package is an evaluation error.
+      lib.mkPnpmConsumerTarballs = { pkgs, producers, system ? pkgs.stdenv.hostPlatform.system }:
+        import ./nix/lib/consumer-tarballs.nix { inherit pkgs producers system; };
+
+      # A dev shell `shellHook` that puts those tarballs at `dir` in the
+      # repository root, where `pnpm install` reads them. It copies only when the
+      # tarballs' store path changed, so entering a shell over a current copy
+      # does nothing.
+      lib.mkPnpmTarballsHook = { pkgs, tarballs, dir ? ".tarballs" }:
+        assert dir != "" && !pkgs.lib.hasPrefix "/" dir && !pkgs.lib.hasInfix ".." dir
+          || throw "mkPnpmTarballsHook: dir must be a path below the repository root, got '${dir}'";
+        ''
+          root="$(${pkgs.git}/bin/git rev-parse --show-toplevel 2>/dev/null || pwd)"
+          if [ "$(cat "$root/${dir}/.source" 2>/dev/null)" != "${tarballs}" ]; then
+            rm -rf "$root/${dir}"
+            mkdir -p "$root/${dir}"
+            ${pkgs.findutils}/bin/find ${tarballs}/ -name '*.tgz' -exec ${pkgs.coreutils}/bin/cp -L --no-preserve=mode -t "$root/${dir}" {} +
+            printf '%s' "${tarballs}" > "$root/${dir}/.source"
+          fi
+        '';
+
       # The store a consumer's sandbox installs from: the lockfile's registry
-      # packages plus the workspace tarballs it names as `file:` dependencies,
-      # passed as `files` (directory relative to src -> derivation of *.tgz).
+      # packages plus the producers' tarballs it names as `file:` dependencies
+      # (laid at `tarballsDir`, `.tarballs` by default).
       # `lockFile` and `workspaceFile` are read at evaluation; pass them apart
       # from src when src is itself a derivation.
-      lib.mkPnpmConsumerStore = { pkgs, src, pname ? "consumer", pnpm ? pkgs.pnpm_12, files ? { }, lockFile ? src + "/pnpm-lock.yaml", workspaceFile ? if pkgs.lib.isDerivation src then null else src + "/pnpm-workspace.yaml" }:
+      lib.mkPnpmConsumerStore = { pkgs, src, pname ? "consumer", pnpm ? pkgs.pnpm_12, producers ? [ ], tarballsDir ? ".tarballs", lockFile ? src + "/pnpm-lock.yaml", workspaceFile ? if pkgs.lib.isDerivation src then null else src + "/pnpm-workspace.yaml" }:
         (import ./nix/lib/pnpm-store.nix {
-          inherit pkgs src pname pnpm files lockFile workspaceFile;
+          inherit pkgs src pname pnpm tarballsDir lockFile workspaceFile;
+          tarballs = if producers == [ ] then null else import ./nix/lib/consumer-tarballs.nix { inherit pkgs producers; };
           inherit (iplFor pkgs.stdenv.hostPlatform.system) iplConfigHook;
         }).store;
 
@@ -191,19 +216,53 @@
               ''
             );
 
-          # A member depending on a `file:` tarball packs only when the tarball
-          # is laid into src where the lockfile names it.
+          # A member depending on a `file:` tarball packs only when the producers'
+          # tarballs are laid into src where the lockfile names them.
           workspace-file-deps =
             let
               tarballs = (self.lib.mkPnpmWorkspacePackages {
                 inherit pkgs;
                 src = ./nix/lib/fixtures/file-deps;
                 pname = "file-deps";
-                files.".deps" = self.packages.${system}.sandbox-proofs-tiny-lib;
+                producers = [ (import ./nix/lib/fixtures/tiny-producer.nix { inherit pkgs; tinyLib = self.packages.${system}.sandbox-proofs-tiny-lib; }) ];
               }).workspace-tarballs;
             in
             pkgs.runCommand "workspace-file-deps" { nativeBuildInputs = [ pkgs.jq ]; } ''
               jq -e '. == [{ name: "@fixture/app", file: "app-1.0.0.tgz" }]' ${tarballs}/index.json
+              touch $out
+            '';
+
+          # A consumer names no package: every public member of each producer is
+          # one `<package>.tgz`. One package from two producers is refused, and
+          # the dev shell hook copies only when the tarballs changed.
+          consumer-tarballs =
+            let
+              producer = import ./nix/lib/fixtures/tiny-producer.nix { inherit pkgs; tinyLib = self.packages.${system}.sandbox-proofs-tiny-lib; };
+              tarballs = self.lib.mkPnpmConsumerTarballs { inherit pkgs; producers = [ producer ]; };
+              twice = builtins.tryEval (builtins.deepSeq
+                (self.lib.mkPnpmConsumerTarballs { inherit pkgs; producers = [ producer producer ]; }).drvPath
+                true);
+              hook = self.lib.mkPnpmTarballsHook { inherit pkgs tarballs; };
+            in
+            assert twice.success == false
+              || throw "consumer-tarballs: two producers shipping one package were accepted";
+            pkgs.runCommand "consumer-tarballs" { nativeBuildInputs = [ pkgs.git ]; } ''
+              [ "$(ls ${tarballs})" = tiny-lib.tgz ]
+              cmp ${tarballs}/tiny-lib.tgz ${self.packages.${system}.sandbox-proofs-tiny-lib}/tiny-lib-1.0.0.tgz
+
+              export HOME="$TMPDIR"
+              git init -q repo
+              mkdir repo/sub
+              cd repo/sub
+              ${hook}
+              [ -w ../.tarballs/tiny-lib.tgz ]
+              cmp ../.tarballs/tiny-lib.tgz ${tarballs}/tiny-lib.tgz
+              touch ../.tarballs/marker
+              ${hook}
+              [ -e ../.tarballs/marker ]
+              echo moved > ../.tarballs/.source
+              ${hook}
+              [ ! -e ../.tarballs/marker ]
               touch $out
             '';
 
@@ -228,7 +287,7 @@
               jq -e '. == [{ name: "@fixture/wanted", file: "wanted-1.0.0.tgz" }]' ${tarballs}/index.json
               [ "$(ls ${tarballs})" = "$(printf 'index.json\nwanted-1.0.0.tgz')" ]
               tar -xOzf ${tarballs}/wanted-1.0.0.tgz package/package.json \
-                | jq -e '.devDependencies == { "@sandbox-proof/tiny-lib": "file:../../.deps/tiny-lib-1.0.0.tgz" }'
+                | jq -e '.devDependencies == { "@sandbox-proof/tiny-lib": "file:../../.tarballs/tiny-lib.tgz" }'
               touch $out
             '';
         });

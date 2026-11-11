@@ -19,8 +19,9 @@ let
     name = "sandbox-proofs-tiny-workspace";
   };
 
-  storeOf = name: fixture: files: (import ../lib/pnpm-store.nix {
-    inherit pkgs iplConfigHook files;
+  storeOf = name: fixture: producers: (import ../lib/pnpm-store.nix {
+    inherit pkgs iplConfigHook;
+    tarballs = if producers == [ ] then null else import ../lib/consumer-tarballs.nix { inherit pkgs producers; };
     pnpm = pnpm_12;
     pname = "sandbox-proofs-${name}";
     src = builtins.path { path = fixture; name = "sandbox-proofs-${name}-workspace"; };
@@ -32,12 +33,13 @@ let
     mkdir -p "$out" && pnpm pack --out "$out/tiny-lib-1.0.0.tgz" >/dev/null
   '';
 
-  tinyStore = storeOf "tiny" ./tiny-workspace { };
-  bumpedStore = storeOf "bumped" ./tiny-workspace-bumped { };
+  tinyStore = storeOf "tiny" ./tiny-workspace [ ];
+  tinyProducer = import ../lib/fixtures/tiny-producer.nix { inherit pkgs tinyLib; };
+  bumpedStore = storeOf "bumped" ./tiny-workspace-bumped [ ];
   # The lockfile records the real ms 2.1.3 entry with a wrong integrity: building
   # this store must fail red on a hash mismatch.
-  tamperedStore = storeOf "tampered" ./tiny-workspace-tampered { };
-  consumerStore = storeOf "consumer" ./tiny-consumer { ".deps" = tinyLib; };
+  tamperedStore = storeOf "tampered" ./tiny-workspace-tampered [ ];
+  consumerStore = storeOf "consumer" ./tiny-consumer [ tinyProducer ];
   tinyConsumer = builtins.path { path = ./tiny-consumer; name = "sandbox-proofs-tiny-consumer"; };
 
   substitutions = {
