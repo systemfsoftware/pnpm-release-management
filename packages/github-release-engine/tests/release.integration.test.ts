@@ -41,11 +41,6 @@ const member = (name: string, version: string): Member => ({
 
 const tagOf = (name: string, version: string): ReleaseTag => ReleaseTag.make(`${name}@v${version}`)
 
-const privateMember = (name: string, version: string): Member => ({
-  ...member(name, version),
-  publishable: false,
-})
-
 const intentPath = (slug: string): RelativePath => RelativePath.make(`${slug}.md`)
 
 const changelogFor = (name: string, version: string): RelativePath =>

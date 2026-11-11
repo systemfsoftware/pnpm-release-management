@@ -4,22 +4,22 @@ The `release.jsonc` keys, the versioning surfaces and the Turbo gate. The workfl
 
 `release.jsonc` at the repository root. Every path is relative to the root.
 
-| Key                             | Default                     | Meaning                                                                      |
-| ------------------------------- | --------------------------- | ---------------------------------------------------------------------------- |
-| `base`                          | required                    | branch the release PR targets                                                |
-| `branch`                        | required                    | branch the release PR is opened from                                         |
-| `changesetDir`                  | `.changeset`                | where pending intents live                                                   |
-| `changelogDir`                  | `<changesetDir>/changelogs` | `registry` storage: where generated per-package changelogs are parked        |
-| `versioning.strategy`           | required                    | `surfaces` or `changesets`                                                   |
-| `versioning.manifest`           | —                           | `surfaces`: the JSON manifest that owns the version                          |
-| `versioning.changelog`          | —                           | `surfaces`: the root changelog that receives the release summary             |
-| `versioning.surfaces[]`         | —                           | `surfaces`: additional files rewritten on every bump                         |
-| `gate.strategy`                 | required                    | `turbo` (a task graph decides) or `paths` without a root Turbo config        |
-| `gate.task`                     | `build`                     | `turbo`: the task whose inputs decide the changed packages                   |
-| `distribution.launcherManifest` | —                           | required only for repositories that ship platform packages                   |
-| `distribution.targets[]`        | —                           | `{ target, suffix, os, cpu, libc?, runner, bin }`                            |
-| `legacyTags.tag` / `.through`   | —                           | release tags cut before adoption; see [Legacy tags](adoption.md#legacy-tags) |
-| `pr.title` / `pr.body`          | built-in copy               | release PR copy                                                              |
+| Key                             | Default                     | Meaning                                                                     |
+| ------------------------------- | --------------------------- | --------------------------------------------------------------------------- |
+| `base`                          | required                    | branch the release PR targets                                               |
+| `branch`                        | required                    | branch the release PR is opened from                                        |
+| `changesetDir`                  | `.changeset`                | where pending intents live                                                  |
+| `changelogDir`                  | `<changesetDir>/changelogs` | `registry` storage: where generated per-package changelogs are parked       |
+| `versioning.strategy`           | required                    | `surfaces` or `changesets`                                                  |
+| `versioning.manifest`           | —                           | `surfaces`: the JSON manifest that owns the version                         |
+| `versioning.changelog`          | —                           | `surfaces`: the root changelog that receives the release summary            |
+| `versioning.surfaces[]`         | —                           | `surfaces`: additional files rewritten on every bump                        |
+| `gate.strategy`                 | required                    | `turbo` (a task graph decides) or `paths` without a root Turbo config       |
+| `gate.task`                     | `build`                     | `turbo`: the task whose inputs decide the changed packages                  |
+| `distribution.launcherManifest` | —                           | required only for repositories that ship platform packages                  |
+| `distribution.targets[]`        | —                           | `{ target, suffix, os, cpu, libc?, runner, bin }`                           |
+| `legacyTags.tag` / `.through`   | —                           | release tags cut under an earlier scheme; see [Legacy tags](legacy-tags.md) |
+| `pr.title` / `pr.body`          | built-in copy               | release PR copy                                                             |
 
 Member changelogs follow `versioning.changelog.storage` in `pnpm-workspace.yaml`, read with
 `pnpm config get`. Under `repository`, `bump` adds a `## <version>` section to each moved member's
