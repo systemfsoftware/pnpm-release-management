@@ -73,8 +73,10 @@ flowchart LR
 GitHub Release body, which is why the order matters: the release notes are
 authored with the version bump, not reconstructed at release time.
 
-Nothing is published to a registry. Consumers take a package from the
-repository's own Nix flake at a tag or revision.
+https://nix.systemfsoftware.com is the package registry for `@systemfsoftware`
+packages: a producer pushes its package tarballs there from `main`, a consumer
+substitutes them through its flake inputs, and nothing is published to npm. See
+[Distribution through Nix](#distribution-through-nix).
 
 ## Quick start
 
@@ -347,8 +349,18 @@ calls the check with no inputs.
 
 ## Distribution through Nix
 
-A repository ships its public workspace packages as flake outputs. Nothing goes
-to a registry. One call in `flake.nix`:
+https://nix.systemfsoftware.com is the package registry for `@systemfsoftware`
+packages: a producer pushes its package tarballs there from `main`, a consumer
+substitutes them through its flake inputs, and nothing is published to npm.
+
+The registry is the org's Nix binary cache on Cloudflare R2. A tarball is a Nix
+store path, so a consumer whose producer has pushed it fetches the bytes and
+builds nothing.
+
+### Produce
+
+A repository ships its public workspace packages as flake outputs. One call in
+`flake.nix`:
 
 ```nix
 packages = forEachSystem (pkgs:
@@ -370,7 +382,7 @@ every tarball plus an `index.json` of `{ name, file }`.
   which breaks `nix eval .#devShells.<other-system>`); a plain derivation then
   runs pnpm offline through the `importPnpmLock` input's config hook and
   assembles `packages.<system>.pnpm-store`, the store directory pnpm installs
-  from with no registry. `file:` tarballs and `directory` entries are
+  from with no npm registry. `file:` tarballs and `directory` entries are
   workspace-local and are skipped before any fetch.
 - Install runs with `--ignore-scripts` in the Nix sandbox. The members build
   with their `build` script (`buildScript` overrides it), then `pnpm pack`
@@ -398,23 +410,104 @@ every tarball plus an `index.json` of `{ name, file }`.
   `pnpm-store` still installs the whole workspace from `pnpm-lock.yaml`. Check
   the cut lockfile in CI by writing it again and diffing, or it drifts.
 
-A consumer takes the flake as an input pinned by `flake.lock`. A pull
-request's head revision is a snapshot, and a release tag is a stable version.
-It builds the tarballs it needs and depends on them with `file:` paths, so each
-tarball's integrity lands in the consumer's `pnpm-lock.yaml`.
+The producer's `main` workflow pushes `packages.<system>.workspace-tarballs` and
+`packages.<system>.<name>` of every public member, signed with the cache's key
+`nix-cache-1`. `nix eval --json .#workspace-tarballs.members --apply 'map (member:
+member.attr)'` lists the names, so the push set is not kept by hand. A consumer
+gets a hit only on the store path its own evaluation computes, so build the push
+set from the flake reference consumers pin, `github:<owner>/<repo>/<rev>`.
 
-The consumer's sandbox installs from one store holding both its registry
-packages and those tarballs. A store with only the registry packages fails the
-install: pnpm tries to add the tarball to the read-only store. Build it with
-`lib.mkPnpmConsumerStore`:
+### Take a producer's packages
+
+A consumer sets the registry as a substituter and takes each producer as a flake
+input pinned by `flake.lock`. A pull request's head revision is a snapshot, and
+a release tag is a stable version:
 
 ```nix
-pnpm-store = pnpm-release-management.lib.mkPnpmConsumerStore {
-  inherit pkgs;
-  src = self; # holds package.json, pnpm-lock.yaml, pnpm-workspace.yaml
-  files.".deps" = producer.packages.${system}.workspace-tarballs;
-};
+{
+  nixConfig = {
+    extra-substituters = "https://nix.systemfsoftware.com";
+    extra-trusted-public-keys = "nix-cache-1:wXA8I4DayNW9q6enUyQA/P/nT38pGSTLt374t3gsn7M=";
+    fallback = true;
+  };
+
+  inputs = {
+    nixpkgs.follows = "producer/nixpkgs";
+    producer.url = "github:systemfsoftware/systemfsoftware/<rev>";
+    pnpm-release-management.url = "github:systemfsoftware/pnpm-release-management";
+  };
+}
 ```
+
+Only the consuming flake's `nixConfig` applies, and Nix honours it only with
+`--accept-flake-config` or for a trusted user; otherwise it prints `ignoring
+untrusted flake configuration setting 'extra-substituters'` and builds from
+source. The same three lines go in `nix.conf`, and in `extra_nix_config` of
+`cachix/install-nix-action` for CI. `fallback = true` builds a missing path
+instead of failing. Follow the producer's `nixpkgs` and leave its other inputs
+alone: the consumer must compute the store paths the producer pushed.
+
+`lib.mkProducerTarballs` takes the producers whole, so no package is named by
+hand:
+
+```nix
+packages = forEachSystem (pkgs: rec {
+  producer-tarballs = pnpm-release-management.lib.mkProducerTarballs {
+    inherit pkgs;
+    producers = { inherit producer; }; # each: packages.<system>.workspace-tarballs
+  };
+  pnpm-store = pnpm-release-management.lib.mkPnpmConsumerStore {
+    inherit pkgs;
+    src = self; # holds package.json, pnpm-lock.yaml, pnpm-workspace.yaml
+    files.".deps" = producer-tarballs;
+  };
+});
+
+devShells = forEachSystem (pkgs: {
+  default = pkgs.mkShell {
+    shellHook = self.packages.${pkgs.stdenv.hostPlatform.system}.producer-tarballs.shellHook;
+  };
+});
+```
+
+`producer-tarballs` holds one `<name>.tgz` for every public member of every
+producer, with the scope and the version dropped from the name, and an
+`index.json` of `{ name, file }`. Because no file name carries a version, moving
+a producer changes no path in the consumer's manifests. Two producers that ship
+one name are an evaluation error until `precedence = [ "first" "second" ]`
+orders them; the first wins. `dir` (default `.deps`) is where the tarballs sit
+under the consumer's root. Add `.deps/` to `.gitignore`.
+
+A producer's packages name each other by exact version, so each one is
+overridden to its tarball or pnpm would look it up on npm. `overrides` is that
+block, written once and rewritten only when a producer adds or drops a package:
+
+```sh
+nix eval --raw .#producer-tarballs.overrides
+```
+
+```yaml
+overrides:
+  "@systemfsoftware/effect-cell-types": file:.deps/effect-cell-types.tgz
+```
+
+Entering the dev shell runs `shellHook`, which copies the tarballs into `.deps/`
+as real files and removes the ones it left before: the sandbox reads no store
+path outside its closure, so a symlink into the store would not install.
+
+Moving a version is one step: `nix flake update producer`. The next dev shell
+copies the new bytes, and `pnpm update '@systemfsoftware/*'` rewrites each
+entry's `version` and `integrity` in `pnpm-lock.yaml`. Until then a cold `pnpm
+install --frozen-lockfile` fails with `ERR_PNPM_TARBALL_INTEGRITY`; an install
+over an existing `node_modules` is not cold, and keeps the files it has.
+
+`nix build --dry-run .#producer-tarballs` shows what a cold install would build.
+A producer path under "will be built" is one the producer has not pushed.
+
+The consumer's sandbox installs from one store holding both its npm packages and
+those tarballs. A store with only the npm packages fails the install: pnpm tries
+to add the tarball to the read-only store. `lib.mkPnpmConsumerStore` builds it,
+as above.
 
 `files` maps a directory relative to `src` to a derivation holding the
 `*.tgz` the lockfile names there. Third-party tarballs come from per-tarball
@@ -423,11 +516,11 @@ fixed-output fetches as above; the `pnpm` and `@pnpm/exe.*` entries of pnpm
 itself.
 
 The store reads `supportedArchitectures` from `pnpm-workspace.yaml` and fetches
-optional registry packages for all configured OS, CPU and libc values.
+optional npm packages for all configured OS, CPU and libc values.
 Required packages are retained regardless of platform. `current` refers to the
 platform running pnpm. Unrestricted or unrecognized platform settings are
 kept rather than excluded. If `src` is a derivation, pass an evaluation-readable
-`workspaceFile` separately; otherwise the builder keeps all registry packages
+`workspaceFile` separately; otherwise the builder keeps all npm packages
 when it cannot read the workspace configuration. `lockFile` can likewise be
 passed separately from a derivation-backed `src`.
 
@@ -437,7 +530,7 @@ installs from the lockfile too, so without them the build fails on the first
 `file:` path it cannot open.
 
 Resolving the lockfile is the one step that runs on the host: `pnpm install
---lockfile-only` needs registry metadata, which no store carries. It reads
+--lockfile-only` needs npm registry metadata, which no store carries. It reads
 metadata only and runs no package code. Every install, build and test after it
 runs in the sandbox.
 
@@ -445,9 +538,10 @@ runs in the sandbox.
 
 A released `name@version` is immutable. The tarball a consumer downloads once is
 the tarball every consumer downloads forever, so the integrity its lockfile
-records for that `name@version` can never change. Nothing pushes to a registry,
-so a rebuilt tarball at a later revision is the only way the bytes could drift,
-and that is exactly what the release tooling refuses.
+records for that `name@version` can never change. Nothing is published to npm,
+and the registry keys a store path by its build inputs, not by `name@version`, so
+only the release tooling stops a later revision from pushing other bytes under a
+released version, and that is exactly what it refuses.
 
 `release tag` records the identity when it releases. It creates an annotated tag
 `<name>@v<version>` whose message is JSON:
@@ -489,6 +583,9 @@ A repository that adopts this tooling already has release tags — systemfsoftwa
 are all lightweight — whose bytes this tooling never recorded. Adoption makes the
 record once, before the first managed release, so those tags are never trusted
 from nothing.
+
+Adoption reads the npm registry, where the versions of a repository that once
+published there still live. It does not read nix.systemfsoftware.com.
 
 ```sh
 github-release-management adopt \
@@ -579,8 +676,8 @@ record was extended rather than rewritten.
 
 ### Legacy tags
 
-A repository whose releases predate this tooling and were never published to a
-registry has no registry bytes to adopt — only its own tags, often a bare
+A repository whose releases predate this tooling and were never published to the
+npm registry has no npm bytes to adopt — only its own tags, often a bare
 `v<version>`. `adopt` has nothing to record there, and without help the plan
 reads the current version as unreleased and owes a second `<name>@v<version>`
 tag for it. `legacyTags` names that earlier scheme:

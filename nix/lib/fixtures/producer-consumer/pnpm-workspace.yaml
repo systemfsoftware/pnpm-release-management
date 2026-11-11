@@ -1,0 +1,2 @@
+overrides:
+  "@sandbox-proof/tiny-lib": file:.deps/tiny-lib.tgz
