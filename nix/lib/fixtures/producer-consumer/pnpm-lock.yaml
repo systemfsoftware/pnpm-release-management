@@ -163,7 +163,7 @@ settings:
   excludeLinksFromLockfile: false
 
 overrides:
-  '@sandbox-proof/tiny-lib': file:.deps/tiny-lib.tgz
+  '@sandbox-proof/tiny-lib@*': file:.deps/tiny-lib.tgz
 
 importers:
 

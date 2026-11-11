@@ -444,8 +444,12 @@ Only the consuming flake's `nixConfig` applies, and Nix honours it only with
 untrusted flake configuration setting 'extra-substituters'` and builds from
 source. The same three lines go in `nix.conf`, and in `extra_nix_config` of
 `cachix/install-nix-action` for CI. `fallback = true` builds a missing path
-instead of failing. Follow the producer's `nixpkgs` and leave its other inputs
-alone: the consumer must compute the store paths the producer pushed.
+instead of failing. A producer input carries no `follows`: `workspace-tarballs`
+is input-addressed, so a producer evaluated against another `nixpkgs` or another
+`pnpm-release-management` has another store path than the one it pushed, and the
+consumer builds it. The consumer follows one producer instead
+(`nixpkgs.follows = "producer/nixpkgs"`); a second producer keeps its own
+inputs.
 
 `lib.mkProducerTarballs` takes the producers whole, so no package is named by
 hand:
@@ -475,12 +479,14 @@ producer, with the scope and the version dropped from the name, and an
 `index.json` of `{ name, file }`. Because no file name carries a version, moving
 a producer changes no path in the consumer's manifests. Two producers that ship
 one name are an evaluation error until `precedence = [ "first" "second" ]`
-orders them; the first wins. `dir` (default `.deps`) is where the tarballs sit
-under the consumer's root. Add `.deps/` to `.gitignore`.
+orders them; the first wins. The tarballs sit in `.deps/` under the consumer's
+root; add it to `.gitignore`.
 
 A producer's packages name each other by exact version, so each one is
 overridden to its tarball or pnpm would look it up on npm. `overrides` is that
-block, written once and rewritten only when a producer adds or drops a package:
+block, written once and rewritten only when a producer adds or drops a package.
+Each key is `<name>@*`, which leaves a workspace member of the same name linked:
+a bare name would replace it with the producer's tarball.
 
 ```sh
 nix eval --raw .#producer-tarballs.overrides
@@ -488,12 +494,13 @@ nix eval --raw .#producer-tarballs.overrides
 
 ```yaml
 overrides:
-  "@systemfsoftware/effect-cell-types": file:.deps/effect-cell-types.tgz
+  "@systemfsoftware/effect-cell-types@*": file:.deps/effect-cell-types.tgz
 ```
 
 Entering the dev shell runs `shellHook`, which copies the tarballs into `.deps/`
-as real files and removes the ones it left before: the sandbox reads no store
-path outside its closure, so a symlink into the store would not install.
+of the git root it is entered from, as real files, and removes the ones it left
+before: the sandbox reads no store path outside its closure, so a symlink into
+the store would not install. Enter the shell from the consumer's checkout.
 
 Moving a version is one step: `nix flake update producer`. The next dev shell
 copies the new bytes, and `pnpm update '@systemfsoftware/*'` rewrites each
@@ -503,6 +510,11 @@ over an existing `node_modules` is not cold, and keeps the files it has.
 
 `nix build --dry-run .#producer-tarballs` shows what a cold install would build.
 A producer path under "will be built" is one the producer has not pushed.
+
+Old versions of some `@systemfsoftware` packages still exist on npm, so an
+entry missing from `overrides` installs one of them and the install stays green.
+After `pnpm update`, check that no `@systemfsoftware/*` entry of
+`pnpm-lock.yaml` has a `resolution` without `tarball: file:.deps/`.
 
 The consumer's sandbox installs from one store holding both its npm packages and
 those tarballs. A store with only the npm packages fails the install: pnpm tries

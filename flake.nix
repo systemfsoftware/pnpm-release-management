@@ -274,15 +274,12 @@
                 precedence = [ "other" "real" ];
               };
               clash = builtins.tryEval (self.lib.mkProducerTarballs { inherit pkgs; producers = { inherit real other; }; }).drvPath;
-              outsideRoot = builtins.tryEval (self.lib.mkProducerTarballs { inherit pkgs; producers = { inherit real; }; dir = "../x"; }).drvPath;
             in
             assert clash.success == false
               || throw "mkProducerTarballs: two producers shipping `app` were accepted without precedence";
-            assert outsideRoot.success == false
-              || throw "mkProducerTarballs: a dir outside the consumer's root was accepted";
-            assert only.overrides == "  \"@fixture/app\": file:.deps/app.tgz\n"
-              || throw "mkProducerTarballs: overrides is not one version-free file: entry per package";
-            assert merged.overrides == "  \"@fixture/app\": file:.deps/app.tgz\n  \"@other/lib\": file:.deps/lib.tgz\n"
+            assert only.overrides == "  \"@fixture/app@*\": file:.deps/app.tgz\n"
+              || throw "mkProducerTarballs: overrides is not one version-free `name@*` file: entry per package";
+            assert merged.overrides == "  \"@fixture/app@*\": file:.deps/app.tgz\n  \"@other/lib@*\": file:.deps/lib.tgz\n"
               || throw "mkProducerTarballs: a package two producers ship appears once";
             pkgs.runCommand "producer-tarballs" { nativeBuildInputs = [ pkgs.jq ]; } ''
               [ "$(ls ${only})" = "$(printf 'app.tgz\nindex.json')" ]
