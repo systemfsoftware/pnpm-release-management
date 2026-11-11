@@ -81,6 +81,25 @@ jobs:
         run: |
           "$RELEASE_TOOLS/changeset-management" check "$BASE_SHA"
 
+      - name: List released packages that change without a release
+        id: digests
+        env:
+          BASE_SHA: ${{ inputs.base-sha || github.event.pull_request.base.sha }}
+        run: |
+          "$RELEASE_TOOLS/github-release-management" digests "$BASE_SHA" --output "$GITHUB_OUTPUT"
+
+      - name: Compare their flake-built tarballs with their release tags
+        if: steps.digests.outputs.packages != ''
+        env:
+          BASE_SHA: ${{ inputs.base-sha || github.event.pull_request.base.sha }}
+          PACKAGES: ${{ steps.digests.outputs.packages }}
+        run: |
+          if ! tarballs=$(nix build --no-link --print-out-paths .#workspace-tarballs); then
+            echo "::error::tag digests: cannot build .#workspace-tarballs to compare ${PACKAGES} with their release tags - the caller's flake must expose workspace-tarballs, as release.yml requires"
+            exit 1
+          fi
+          "$RELEASE_TOOLS/github-release-management" digests "$BASE_SHA" --tarballs "$tarballs"
+
       - name: Record the job's wall time
         if: always()
         env:

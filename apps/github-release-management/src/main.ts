@@ -11,8 +11,9 @@ import {
   planCell,
   pullRequestCell,
   tagCell,
+  unreleasedTarballsCell,
 } from '@systemfsoftware/github-release-engine'
-import { ProcessLive } from '@systemfsoftware/process-adapter'
+import { ChangeEvidenceLive, ProcessLive } from '@systemfsoftware/process-adapter'
 import { ReleaseConfigStore, RepoRoot } from '@systemfsoftware/release-language'
 import { TarballLive } from '@systemfsoftware/tarball-adapter'
 import {
@@ -25,7 +26,7 @@ import {
 } from '@systemfsoftware/workspace-adapter'
 import { Effect, Layer, Option } from 'effect'
 import * as S from 'effect/Schema'
-import { Command, Flag } from 'effect/unstable/cli'
+import { Argument, Command, Flag } from 'effect/unstable/cli'
 import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 import {
   adoptRequestOf,
@@ -34,6 +35,7 @@ import {
   pullRequestRequestOf,
   releaseRequestOf,
   tagRequestOf,
+  unreleasedTarballsRequestOf,
   workspaceOf,
 } from './boundary.js'
 import {
@@ -47,6 +49,8 @@ import {
   renderReleaseRefusal,
   renderTag,
   renderTagRefusal,
+  renderUnreleasedTarballs,
+  renderUnreleasedTarballsRefusal,
 } from './render.js'
 
 const VERSION = '0.0.0'
@@ -132,6 +136,33 @@ const plan = Command.make('plan', {
     yield* renderPlan(report, Option.getOrUndefined(flags.output))
   }).pipe(Effect.catch(renderPlanRefusal)))
 
+const EvidenceLive = Layer.provide(
+  ChangeEvidenceLive,
+  Layer.merge(GitLive, RegistryLive.pipe(Layer.provide(FetchHttpClient.layer))),
+).pipe(Layer.provide(NodeServices.layer))
+
+const digests = Command.make('digests', {
+  base: Argument.string('base-sha-or-ref'),
+  output: Flag.string('output').pipe(Flag.optional),
+  remote: Flag.string('remote').pipe(Flag.optional),
+  tarballs: Flag.string('tarballs').pipe(Flag.optional),
+  config: Flag.string('config').pipe(Flag.optional),
+}, (flags) =>
+  Effect.gen(function*() {
+    const workspace = yield* workspaceOf(flags.config)
+    const request = yield* unreleasedTarballsRequestOf(workspace, {
+      base: flags.base,
+      remote: Option.getOrUndefined(flags.remote),
+      tarballs: Option.getOrUndefined(flags.tarballs),
+    })
+    const decision = yield* Cell.run(unreleasedTarballsCell, request).pipe(
+      Effect.provide(TarballLive),
+      Effect.provide(ChangesetsPortLive({ root: workspace.root, base: workspace.config.base })),
+      Effect.provide(EvidenceLive),
+    )
+    yield* renderUnreleasedTarballs(decision, Option.getOrUndefined(flags.output))
+  }).pipe(Effect.catch(renderUnreleasedTarballsRefusal)))
+
 const tag = Command.make('tag', {
   dryRun: Flag.boolean('dry-run').pipe(Flag.withDefault(false)),
   json: Flag.boolean('json').pipe(Flag.withDefault(false)),
@@ -203,7 +234,7 @@ const pr = Command.make('pr', {
 
 const release = Command.make('release').pipe(
   Command.withDescription('Plan release phases, open release PRs, tag and publish GitHub releases'),
-  Command.withSubcommands([adopt, plan, pr, tag, releaseCommand]),
+  Command.withSubcommands([adopt, plan, digests, pr, tag, releaseCommand]),
 )
 
 NodeRuntime.runMain(

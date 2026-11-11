@@ -161,7 +161,7 @@ const runPhases = async (session: Session): Promise<void> => {
   })
 
   await session.phase(
-    'changeset check job runs its own revision of the tools with no install and no dev shell',
+    'changeset check job runs its own revision of the tools with no install, no dev shell and no tarball build',
     async (world) => {
       const { steps } = await world.job('require-intent', {
         workflow: 'changeset-check.yml',
@@ -172,10 +172,12 @@ const runPhases = async (session: Session): Promise<void> => {
         'start',
         "Build the release tools at this workflow's own revision",
         'Require an intent for every publishable-package change',
+        'digests',
         "Record the job's wall time",
       ])
-      const checked = steps.at(-2)
+      const checked = steps.find((step) => step.step === 'Require an intent for every publishable-package change')
       expect(`${checked?.stdout}${checked?.stderr}`).toContain('@e2e/alpha')
+      expect(steps.find((step) => step.step === 'digests')?.outputs['packages']).toBe('')
     },
   )
 
@@ -313,6 +315,46 @@ const runPhases = async (session: Session): Promise<void> => {
     expect(output).toContain('this_cycle=0')
     expect(output).toContain('phase=none')
   })
+
+  await session.phase(
+    'changeset check job refuses a released package that changes under a none intent',
+    async (world) => {
+      const released = await headSha(world)
+      await world.must('git checkout -q -b wrong-none', { cwd: FIXTURE })
+      await world.write(`${FIXTURE}/packages/alpha/index.js`, 'export const alpha = 4\n')
+      const created = await world.tool(
+        'changeset-management',
+        'new',
+        '@e2e/alpha --bump none --summary "alpha only tidies its export" --slug alpha-tidy',
+      )
+      expect(created.code).toBe(0)
+      await world.must('git add -A && git commit -q -m "chore: alpha tidies its export"', { cwd: FIXTURE })
+      await packTarballs(world, WORKSPACE_TARBALLS)
+
+      const steps = await world.job('require-intent', {
+        workflow: 'changeset-check.yml',
+        inputs: { 'base-sha': released },
+      })
+      await world.must(`rm -rf ${WORKSPACE_TARBALLS}`)
+      const unbuildable = await world.job('require-intent', {
+        workflow: 'changeset-check.yml',
+        inputs: { 'base-sha': released },
+      })
+      await packTarballs(world, WORKSPACE_TARBALLS)
+      await world.must('git checkout -q main && git branch -q -D wrong-none', { cwd: FIXTURE })
+
+      const refused = steps.filter((step) => step.code !== 0)
+      expect(refused.length).toBe(1)
+      expect(`${refused[0]?.stdout}${refused[0]?.stderr}`).toContain(
+        'tag digests refused: @e2e/alpha@v1.1.0 changed without a release',
+      )
+      const failed = unbuildable.filter((step) => step.code !== 0)
+      expect(failed.length).toBe(1)
+      expect(`${failed[0]?.stdout}${failed[0]?.stderr}`).toContain(
+        "tag digests: cannot build .#workspace-tarballs to compare @e2e/alpha with their release tags - the caller's flake must expose workspace-tarballs",
+      )
+    },
+  )
 
   await session.phase(
     'version job runs its own revision of the tools over a caller lock pinned to an older one, opens the release PR and dispatches CI on its branch',
