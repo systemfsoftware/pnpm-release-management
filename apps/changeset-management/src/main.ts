@@ -1,5 +1,4 @@
 import { NodeRuntime, NodeServices } from '@effect/platform-node'
-import { RegistryLive } from '@systemfsoftware/adoption-adapter'
 import { gateChangesCell, newIntentCell } from '@systemfsoftware/changeset-engine'
 import { program, ReporterLive } from '@systemfsoftware/cli-adapter'
 import { Cell } from '@systemfsoftware/effect-cell-types'
@@ -16,7 +15,7 @@ const VERSION = '0.0.0'
 
 const AppLive = Layer.mergeAll(
   ReleaseConfigStoreLive,
-  Layer.provide(ChangeEvidenceLive, Layer.merge(GitLive, RegistryLive.pipe(Layer.provide(FetchHttpClient.layer)))),
+  Layer.provide(ChangeEvidenceLive, Layer.merge(GitLive, FetchHttpClient.layer)),
 ).pipe(Layer.provide(NodeServices.layer))
 
 const newIntent = Command.make('new', {

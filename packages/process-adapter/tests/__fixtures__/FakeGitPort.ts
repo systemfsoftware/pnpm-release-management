@@ -15,7 +15,6 @@ const onMain = (changed: ReadonlyArray<RelativePath>) => ({
   deleteRemoteBranch: () => unimplemented('deleteRemoteBranch'),
   pushTags: () => unimplemented('pushTags'),
   writeTag: () => unimplemented('writeTag'),
-  tagAnnotation: () => unimplemented('tagAnnotation'),
   tagCommit: () => unimplemented('tagCommit'),
   tagTree: () => unimplemented('tagTree'),
   repoSlug: () => unimplemented('repoSlug'),

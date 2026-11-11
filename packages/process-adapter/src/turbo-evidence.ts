@@ -4,7 +4,6 @@ import {
   type EvidenceRefusal,
   type Member,
   type PackageName,
-  type RegistryPort,
   type RelativePath,
   type RepoRoot,
   type TaskName,
@@ -18,6 +17,7 @@ import * as HashSet from 'effect/HashSet'
 import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
+import type * as HttpClient from 'effect/unstable/http/HttpClient'
 import type { ChildProcessSpawner } from 'effect/unstable/process/ChildProcessSpawner'
 import { verdictTouched } from './change-verdict.js'
 import { gitLines, MANIFEST_GLOB, MANIFEST_SUFFIX, memberOf, membersAt, readText } from './evidence-io.js'
@@ -218,7 +218,7 @@ export const collectTurboEvidence = (
   task: TaskName,
   pin: TurboPin,
   changedFiles: ReadonlyArray<RelativePath>,
-): Effect.Effect<ChangeEvidence, EvidenceRefusal, Requirements | RegistryPort> =>
+): Effect.Effect<ChangeEvidence, EvidenceRefusal, Requirements | HttpClient.HttpClient> =>
   Effect.scoped(Effect.gen(function*() {
     const turbo = yield* fetchTurbo(pin)
     const fs = yield* FileSystem.FileSystem
