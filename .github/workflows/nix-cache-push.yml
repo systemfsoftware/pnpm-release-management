@@ -16,6 +16,10 @@ env:
     dprint
     workspace-tarballs
     sandbox-proofs
+    pnpm-store
+    mitmCache
+    comment-checker
+    comment-checker-bwrap
 
 jobs:
   push:
