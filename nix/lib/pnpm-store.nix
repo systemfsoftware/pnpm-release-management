@@ -8,7 +8,7 @@
   lockFile ? src + "/pnpm-lock.yaml",
   workspaceFile ? if pkgs.lib.isDerivation src then null else src + "/pnpm-workspace.yaml",
   # Directories the lockfile's `file:` tarballs live in, by path relative to
-  # src, e.g. { ".sfs-deps" = <derivation holding *.tgz>; }. They have no URL
+  # src, e.g. { ".deps" = <derivation holding *.tgz>; }. They have no URL
   # to fetch, so the store takes them from here.
   files ? { },
 }:
