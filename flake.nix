@@ -47,6 +47,11 @@
           inherit (iplFor pkgs.stdenv.hostPlatform.system) iplConfigHook;
         }).store;
 
+      # The tarballs of producer flakes, whole, for a consumer's `files` and its
+      # host install. No package is named by hand: see README, "Take a
+      # producer's packages".
+      lib.mkProducerTarballs = args: import ./nix/lib/producer-tarballs.nix args;
+
       packages = forEachSystem (pkgs:
         let
           ipl = iplFor pkgs.stdenv.hostPlatform.system;
@@ -231,6 +236,89 @@
                 | jq -e '.devDependencies == { "@sandbox-proof/tiny-lib": "file:../../.deps/tiny-lib-1.0.0.tgz" }'
               touch $out
             '';
+
+          # A consumer takes producer flakes whole. Each package lands under a
+          # file name with no version, `index.json` lists them, and `overrides`
+          # is the block a consumer's pnpm-workspace.yaml carries. Two producers
+          # shipping one package are refused unless `precedence` orders them.
+          producer-tarballs =
+            let
+              fake = members: {
+                packages.${system}.workspace-tarballs = pkgs.lib.extendDerivation true { inherit members; }
+                  (pkgs.runCommand "fake-tarballs" { } ''
+                    mkdir "$out"
+                    ${pkgs.lib.concatMapStrings (m: "echo ${m.name} > \"$out\"/${m.tarball}\n") members}
+                  '');
+              };
+              real = {
+                packages.${system}.workspace-tarballs = (self.lib.mkPnpmWorkspacePackages {
+                  inherit pkgs;
+                  src = ./nix/lib/fixtures/file-deps;
+                  pname = "file-deps";
+                  files.".deps" = self.packages.${system}.sandbox-proofs-tiny-lib;
+                }).workspace-tarballs;
+              };
+              other = fake [
+                { name = "@other/app"; attr = "app"; tarball = "app-2.0.0.tgz"; }
+                { name = "@other/lib"; attr = "lib"; tarball = "lib-3.0.0.tgz"; }
+              ];
+              only = self.lib.mkProducerTarballs { inherit pkgs; producers = { inherit real; }; };
+              merged = self.lib.mkProducerTarballs {
+                inherit pkgs;
+                producers = { inherit real other; };
+                precedence = [ "real" "other" ];
+              };
+              reversed = self.lib.mkProducerTarballs {
+                inherit pkgs;
+                producers = { inherit real other; };
+                precedence = [ "other" "real" ];
+              };
+              clash = builtins.tryEval (self.lib.mkProducerTarballs { inherit pkgs; producers = { inherit real other; }; }).drvPath;
+            in
+            assert clash.success == false
+              || throw "mkProducerTarballs: two producers shipping `app` were accepted without precedence";
+            assert only.overrides == "  \"@fixture/app@*\": file:.deps/app.tgz\n"
+              || throw "mkProducerTarballs: overrides is not one version-free `name@*` file: entry per package";
+            assert merged.overrides == "  \"@fixture/app@*\": file:.deps/app.tgz\n  \"@other/lib@*\": file:.deps/lib.tgz\n"
+              || throw "mkProducerTarballs: a package two producers ship appears once";
+            pkgs.runCommand "producer-tarballs" { nativeBuildInputs = [ pkgs.jq ]; } ''
+              [ "$(ls ${only})" = "$(printf 'app.tgz\nindex.json')" ]
+              jq -e '. == [{ file: "app.tgz", name: "@fixture/app" }]' ${only}/index.json
+              cmp ${only}/app.tgz ${real.packages.${system}.workspace-tarballs}/app-1.0.0.tgz
+
+              [ "$(ls ${merged})" = "$(printf 'app.tgz\nindex.json\nlib.tgz')" ]
+              cmp ${merged}/app.tgz ${real.packages.${system}.workspace-tarballs}/app-1.0.0.tgz
+              jq -e '. == [{ file: "app.tgz", name: "@fixture/app" }, { file: "lib.tgz", name: "@other/lib" }]' ${merged}/index.json
+              [ "$(cat ${reversed}/app.tgz)" = "@other/app" ]
+
+              mkdir consumer && cd consumer
+              echo stale > old.tgz && mkdir .deps && cp old.tgz .deps/old.tgz
+              ${only.shellHook}
+              [ -f .deps/app.tgz ] && [ ! -L .deps/app.tgz ] && [ -f .deps/index.json ] && [ ! -e .deps/old.tgz ]
+              cmp .deps/app.tgz ${only}/app.tgz
+              touch $out
+            '';
+
+          # The consumer route end to end: a lockfile that names
+          # `file:.deps/tiny-lib.tgz` installs from the store built with the
+          # producer's tarballs, and its pnpm-workspace.yaml is the generated
+          # overrides block.
+          producer-consumer-store =
+            let
+              producer.packages.${system}.workspace-tarballs = pkgs.lib.extendDerivation true
+                { members = [{ name = "@sandbox-proof/tiny-lib"; attr = "tiny-lib"; tarball = "tiny-lib-1.0.0.tgz"; }]; }
+                self.packages.${system}.sandbox-proofs-tiny-lib;
+              tarballs = self.lib.mkProducerTarballs { inherit pkgs; producers = { inherit producer; }; };
+            in
+            assert builtins.readFile ./nix/lib/fixtures/producer-consumer/pnpm-workspace.yaml == "overrides:\n${tarballs.overrides}"
+              || throw "producer-consumer fixture: pnpm-workspace.yaml is not the generated overrides block";
+            self.lib.mkPnpmConsumerStore {
+              inherit pkgs;
+              src = ./nix/lib/fixtures/producer-consumer;
+              pname = "producer-consumer";
+              pnpm = pkgs.pnpm_12;
+              files.".deps" = tarballs;
+            };
         });
 
       devShells = forEachSystem (pkgs: {

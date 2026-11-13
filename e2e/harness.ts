@@ -26,7 +26,6 @@ export const REGISTRY_LOG = '/tmp/verdaccio/verdaccio.log'
 export const REGISTRY_STORAGE = '/tmp/verdaccio/storage'
 export const CI_WORKFLOW = 'ci.yml'
 export const GH_DISPATCHES = '/tmp/gh-dispatches.log'
-export const WORKSPACE_TARBALLS = '/tmp/workspace-tarballs'
 const ARTIFACTS_DIR = '.release'
 const WORKFLOW_REPOSITORY = 'systemfsoftware/pnpm-release-management'
 const WORKFLOW_SHA = 'feedfacefeedfacefeedfacefeedfacefeedface'
@@ -69,7 +68,6 @@ case "$1" in
     fi
     case "$3" in
       "github:${WORKFLOW_REPOSITORY}/${WORKFLOW_SHA}#release-tools") echo ${WORKFLOW_RELEASE_TOOLS} ;;
-      .#workspace-tarballs) echo ${WORKSPACE_TARBALLS} ;;
       *)
         echo "nix stub: no flake output for $3" >&2
         exit 1

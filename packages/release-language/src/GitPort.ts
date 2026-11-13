@@ -37,10 +37,6 @@ export interface GitPort {
     tag: ReleaseTag,
     message: string,
   ) => Effect.Effect<ReleaseTag, TagRefusal, never>
-  readonly tagAnnotation: (
-    remote: RemoteName,
-    tag: ReleaseTag,
-  ) => Effect.Effect<Option.Option<string>, TagRefusal, never>
   readonly tagCommit: (
     remote: RemoteName,
     tag: ReleaseTag,

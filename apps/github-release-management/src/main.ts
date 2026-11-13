@@ -1,20 +1,11 @@
 import { NodeRuntime, NodeServices } from '@effect/platform-node'
-import { LedgerLive, RegistryLive } from '@systemfsoftware/adoption-adapter'
-import { ChangesetsPortLive } from '@systemfsoftware/changesets-adapter'
 import { program, ReporterLive } from '@systemfsoftware/cli-adapter'
 import { Cell } from '@systemfsoftware/effect-cell-types'
 import { GitLive } from '@systemfsoftware/git-adapter'
 import { ForgeConfig, ForgeLive } from '@systemfsoftware/github-adapter'
-import {
-  adoptCell,
-  githubReleaseCell,
-  planCell,
-  pullRequestCell,
-  tagCell,
-} from '@systemfsoftware/github-release-engine'
+import { githubReleaseCell, planCell, pullRequestCell, tagCell } from '@systemfsoftware/github-release-engine'
 import { ProcessLive } from '@systemfsoftware/process-adapter'
 import { ReleaseConfigStore, RepoRoot } from '@systemfsoftware/release-language'
-import { TarballLive } from '@systemfsoftware/tarball-adapter'
 import {
   ChangelogStoreLive,
   ChangesetStoreLive,
@@ -26,9 +17,7 @@ import {
 import { Effect, Layer, Option } from 'effect'
 import * as S from 'effect/Schema'
 import { Command, Flag } from 'effect/unstable/cli'
-import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 import {
-  adoptRequestOf,
   CHANGESET_FALLBACK,
   planRequestOf,
   pullRequestRequestOf,
@@ -37,8 +26,6 @@ import {
   workspaceOf,
 } from './boundary.js'
 import {
-  renderAdoption,
-  renderAdoptRefusal,
   renderPlan,
   renderPlanRefusal,
   renderPullRequest,
@@ -84,7 +71,6 @@ const MainLive = Layer.unwrap(
         ChangelogStoreLive(root),
         ChangesetStoreLive({ root, changesetDir }),
         CycleStoreLive,
-        LedgerLive(root),
         ReleaseConfigStoreLive,
         SurfaceStoreLive(root),
         WorkspaceStoreLive(root),
@@ -92,30 +78,10 @@ const MainLive = Layer.unwrap(
   ),
 )
 
-const adopt = Command.make('adopt', {
-  registry: Flag.string('registry'),
-  output: Flag.string('output'),
-  remote: Flag.string('remote').pipe(Flag.optional),
-  config: Flag.string('config').pipe(Flag.optional),
-}, (flags) =>
-  Effect.gen(function*() {
-    const request = yield* adoptRequestOf({
-      registry: flags.registry,
-      output: flags.output,
-      remote: Option.getOrUndefined(flags.remote),
-    })
-    const report = yield* Cell.run(adoptCell, request).pipe(
-      Effect.provide(TarballLive),
-      Effect.provide(RegistryLive.pipe(Layer.provide(FetchHttpClient.layer))),
-    )
-    yield* renderAdoption(report)
-  }).pipe(Effect.catch(renderAdoptRefusal)))
-
 const plan = Command.make('plan', {
   deferred: Flag.string('deferred').pipe(Flag.optional),
   output: Flag.string('output').pipe(Flag.optional),
   remote: Flag.string('remote').pipe(Flag.optional),
-  tarballs: Flag.string('tarballs'),
   config: Flag.string('config').pipe(Flag.optional),
 }, (flags) =>
   Effect.gen(function*() {
@@ -123,12 +89,8 @@ const plan = Command.make('plan', {
     const request = yield* planRequestOf(workspace, {
       deferred: Option.getOrUndefined(flags.deferred),
       remote: Option.getOrUndefined(flags.remote),
-      tarballs: flags.tarballs,
     })
-    const report = yield* Cell.run(planCell, request).pipe(
-      Effect.provide(TarballLive),
-      Effect.provide(ChangesetsPortLive({ root: workspace.root, base: workspace.config.base })),
-    )
+    const report = yield* Cell.run(planCell, request)
     yield* renderPlan(report, Option.getOrUndefined(flags.output))
   }).pipe(Effect.catch(renderPlanRefusal)))
 
@@ -140,7 +102,6 @@ const tag = Command.make('tag', {
   exclude: Flag.string('exclude').pipe(Flag.optional),
   output: Flag.string('output').pipe(Flag.optional),
   remote: Flag.string('remote').pipe(Flag.optional),
-  tarballs: Flag.string('tarballs'),
   config: Flag.string('config').pipe(Flag.optional),
 }, (flags) =>
   Effect.gen(function*() {
@@ -152,11 +113,10 @@ const tag = Command.make('tag', {
       exclude: Option.getOrUndefined(flags.exclude),
       output,
       remote: Option.getOrUndefined(flags.remote),
-      tarballs: flags.tarballs,
       dryRun: flags.dryRun,
       json: flags.json,
     })
-    const decision = yield* Cell.run(tagCell, request).pipe(Effect.provide(TarballLive))
+    const decision = yield* Cell.run(tagCell, request)
     yield* renderTag(decision, { output, json: flags.json, dryRun: flags.dryRun })
   }).pipe(Effect.catch(renderTagRefusal)))
 
@@ -203,7 +163,7 @@ const pr = Command.make('pr', {
 
 const release = Command.make('release').pipe(
   Command.withDescription('Plan release phases, open release PRs, tag and publish GitHub releases'),
-  Command.withSubcommands([adopt, plan, pr, tag, releaseCommand]),
+  Command.withSubcommands([plan, pr, tag, releaseCommand]),
 )
 
 NodeRuntime.runMain(

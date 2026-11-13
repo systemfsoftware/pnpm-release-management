@@ -52,14 +52,6 @@ each package and its bump, body holding the one line a consumer reads.
 
 export const MEMBERS = ['@e2e/alpha', '@e2e/beta'] as const
 
-export const TARBALLS = '/tmp/prm-tarballs'
-
-export const packTarballs = async (world: World, dir: string = TARBALLS): Promise<string> => {
-  await world.must(`rm -rf ${dir} && mkdir -p ${dir}`)
-  await world.must(`pnpm -r pack --pack-destination ${dir}`, { cwd: FIXTURE })
-  return dir
-}
-
 export const setupFixture = async (world: World): Promise<void> => {
   await world.must(`rm -rf ${FIXTURE} ${ORIGIN} && mkdir -p ${FIXTURE}/packages/alpha ${FIXTURE}/packages/beta`)
 
@@ -109,8 +101,7 @@ export const setupFixture = async (world: World): Promise<void> => {
   await world.must('pnpm install --silent', { cwd: FIXTURE })
   await world.must('git add -A && git commit -q -m "chore: lockfile"', { cwd: FIXTURE })
 
-  const tarballs = await packTarballs(world)
-  const seeded = await world.tool('github-release-management', 'tag', `--tarballs ${tarballs}`)
+  const seeded = await world.tool('github-release-management', 'tag')
   if (seeded.code !== 0) {
     throw new Error(`seeding 1.0.0 tags failed\n${seeded.stdout}${seeded.stderr}`)
   }
