@@ -5,6 +5,8 @@ allowBuilds:
   protobufjs: false
   sharp: false
   ssh2: false
+# Three days (minutes); the same in every systemfsoftware repo, so producer and consumer gates agree.
+minimumReleaseAge: 4320
 minimumReleaseAgeExclude:
   - effect
   - "@effect/*"
