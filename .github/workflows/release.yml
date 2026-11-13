@@ -54,7 +54,6 @@ jobs:
           extra_nix_config: |
             extra-substituters = https://nix.systemfsoftware.com
             extra-trusted-public-keys = nix-cache-1:wXA8I4DayNW9q6enUyQA/P/nT38pGSTLt374t3gsn7M=
-            fallback = true
 
       - &release-tools
         name: Build the release tools at this workflow's own revision
@@ -103,7 +102,6 @@ jobs:
           extra_nix_config: |
             extra-substituters = https://nix.systemfsoftware.com
             extra-trusted-public-keys = nix-cache-1:wXA8I4DayNW9q6enUyQA/P/nT38pGSTLt374t3gsn7M=
-            fallback = true
 
       - *release-tools
 
@@ -153,7 +151,6 @@ jobs:
           extra_nix_config: |
             extra-substituters = https://nix.systemfsoftware.com
             extra-trusted-public-keys = nix-cache-1:wXA8I4DayNW9q6enUyQA/P/nT38pGSTLt374t3gsn7M=
-            fallback = true
 
       - *release-tools
 
