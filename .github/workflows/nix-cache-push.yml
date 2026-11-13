@@ -15,6 +15,7 @@ env:
     sandbox
     dprint
     sandbox-proofs
+    pnpm-store
 
 jobs:
   push:

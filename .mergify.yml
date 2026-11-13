@@ -6,28 +6,13 @@ queue_rules:
     queue_conditions:
       - 'commits[*].commit_message ~= (?ms)\A(?=.*^git-subtree-dir: \S+$)(?=.*^git-subtree-split: [0-9a-f]{40}$)'
       - -linear-history
-      - check-success = check
-      - or:
-          - check-success = check / a publishable-package change needs an intent
-          - check-skipped = check / a publishable-package change needs an intent
-      - check-success = containerised release pipeline
-      - check-success = sandbox proofs
-      - check-success = tarballs rebuild bit-for-bit
+      - check-success = checks / check
     merge_conditions:
-      - check-success = check
-      - check-success = containerised release pipeline
-      - check-success = sandbox proofs
-      - check-success = tarballs rebuild bit-for-bit
+      - check-success = checks / check
   - name: default
     # Checked on the PR itself before it enters the queue.
     queue_conditions:
-      - check-success = check
-      - or:
-          - check-success = check / a publishable-package change needs an intent
-          - check-skipped = check / a publishable-package change needs an intent
-      - check-success = containerised release pipeline
-      - check-success = sandbox proofs
-      - check-success = tarballs rebuild bit-for-bit
+      - check-success = checks / check
       - '-commits[*].commit_message ~= (?m)^git-subtree-dir: \S+$'
       - not:
           and:
@@ -40,15 +25,12 @@ queue_rules:
       - -modified-files ~= ^(repos/effect|repos/alchemy|repos/constitution)/
     # Checked on Mergify's queue draft PR (mergify/merge-queue/*), i.e. CI on the PR rebased with main and any batch.
     merge_conditions:
-      - check-success = check
-      - check-success = containerised release pipeline
-      - check-success = sandbox proofs
-      - check-success = tarballs rebuild bit-for-bit
+      - check-success = checks / check
   - name: release
     # The release PR (changeset-release/* head, opened by the release bot) reports only `check`: the other pull_request
     # workflows wait on the workflow-approval gate for that actor, and the changeset intent check skips release heads.
     queue_conditions:
       - head ~= ^changeset-release/
-      - check-success = check
+      - check-success = checks / check
     merge_conditions:
-      - check-success = check
+      - check-success = checks / check
