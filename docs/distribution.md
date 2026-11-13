@@ -81,7 +81,6 @@ a release tag is a stable version:
   nixConfig = {
     extra-substituters = "https://nix.systemfsoftware.com";
     extra-trusted-public-keys = "nix-cache-1:wXA8I4DayNW9q6enUyQA/P/nT38pGSTLt374t3gsn7M=";
-    fallback = true;
   };
 
   inputs = {
@@ -95,9 +94,8 @@ a release tag is a stable version:
 Only the consuming flake's `nixConfig` applies, and Nix honours it only with
 `--accept-flake-config` or for a trusted user; otherwise it prints `ignoring
 untrusted flake configuration setting 'extra-substituters'` and builds from
-source. The same three lines go in `nix.conf`, and in `extra_nix_config` of
-`cachix/install-nix-action` for CI. `fallback = true` builds a missing path
-instead of failing. A producer input carries no `follows`: `workspace-tarballs`
+source. The same two lines go in `nix.conf`, and in `extra_nix_config` of
+`cachix/install-nix-action` for CI. A producer input carries no `follows`: `workspace-tarballs`
 is input-addressed, so a producer evaluated against another `nixpkgs` or another
 `pnpm-release-management` has another store path than the one it pushed, and the
 consumer builds it. The consumer follows one producer instead
