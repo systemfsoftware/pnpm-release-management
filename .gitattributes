@@ -1,4 +1,4 @@
 # The vendored upstream subtrees under repos/ are 192 MB of 26,758 files that no flake, workflow or action reads. Every
 # `github:systemfsoftware/pnpm-release-management` flake input downloads and unpacks this archive on a cold runner
-# (SYS-1411), so the subtrees stay out of it.
+#, so the subtrees stay out of it.
 /repos/ export-ignore
