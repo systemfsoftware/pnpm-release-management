@@ -22,6 +22,7 @@
     "@changesets/apply-release-plan": "8.1.1",
     "@changesets/assemble-release-plan": "7.0.0",
     "@changesets/config": "4.0.1",
+    "@changesets/pre": "3.0.0",
     "@changesets/read": "1.0.1",
     "@manypkg/get-packages": "3.1.0",
     "@systemfsoftware/release-language": "workspace:*",
