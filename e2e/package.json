@@ -7,10 +7,10 @@
     "@systemfsoftware/tsconfig": "^1.3.3",
     "@types/node": "^24",
     "effect": "^4.0.0-rc.112",
-    "testcontainers": "^12.1.0",
+    "testcontainers": "^12.2.1",
     "typescript": "^7",
     "vitest": "^4",
-    "yaml": "^2.9.0"
+    "yaml": "^2.9.1"
   },
   "exports": {
     "./package.json": "./package.json"
