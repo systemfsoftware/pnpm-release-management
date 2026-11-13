@@ -1,6 +1,7 @@
 import { applyReleasePlan } from '@changesets/apply-release-plan'
 import { assembleReleasePlan } from '@changesets/assemble-release-plan'
 import { validateConfig } from '@changesets/config'
+import { readPreState } from '@changesets/pre'
 import { readChangesets } from '@changesets/read'
 import { getPackages } from '@manypkg/get-packages'
 import {
@@ -95,7 +96,11 @@ const assemble = (fs: FileSystem, path: Path, root: RepoRoot, base: GitRef) =>
         }
       }
     }
-    const plan = assembleReleasePlan([...outcome.success], packages, config, undefined)
+    const preState = yield* Effect.tryPromise({
+      try: () => readPreState(root),
+      catch: (cause) => cause,
+    }).pipe(Effect.orDie)
+    const plan = assembleReleasePlan([...outcome.success], packages, config, preState)
     return { packages, config, plan }
   })
 

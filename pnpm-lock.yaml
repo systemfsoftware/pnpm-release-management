@@ -352,6 +352,9 @@ importers:
       '@changesets/config':
         specifier: 4.0.1
         version: 4.0.1
+      '@changesets/pre':
+        specifier: 3.0.0
+        version: 3.0.0
       '@changesets/read':
         specifier: 1.0.1
         version: 1.0.1
@@ -769,6 +772,10 @@ packages:
 
   '@changesets/parse@1.0.0':
     resolution: {integrity: sha512-P0iaMb9p9CRYZiTgAllEIF9AUMQHIy1G72tKlcIqJp61icZSsKQNiOPdxAMZG8m/DvZwt/oz5xEbTpike//dWg==}
+    engines: {node: ^22.11 || ^24 || >=26}
+
+  '@changesets/pre@3.0.0':
+    resolution: {integrity: sha512-Zm/6YliV/a2oeWTqHJf6KxLrQwgcK1i/BRDl2m0EKZvbnxV5fG9QRhwJJGshjsZTUTS6dkfURQ2K6aAvgNw/3Q==}
     engines: {node: ^22.11 || ^24 || >=26}
 
   '@changesets/read@1.0.1':
@@ -3170,6 +3177,12 @@ snapshots:
     dependencies:
       '@changesets/types': 7.0.0
       yaml: 2.9.0
+
+  '@changesets/pre@3.0.0':
+    dependencies:
+      '@changesets/errors': 1.0.0
+      '@changesets/types': 7.0.0
+      '@manypkg/get-packages': 3.1.0
 
   '@changesets/read@1.0.1':
     dependencies:
