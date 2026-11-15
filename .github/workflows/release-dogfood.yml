@@ -13,6 +13,9 @@ permissions:
   contents: write
   pull-requests: write
   actions: write
+  # The reusable's publish job asks for it, and GitHub checks that before the run starts, though this caller
+  # never publishes to npm.
+  id-token: write
 
 jobs:
   release:

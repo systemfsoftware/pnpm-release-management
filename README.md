@@ -48,6 +48,7 @@ permissions:
   contents: write
   pull-requests: write
   actions: write
+  id-token: write
 
 jobs:
   release:
@@ -55,6 +56,10 @@ jobs:
     with:
       ci-workflow: ci.yml
 ```
+
+Every caller grants `id-token: write`, even one that never publishes to npm. GitHub checks each job's permissions
+against the caller's grant before the run starts, whatever the job's `if:`, so without it every run fails at startup
+with "The nested job 'publish' is requesting 'id-token: write', but is only allowed 'id-token: none'".
 
 `.github/workflows/changeset-check.yml`:
 
@@ -78,7 +83,7 @@ jobs:
 
 With `npm-publish: true`, a release also publishes the caller's `.#workspace-tarballs` to npm through
 [trusted publishing](https://docs.npmjs.com/trusted-publishers), with no npm token. Versions npm already
-holds are skipped. The caller grants `id-token: write` as well:
+holds are skipped:
 
 ```yaml
 permissions:
