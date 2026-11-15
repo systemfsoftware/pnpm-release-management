@@ -200,18 +200,39 @@ jobs:
             extra-substituters = https://nix.systemfsoftware.com
             extra-trusted-public-keys = nix-cache-1:wXA8I4DayNW9q6enUyQA/P/nT38pGSTLt374t3gsn7M=
 
+      - name: Put Node.js on the PATH
+        run: echo "$(nix build --no-link --print-out-paths nixpkgs#nodejs_24)/bin" >> "$GITHUB_PATH"
+
+      # Uploads first, then one wait: each upload returns once npm accepts it, and npm's publish-time scan runs for
+      # every upload at once while the next ones go up.
       - name: Publish every version npm does not hold yet
         run: |
           out=$(nix build --no-link --print-out-paths .#workspace-tarballs)
-          jq -r '.[] | "\(.name) \(.file)"' "$out/index.json" | while read -r name file; do
+          published=()
+          while read -r name file; do
             version=$(tar -xzOf "$out/$file" package/package.json | jq -r .version)
             status=$(curl -s -o /dev/null -w '%{http_code}' "https://registry.npmjs.org/${name/\//%2f}/$version")
             case "$status" in
               200) echo "$name@$version is on npm" ;;
-              404) nix shell nixpkgs#nodejs_24 --command npx --yes pnpm@12.21.0 publish "$out/$file" \
-                     --access public --no-git-checks --publish-wait-timeout 900000 ;;
+              404)
+                npx --yes pnpm@12.21.0 publish "$out/$file" --access public --no-git-checks
+                published+=("$name@$version")
+                ;;
               *) echo "::error::npm answered $status for $name@$version"; exit 1 ;;
             esac
+          done < <(jq -r '.[] | "\(.name) \(.file)"' "$out/index.json")
+          echo "PUBLISHED=${published[*]}" >> "$GITHUB_ENV"
+
+      - name: Wait until every published version installs
+        timeout-minutes: 30
+        run: |
+          for spec in $PUBLISHED; do
+            name=${spec%@*} version=${spec##*@}
+            until tarball=$(curl -sf "https://registry.npmjs.org/${name/\//%2f}/$version" | jq -er .dist.tarball) &&
+              curl -sfI -o /dev/null "$tarball"; do
+              sleep 10
+            done
+            echo "$spec installs"
           done
 
       - *wall-time
