@@ -95,10 +95,19 @@ jobs:
       npm-publish: true
 ```
 
-Each package names the caller's repository and `release.yml` as its trusted publisher on npmjs.com
-(`npm trust github <package> --repo <owner>/<repo> --file release.yml --yes`). npm accepts that only for a
-package that already exists on the registry, and only from GitHub-hosted runners, so the publish job runs on
-`ubuntu-latest` whatever `runs-on` says.
+Each package names the caller's repository and its release workflow as its trusted publisher on npmjs.com.
+npm accepts that only for a package that already exists, so a new name needs one publish from a person's npm
+session first. `npm-trust` does both for every publishable package of the repositories it is given: it reserves
+each name npm lacks (`0.0.0-bootstrap.0` under the `bootstrap` dist-tag) and trusts the workflow that calls this
+one. Run it after `npx npm@^11.15.0 login`, and again when a repository adds a package:
+
+```sh
+nix run github:systemfsoftware/pnpm-release-management#npm-trust -- <owner>/<repo> [<owner>/<repo>...]
+```
+
+npm takes trusted publishing only from GitHub-hosted runners, so the publish job runs on `ubuntu-latest`
+whatever `runs-on` says. It publishes on every push to main that is not a version phase, so a version npm
+lacks is published even when the release that tagged it ran before publishing was turned on.
 
 Then add a `release.jsonc`:
 

@@ -22,7 +22,7 @@ on:
         type: string
         default: '"ubuntu-latest"'
       npm-publish:
-        description: publish the caller's .#workspace-tarballs to npm through trusted publishing after a release
+        description: publish every version of the caller's .#workspace-tarballs that npm lacks, through trusted publishing
         required: false
         type: boolean
         default: false
@@ -183,8 +183,8 @@ jobs:
 
   publish:
     name: publish · npm trusted publishing (GitHub-hosted only)
-    needs: [plan, release]
-    if: needs.plan.outputs.phase == 'release' && inputs.npm-publish
+    needs: plan
+    if: inputs.npm-publish && needs.plan.outputs.phase != 'version' && needs.plan.outputs.phase != ''
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -208,7 +208,8 @@ jobs:
             status=$(curl -s -o /dev/null -w '%{http_code}' "https://registry.npmjs.org/${name/\//%2f}/$version")
             case "$status" in
               200) echo "$name@$version is on npm" ;;
-              404) nix shell nixpkgs#nodejs_24 --command npx --yes npm@^11.5.1 publish "$out/$file" --access public ;;
+              404) nix shell nixpkgs#nodejs_24 --command npx --yes pnpm@12.21.0 publish "$out/$file" \
+                     --access public --no-git-checks --publish-wait-timeout 900000 ;;
               *) echo "::error::npm answered $status for $name@$version"; exit 1 ;;
             esac
           done
