@@ -63,7 +63,9 @@ for repo in "$@"; do
         ;;
     esac
 
-    if npm_cli trust list "$name" 2>/dev/null | grep -q "$repo"; then
+    if npm_cli trust list "$name" --json 2>/dev/null |
+      jq -e --arg repo "$repo" --arg file "$file" \
+        '[.. | objects | select(.repository? == $repo and .file? == $file)] | length > 0' >/dev/null; then
       echo "$name: trusts $repo already"
     else
       echo "$name: trusting $repo $file"
