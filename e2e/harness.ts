@@ -209,6 +209,7 @@ const RUNNER_ENV: Readonly<Record<string, string>> = {
 
 const WORKFLOW_EXPRESSIONS: Readonly<Record<string, string>> = {
   'github.token': GITHUB_TOKEN,
+  'github.event.repository.default_branch': 'main',
   'inputs.ci-workflow': CI_WORKFLOW,
   'inputs.artifacts-dir': ARTIFACTS_DIR,
   'job.workflow_repository': WORKFLOW_REPOSITORY,

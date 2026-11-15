@@ -313,12 +313,20 @@ const runPhases = async (session: Session): Promise<void> => {
         '@e2e/beta --bump patch --summary "beta stops dropping the last frame" --slug beta-fix',
       )
       expect(created.code).toBe(0)
+      // The intent reaches main the way a merged pull request brings it: the version job reads main, not the tree.
+      await world.must(
+        'git add -A && git commit -q -m "fix: beta stops dropping the last frame" && git push -q origin HEAD:main',
+        {
+          cwd: FIXTURE,
+        },
+      )
 
       const { steps } = await world.job('version')
       expect(steps.filter((step) => step.code !== 0)).toEqual([])
       expect(steps.map((step) => step.step)).toEqual([
         'start',
         "Build the release tools at this workflow's own revision",
+        "Move to the default branch's current head",
         'Bump every package and version surface, consuming the intents',
         'pr',
         "Run the caller's CI on the release PR",
@@ -336,6 +344,9 @@ const runPhases = async (session: Session): Promise<void> => {
   )
 
   await session.phase('version job closes the release PR and dispatches nothing', async (world) => {
+    // The release commit reaches main, as merging the release PR does, while the forge still lists the PR as open: the
+    // version job, on main's head with nothing pending, closes it.
+    await world.must('git push -q origin HEAD:main', { cwd: FIXTURE })
     const { steps } = await world.job('version')
     expect(steps.filter((step) => step.code !== 0)).toEqual([])
     const closed = steps.find((step) => step.step === 'pr')
