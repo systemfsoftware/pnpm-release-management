@@ -13,6 +13,17 @@ version is not yet tagged, otherwise `version` when intents are pending, and
 gates its own jobs on it through `needs.<caller-job>.outputs.phase`, for
 example a job that should run only on a push that releases.
 
+The `version` job runs on every run whose `plan` succeeded, whatever the
+phase, and reconciles the release PR from the default branch as it is when
+`bump` starts: it checks out `refs/heads/<default branch>`, builds the tools,
+then fetches and resets onto the branch's current head before `bump` and `pr`.
+With intents pending there, `pr` opens or updates the release PR; with none, it
+closes a release PR still open, or stays vacant. Its own concurrency group
+(`release-pr-<repository>`) keeps two runs from reconciling at once. `plan`,
+`release` and `publish` stay on the commit that started the run.
+`release-pr/LAWS.bend` states what this guarantees and `release-pr/PROOF.bend`
+proves it.
+
 Every job in both workflows stops after 60 minutes, so a stuck job frees its
 runner instead of holding it for GitHub's 360, and writes its wall time to the
 step summary.

@@ -12,13 +12,18 @@
       url = "github:systemfsoftware/comment-checker";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # Bend 2, for the release PR's laws and proofs (release-pr/). Apache-2.0.
+    bend = {
+      url = "github:bendlang/bend";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     importPnpmLock = {
       url = "github:Scrumplex/importPnpmLock.nix/ca18d47b0e98a4b51404f69ce5ab51efb6ebc151";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = { self, nixpkgs, comment-checker, importPnpmLock }:
+  outputs = { self, nixpkgs, comment-checker, importPnpmLock, bend }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forEachSystem = fn: nixpkgs.lib.genAttrs systems (system: fn nixpkgs.legacyPackages.${system});
@@ -335,7 +340,9 @@
             pkgs.nodejs_24
             pkgs.pnpm_11
             pkgs.deno
+            bend.packages.${pkgs.stdenv.hostPlatform.system}.default
           ];
+          BENDTT = "${pkgs.callPackage ./nix/bendtt.nix { bend = bend.packages.${pkgs.stdenv.hostPlatform.system}.default; }}/bin/bendtt";
           SANDBOX_PNPM_STORE = self.packages.${pkgs.stdenv.hostPlatform.system}.pnpm-store;
         };
       });
