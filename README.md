@@ -74,6 +74,32 @@ jobs:
     uses: systemfsoftware/pnpm-release-management/.github/workflows/changeset-check.yml@main
 ```
 
+### Publish to npm
+
+With `npm-publish: true`, a release also publishes the caller's `.#workspace-tarballs` to npm through
+[trusted publishing](https://docs.npmjs.com/trusted-publishers), with no npm token. Versions npm already
+holds are skipped. The caller grants `id-token: write` as well:
+
+```yaml
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+  id-token: write
+
+jobs:
+  release:
+    uses: systemfsoftware/pnpm-release-management/.github/workflows/release.yml@main
+    with:
+      ci-workflow: ci.yml
+      npm-publish: true
+```
+
+Each package names the caller's repository and `release.yml` as its trusted publisher on npmjs.com
+(`npm trust github <package> --repo <owner>/<repo> --file release.yml --yes`). npm accepts that only for a
+package that already exists on the registry, and only from GitHub-hosted runners, so the publish job runs on
+`ubuntu-latest` whatever `runs-on` says.
+
 Then add a `release.jsonc`:
 
 ```jsonc
