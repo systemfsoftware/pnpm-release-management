@@ -89,6 +89,7 @@
           };
         in workspace // {
           inherit dprint comment-checker-bwrap;
+          bendtt = pkgs.callPackage ./nix/bendtt.nix { bend = bend.packages.${pkgs.stdenv.hostPlatform.system}.default; };
           comment-checker = cc;
           default = dprint;
           inherit sandbox;
@@ -342,8 +343,22 @@
             pkgs.deno
             bend.packages.${pkgs.stdenv.hostPlatform.system}.default
           ];
-          BENDTT = "${pkgs.callPackage ./nix/bendtt.nix { bend = bend.packages.${pkgs.stdenv.hostPlatform.system}.default; }}/bin/bendtt";
+          BENDTT = "${self.packages.${pkgs.stdenv.hostPlatform.system}.bendtt}/bin/bendtt";
           SANDBOX_PNPM_STORE = self.packages.${pkgs.stdenv.hostPlatform.system}.pnpm-store;
+        };
+
+        # The shell CI's checks run in: only the tools they spawn. The release apps, the sandbox's pnpm store and the
+        # Bend kernel are built from this repository's source or compiled, so a change would rebuild them on every
+        # run, and no check runs them.
+        ci = pkgs.mkShell {
+          packages = [
+            pkgs.git
+            self.packages.${pkgs.stdenv.hostPlatform.system}.dprint
+            self.packages.${pkgs.stdenv.hostPlatform.system}.comment-checker-bwrap
+            pkgs.nodejs_24
+            pkgs.pnpm_11
+            pkgs.deno
+          ];
         };
       });
     };
