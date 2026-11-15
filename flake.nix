@@ -101,6 +101,11 @@
             paths = [ changeset-management version-management github-release-management ];
           };
           git-hooks = cliApp "git-hooks";
+          npm-trust = pkgs.writeShellApplication {
+            name = "npm-trust";
+            runtimeInputs = [ pkgs.nodejs_24 pkgs.jq pkgs.curl pkgs.git ];
+            text = builtins.readFile ./nix/npm-trust.sh;
+          };
         });
 
       checks = forEachSystem (pkgs:
