@@ -1,5 +1,25 @@
 {
   "nodes": {
+    "bend": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1794682988,
+        "narHash": "sha256-9x/0tizq1exCQxTec4xMDOj1biv5b2R6kWIi73P87zM=",
+        "owner": "bendlang",
+        "repo": "bend",
+        "rev": "f0cf0a7c573145501981c44d9c33e326185f008e",
+        "type": "github"
+      },
+      "original": {
+        "owner": "bendlang",
+        "repo": "bend",
+        "type": "github"
+      }
+    },
     "comment-checker": {
       "inputs": {
         "nixpkgs": [
@@ -145,6 +165,7 @@
     },
     "root": {
       "inputs": {
+        "bend": "bend",
         "comment-checker": "comment-checker",
         "importPnpmLock": "importPnpmLock_2",
         "nixpkgs": "nixpkgs_2"

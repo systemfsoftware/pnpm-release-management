@@ -15,8 +15,9 @@ permissions:
 
 jobs:
   checks:
-    uses: systemfsoftware/systemfsoftware/.github/workflows/reusable-ci.yml@f271b208fd10c56d27380de6bc43f54b9c7ee2a5
+    uses: systemfsoftware/systemfsoftware/.github/workflows/reusable-ci.yml@main
     with:
+      shell: .#ci
       commitlint: true
       changeset: true
       fast: pnpm format:check && export TURBO_SCM_BASE="$BASE" TURBO_SCM_HEAD="$HEAD" && pnpm exec turbo run lint typecheck typecheck:node build --affected

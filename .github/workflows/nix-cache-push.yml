@@ -16,6 +16,7 @@ env:
     dprint
     sandbox-proofs
     pnpm-store
+    bendtt
 
 jobs:
   push:
