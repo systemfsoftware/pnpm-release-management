@@ -46,7 +46,8 @@ for repo in "$@"; do
   names=$(cd "$checkout" && git ls-files '*package.json' ':!:**/node_modules/**' ':!:repos/**' \
     | grep -v -E '(^|/)(__fixtures__|fixtures)/' \
     | while read -r manifest; do
-        jq -r 'select(.private != true and (.name // "" | startswith("@"))) | .name' "$manifest" 2>/dev/null
+        jq -r --arg scope "@${repo%%/*}/" \
+          'select(.private != true and (.name // "" | startswith($scope))) | .name' "$manifest" 2>/dev/null
       done | sort -u)
 
   for name in $names; do
