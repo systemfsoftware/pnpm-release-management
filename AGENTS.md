@@ -44,7 +44,7 @@ When using Bend:
 - run `bend PROOF.bend --verdict` before committing
 - parallelize the code whenever possible
 
-`release-pr/` models the `version` job of `release.yml` and `github-release-management pr`'s decision
+`release-pr/` models version reconciliation in the `plan` job of `release.yml` and `github-release-management pr`'s decision
 (`main.bend`), states the laws the release PR obeys (`LAWS.bend`, with the assumptions the proofs rely on) and proves
 them (`PROOF.bend`). Change `main.bend` with the YAML or the decision it models. `LAWS.bend` and `SPEC.bend` state what the maintainers want: an agent does not edit them unless asked to change a law.
 

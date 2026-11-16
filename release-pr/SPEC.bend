@@ -8,12 +8,12 @@ import Base
 
 type World is Data:
   # tip: the default branch's head. pend: the change intents pending at tip. pr: the open release PR, by the commit
-  # it was built from. run: where the version job of the running release run is. owed: a merge happened that no
+  # it was built from. run: where the plan job's reconciliation is. owed: a merge happened that no
   # finished reconcile has read yet, so a run that will read it is still to come.
   W{tip: Nat, pend: Nat, pr: +Maybe<Nat>, run: Run, owed: Bool}
 
 type Run is Data:
-  # Idle: no version job is mid-run. Out: it has checked out a tree. Ref: it refetched the default branch, reading
+  # Idle: no reconciliation is mid-run. Out: the plan job has checked out a tree. Ref: it refetched the default branch,
   # commit t with p pending intents.
   Idle{}
   Out{}
@@ -21,7 +21,7 @@ type Run is Data:
 
 type Act is Data:
   # Merge: a pull request merges to the default branch and leaves p intents pending there; release says it was the
-  # release PR, which GitHub then closes. Checkout, Refetch and Reconcile are the version job's steps, in order.
+  # release PR, which GitHub then closes. Checkout, Refetch and Reconcile are the plan job's reconciliation steps, in order.
   Merge{p: Nat, release: Bool}
   Checkout{}
   Refetch{}

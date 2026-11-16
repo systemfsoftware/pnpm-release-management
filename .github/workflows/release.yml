@@ -38,8 +38,13 @@ jobs:
     name: plan · derive phase
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 60
+    concurrency:
+      group: release-pr-${{ github.repository }}
+      cancel-in-progress: false
     permissions:
-      contents: read
+      contents: write
+      pull-requests: write
+      actions: write
     outputs:
       phase: ${{ steps.plan.outputs.phase }}
       pending_intents: ${{ steps.plan.outputs.pending_intents }}
@@ -76,49 +81,6 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: nix develop --command "$RELEASE_TOOLS/github-release-management" plan --output "$GITHUB_OUTPUT"
 
-      - &wall-time
-        name: Record the job's wall time
-        if: always()
-        env:
-          START: ${{ steps.start.outputs.at }}
-        run: |
-          echo "wall time: $(( $(date +%s) - START ))s" >> "$GITHUB_STEP_SUMMARY"
-
-  # The release PR is reconciled on every run, from the default branch as it is when bump starts, never from the
-  # commit that started the run: a release PR can merge while a run is queued or building its tools, and a run that
-  # versioned its own, older commit reopened a release PR for versions already released. With nothing pending, pr
-  # closes any release PR still open. release-pr/LAWS.bend states what this guarantees, and PROOF.bend proves it.
-  version:
-    name: version · reconcile release PR
-    needs: plan
-    if: needs.plan.result == 'success'
-    runs-on: ${{ fromJSON(inputs.runs-on) }}
-    timeout-minutes: 60
-    # One reconcile at a time per repository, whatever concurrency the caller sets.
-    concurrency:
-      group: release-pr-${{ github.repository }}
-      cancel-in-progress: false
-    permissions:
-      contents: write
-      pull-requests: write
-      actions: write
-    steps:
-      - *start
-
-      - uses: actions/checkout@v7
-        with:
-          ref: refs/heads/${{ github.event.repository.default_branch }}
-          fetch-depth: 0
-          persist-credentials: true
-      - uses: cachix/install-nix-action@v31
-        if: runner.environment == 'github-hosted'
-        with:
-          extra_nix_config: |
-            extra-substituters = https://nix.systemfsoftware.com
-            extra-trusted-public-keys = nix-cache-1:wXA8I4DayNW9q6enUyQA/P/nT38pGSTLt374t3gsn7M=
-
-      - *release-tools
-
       - name: Move to the default branch's current head
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -149,12 +111,18 @@ jobs:
             *) echo "::error::pr reported no outcome; cannot tell whether a release PR needs CI"; exit 1 ;;
           esac
 
-      - *wall-time
+      - &wall-time
+        name: Record the job's wall time
+        if: always()
+        env:
+          START: ${{ steps.start.outputs.at }}
+        run: |
+          echo "wall time: $(( $(date +%s) - START ))s" >> "$GITHUB_STEP_SUMMARY"
 
   release:
     name: release · tag · GitHub releases
     needs: plan
-    if: needs.plan.outputs.phase == 'release'
+    if: always() && needs.plan.outputs.phase == 'release'
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 60
     permissions:
@@ -201,7 +169,7 @@ jobs:
   publish:
     name: publish · npm trusted publishing (GitHub-hosted only)
     needs: plan
-    if: inputs.npm-publish && needs.plan.outputs.phase != 'version' && needs.plan.outputs.phase != ''
+    if: always() && inputs.npm-publish && needs.plan.outputs.phase != 'version' && needs.plan.outputs.phase != ''
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:

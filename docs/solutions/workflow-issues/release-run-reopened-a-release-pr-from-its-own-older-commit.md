@@ -40,10 +40,10 @@ open, it closes the PR and deletes the branch (`pullRequestCaseOf`, `Closing`). 
 
 ## Fix
 
-The `version` job now runs on every run whose `plan` succeeded. It checks out `refs/heads/<default branch>`, builds
-the tools, then fetches the branch and resets onto its current head immediately before `bump` and `pr`. It has its own
-concurrency group, `release-pr-<repository>`, so two runs never reconcile at once, including in callers that set no
-workflow-level group. `plan`, `release` and `publish` stay on the commit that started the run.
+The `plan` job now reconciles the release PR on every run after deriving the phase. It fetches the default branch and
+resets onto its current head immediately before `bump` and `pr`. Its concurrency group, `release-pr-<repository>`,
+prevents two runs from reconciling at once, including in callers that set no workflow-level group. `release` and
+`publish` stay on the commit that started the run.
 
 What remains is the time between the refetch and `pr`'s write. A release PR that merges inside that window can still
 be reopened, and the next run, which that merge starts, closes it.
@@ -64,5 +64,5 @@ The proof holds under the assumptions stated in `LAWS.bend`. The main one is tha
   never from the commit that started the run. A queued run's event commit can be minutes older than the branch.
 - Every outcome of a reconciling command is reachable from the runs that invoke it. Here closing was reachable only
   from a run that had found work to do.
-- Before changing the `version` job or `pr`'s decision, change `release-pr/main.bend` to match and run
+- Before changing version reconciliation or `pr`'s decision, change `release-pr/main.bend` to match and run
   `bend PROOF.bend --verdict`. A model that no longer matches the YAML proves nothing.

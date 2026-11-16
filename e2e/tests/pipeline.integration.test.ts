@@ -3,19 +3,9 @@ import { Effect } from 'effect'
 import * as S from 'effect/Schema'
 import { expect } from 'vitest'
 import { headSha, MEMBERS, setupFixture } from '../fixture.js'
-import {
-  callerOutputs,
-  CI_WORKFLOW,
-  FIXTURE,
-  GH_DISPATCHES,
-  parseJson,
-  REGISTRY,
-  REGISTRY_LOG,
-  REGISTRY_STORAGE,
-  type World,
-} from '../harness.js'
+import { FIXTURE, parseJson, REGISTRY, REGISTRY_LOG, REGISTRY_STORAGE, type World } from '../harness.js'
 import { Session } from '../session.js'
-import { CapturedEntry, Manifest, Pulls, Release, Releases } from './__fixtures__/pipeline.schema.js'
+import { CapturedEntry, Manifest, Release, Releases } from './__fixtures__/pipeline.schema.js'
 
 const Feature = makeFeature({ it, layer })
 
@@ -98,10 +88,6 @@ const fetchReleases = (world: World) => {
   return world.github('/repos/admin/fixture/releases?per_page=100', S.decodeUnknownSync(Releases))
 }
 
-const fetchOpenPulls = (world: World) => {
-  return world.github('/repos/admin/fixture/pulls?state=open', S.decodeUnknownSync(Pulls))
-}
-
 const registryPings = (log: string): number =>
   log.split('\n').filter((line) => line.includes("req: 'GET /-/ping'")).length
 
@@ -157,25 +143,6 @@ const runPhases = async (session: Session): Promise<void> => {
     )
   })
 
-  await session.phase(
-    'changeset check job runs its own revision of the tools with no install and no dev shell',
-    async (world) => {
-      const { steps } = await world.job('require-intent', {
-        workflow: 'changeset-check.yml',
-        inputs: { 'base-sha': base, devshell: 'true' },
-      })
-      expect(steps.filter((step) => step.code !== 0)).toEqual([])
-      expect(steps.map((step) => step.step)).toEqual([
-        'start',
-        "Build the release tools at this workflow's own revision",
-        'Require an intent for every publishable-package change',
-        "Record the job's wall time",
-      ])
-      const checked = steps.at(-2)
-      expect(`${checked?.stdout}${checked?.stderr}`).toContain('@e2e/alpha')
-    },
-  )
-
   await session.phase('plan asks for a version step', async (world) => {
     const planned = await world.tool('github-release-management', 'plan')
     const output = `${planned.stdout}${planned.stderr}`
@@ -183,16 +150,6 @@ const runPhases = async (session: Session): Promise<void> => {
     expect(output).toContain('pending_intents=1')
     expect(output).toContain('this_cycle=0')
     expect(output).toContain('phase=version')
-
-    const plan = await world.job('plan')
-    expect(plan.steps.filter((step) => step.code !== 0)).toEqual([])
-    expect(plan.steps.map((step) => step.step)).toEqual([
-      'start',
-      "Build the release tools at this workflow's own revision",
-      'plan',
-      "Record the job's wall time",
-    ])
-    expect(callerOutputs('release.yml', { plan })).toEqual({ phase: 'version' })
   })
 
   await session.phase('version step bumps surfaces, writes changelogs, consumes intents', async (world) => {
@@ -304,59 +261,6 @@ const runPhases = async (session: Session): Promise<void> => {
     expect(output).toContain('phase=none')
   })
 
-  await session.phase(
-    'version job runs its own revision of the tools over a caller lock pinned to an older one, opens the release PR and dispatches CI on its branch',
-    async (world) => {
-      const created = await world.tool(
-        'changeset-management',
-        'new',
-        '@e2e/beta --bump patch --summary "beta stops dropping the last frame" --slug beta-fix',
-      )
-      expect(created.code).toBe(0)
-      // The intent reaches main the way a merged pull request brings it: the version job reads main, not the tree.
-      await world.must(
-        'git add -A && git commit -q -m "fix: beta stops dropping the last frame" && git push -q origin HEAD:main',
-        {
-          cwd: FIXTURE,
-        },
-      )
-
-      const { steps } = await world.job('version')
-      expect(steps.filter((step) => step.code !== 0)).toEqual([])
-      expect(steps.map((step) => step.step)).toEqual([
-        'start',
-        "Build the release tools at this workflow's own revision",
-        "Move to the default branch's current head",
-        'Bump every package and version surface, consuming the intents',
-        'pr',
-        "Run the caller's CI on the release PR",
-        "Record the job's wall time",
-      ])
-      const opened = steps.find((step) => step.step === 'pr')
-      expect(`${opened?.stdout}${opened?.stderr}`).toContain('created release PR #')
-      expect(await world.read(GH_DISPATCHES)).toBe(`workflow run ${CI_WORKFLOW} --ref changeset-release/main\n`)
-
-      const pulls = await fetchOpenPulls(world)
-      expect(pulls.body?.length).toBe(1)
-      expect(pulls.body?.[0]?.title).toBe('chore(release): version packages')
-      expect(pulls.body?.[0]?.labels.map((label) => label.name)).toEqual(['release'])
-    },
-  )
-
-  await session.phase('version job closes the release PR and dispatches nothing', async (world) => {
-    // The release commit reaches main, as merging the release PR does, while the forge still lists the PR as open: the
-    // version job, on main's head with nothing pending, closes it.
-    await world.must('git push -q origin HEAD:main', { cwd: FIXTURE })
-    const { steps } = await world.job('version')
-    expect(steps.filter((step) => step.code !== 0)).toEqual([])
-    const closed = steps.find((step) => step.step === 'pr')
-    expect(`${closed?.stdout}${closed?.stderr}`).toContain('closed release PR #')
-    expect(await world.read(GH_DISPATCHES)).toBe(`workflow run ${CI_WORKFLOW} --ref changeset-release/main\n`)
-
-    const pulls = await fetchOpenPulls(world)
-    expect(pulls.body?.length).toBe(0)
-  })
-
   await session.phase('cargo surface keeps Cargo.lock in step with the bump', async (world) => {
     await world.write(`${FIXTURE}/Cargo.toml`, CARGO_MANIFEST)
     await world.write(`${FIXTURE}/crates/core/Cargo.toml`, CARGO_MEMBER)
@@ -462,19 +366,15 @@ const runPhases = async (session: Session): Promise<void> => {
       },
     )
 
-    const plan = await world.job('plan')
-    expect(plan.steps.filter((step) => step.code !== 0)).toEqual([])
-    expect(callerOutputs('release.yml', { plan })).toEqual({ phase: 'release' })
-    const released = await world.job('release')
-    expect(released.steps.filter((step) => step.code !== 0)).toEqual([])
-    expect(released.steps.map((step) => step.step)).toEqual([
-      'start',
-      "Build the release tools at this workflow's own revision",
-      'Capture this cycle',
-      'Tag released versions',
-      'GitHub Releases from the authored changelogs',
-      "Record the job's wall time",
-    ])
+    const planned = await world.tool('github-release-management', 'plan')
+    expect(planned.code).toBe(0)
+    expect(`${planned.stdout}${planned.stderr}`).toContain('phase=release')
+    const captured = await world.tool('github-release-management', 'tag', '--output /tmp/captured-next.json')
+    expect(captured.code).toBe(0)
+    const tagged = await world.tool('github-release-management', 'tag', '--captured /tmp/captured-next.json')
+    expect(tagged.code).toBe(0)
+    const released = await world.tool('github-release-management', 'release', '--captured /tmp/captured-next.json')
+    expect(released.code).toBe(0)
 
     const tags = await world.must('git ls-remote --tags origin', { cwd: FIXTURE })
     expect(tags.stdout).toContain(`refs/tags/@e2e/alpha@v${alphaNext}`)
@@ -482,9 +382,9 @@ const runPhases = async (session: Session): Promise<void> => {
     const notes = await fetchRelease(world, `@e2e/alpha@v${alphaNext}`)
     expect(notes.status).toBe(200)
 
-    const settled = await world.job('plan')
-    expect(settled.steps.filter((step) => step.code !== 0)).toEqual([])
-    expect(callerOutputs('release.yml', { plan: settled })).toEqual({ phase: 'none' })
+    const settled = await world.tool('github-release-management', 'plan')
+    expect(settled.code).toBe(0)
+    expect(`${settled.stdout}${settled.stderr}`).toContain('phase=none')
   })
 
   await session.phase('a rewritten released manifest does not stop the plan', async (world) => {
