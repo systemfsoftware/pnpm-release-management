@@ -5,8 +5,8 @@
 # - Every merge to the default branch starts a release run, or is followed by one that does. A merge whose push
 #   starts no workflow (a `[skip ci]` message, or a push made with GITHUB_TOKEN) leaves a run owed that never comes.
 #   A queued run that a newer one replaces is covered: the newer run refetches after both merges.
-# - Release runs of one repository do not overlap: the version job's own concurrency group in release.yml.
-# - No caller sets `cancel-in-progress: true` on its release workflow, which could stop a version job mid-write.
+# - Release runs of one repository do not overlap: the plan job's concurrency group in release.yml.
+# - No caller sets `cancel-in-progress: true` on its release workflow, which could stop reconciliation mid-write.
 # - Every pending intent bumps a version, so bump leaves none pending.
 # - Every write succeeds. A failed push or API call fails the job, and the next run starts from what is on GitHub.
 # - Nobody edits changeset-release/main by hand; the next reconcile overwrites or closes such an edit.
@@ -29,7 +29,7 @@ law l2_reconcile_exact:
   {M.reconcile(t, p, pr) == S.expect(t, p) : +Maybe<Nat>}
 
 # L3: once no run is owed, the open release PR is exactly the one the tip asks for: none when nothing is pending,
-# else one built from the tip. It holds after every sequence of merges and version-job steps.
+# else one built from the tip. It holds after every sequence of merges and reconciliation steps.
 law l3_settled_exact:
   for +es: +List<S.Act>
   for q: {S.owed_of(M.run(es, M.init())) == False{} : Bool}

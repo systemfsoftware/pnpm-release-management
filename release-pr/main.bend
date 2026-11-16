@@ -1,4 +1,4 @@
-# The release PR: a model of the version job of .github/workflows/release.yml and of `github-release-management pr`.
+# The release PR: a model of version reconciliation in the plan job of .github/workflows/release.yml and of `github-release-management pr`.
 # LAWS.bend states its laws about step and run. This file is a model, not the code that runs: the job is YAML and the
 # decision is TypeScript, and each def below names the source it mirrors.
 
