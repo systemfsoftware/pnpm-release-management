@@ -1,9 +1,9 @@
 {
   "author": "SystemFSoftware",
   "description": "GitHub forge adapter for pnpm release management",
-  "dependencies": { "@systemfsoftware/release-language": "workspace:*", "effect": "^4.0.0-rc.112", "octokit": "5.0.5" },
+  "dependencies": { "@systemfsoftware/release-language": "workspace:*", "effect": "^4.1.3", "octokit": "5.0.5" },
   "devDependencies": {
-    "@effect/vitest": "4.0.0-rc.112",
+    "@effect/vitest": "4.1.3",
     "@systemfsoftware/tsconfig": "^1.3.3",
     "@types/node": "^24",
     "rimraf": "^6.1.3",
