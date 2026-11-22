@@ -2,23 +2,23 @@ import {
   type CommitSha,
   isIntentPath,
   type Member,
-  type PackageName,
   type RangeCommit,
   type RelativePath,
   type ReleaseCandidate,
   type ReleaseCheck,
 } from '@systemfsoftware/release-language'
 import * as Match from 'effect/Match'
+import type { ChangedPath } from './gate-changes.workflow.js'
 
 export interface IntentDirs {
   readonly base: RelativePath
   readonly head: RelativePath
 }
 
-export const isIntentFile = (dirs: IntentDirs, path: string): boolean =>
+const isIntentFile = (dirs: IntentDirs, path: string): boolean =>
   isIntentPath(dirs.base, path) || isIntentPath(dirs.head, path)
 
-export const releaseCandidateOf = (
+const releaseCandidateOf = (
   commit: RangeCommit,
   baseIntents: ReadonlyArray<RelativePath>,
   dirs: IntentDirs,
@@ -48,7 +48,7 @@ export const releaseCandidatesOf = (
     return [candidate]
   })
 
-export const isVerifiedRelease = (check: ReleaseCheck): boolean =>
+const isVerifiedRelease = (check: ReleaseCheck): boolean =>
   Match.value(check.outcome).pipe(
     Match.tag('ReleaseReplayed', (replayed) => replayed.divergent.length === 0),
     Match.tag('ReleaseUnreplayed', () => false),
@@ -57,12 +57,6 @@ export const isVerifiedRelease = (check: ReleaseCheck): boolean =>
 
 const verifiedShas = (checks: ReadonlyArray<ReleaseCheck>): ReadonlyArray<CommitSha> =>
   checks.filter(isVerifiedRelease).map((check) => check.candidate.commit)
-
-export interface ChangedPath {
-  readonly path: RelativePath
-  readonly owner?: PackageName | undefined
-  readonly released: boolean
-}
 
 export const changedPathsOf = (
   commits: ReadonlyArray<RangeCommit>,

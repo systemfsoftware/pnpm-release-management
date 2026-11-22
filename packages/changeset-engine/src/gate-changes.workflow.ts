@@ -58,7 +58,7 @@ export class ChangesGated extends S.TaggedClass<ChangesGated>()('ChangesGated', 
   readonly [DecisionTypeId] = DecisionTypeId
 }
 
-type GateDecisionRefusal =
+export type GateDecisionRefusal =
   | GateReleaseUnreplayable
   | GateReleaseDiverged
   | GateReleaseStale

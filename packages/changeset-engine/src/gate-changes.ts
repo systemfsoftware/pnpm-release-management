@@ -7,13 +7,6 @@ import {
   ChangesetStore,
   type ConfigRefusal,
   FsPath,
-  type GateBaseIntentMalformed,
-  type GateIntentMissing,
-  type GateReleaseDiverged,
-  type GateReleaseDropped,
-  type GateReleaseStale,
-  type GateReleaseUnreplayable,
-  type GateUnknownPackage,
   GitRef,
   type Intent,
   type IntentRefusal,
@@ -21,6 +14,7 @@ import {
   type MemberRefusal,
   parseIntentDocument,
   RelativePath,
+  type ReleaseCandidate,
   type ReleaseCheck,
   ReleaseConfigStore,
   ReleaseReplayPort,
@@ -33,7 +27,13 @@ import { Effect } from 'effect'
 import * as Match from 'effect/Match'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
-import { type ChangesGated, type ChangesVacant, gateChanges, GateCommand } from './gate-changes.workflow.js'
+import {
+  type ChangesGated,
+  type ChangesVacant,
+  gateChanges,
+  GateCommand,
+  type GateDecisionRefusal,
+} from './gate-changes.workflow.js'
 import { changedPathsOf, type IntentDirs, releaseCandidatesOf, staleSurfacesOf } from './release-commits.js'
 
 const GateRequest = Wire.wire({
@@ -58,16 +58,7 @@ type GateReadError =
   | MemberRefusal
   | IntentRefusal
 
-type GateRefused =
-  | GateReleaseUnreplayable
-  | GateReleaseDiverged
-  | GateReleaseStale
-  | GateBaseIntentMalformed
-  | GateReleaseDropped
-  | GateUnknownPackage
-  | GateIntentMissing
-
-type GateVerdict = Result.Result<ChangesVacant | ChangesGated, GateRefused>
+type GateVerdict = Result.Result<ChangesVacant | ChangesGated, GateDecisionRefusal>
 
 const CONFIG_FILE = RelativePath.make('release.jsonc')
 
@@ -92,7 +83,7 @@ const checksOf = (
   request: GateRequestInput,
   range: ChangeRange,
   dirs: IntentDirs,
-  candidates: ReturnType<typeof releaseCandidatesOf>,
+  candidates: ReadonlyArray<ReleaseCandidate>,
 ): Effect.Effect<ReadonlyArray<ReleaseCheck>, GateReadError, ChangeEvidencePort | ReleaseReplayPort> =>
   Effect.gen(function*() {
     const port = yield* ChangeEvidencePort
@@ -195,7 +186,7 @@ const remainingText = (remaining: string | undefined): string => {
 
 const refused = (text: string): GateReport => ({ ok: false, text })
 
-const refusalReport = (refusal: GateRefused): GateReport =>
+const refusalReport = (refusal: GateDecisionRefusal): GateReport =>
   Match.value(refusal).pipe(
     Match.tag('GateReleaseUnreplayable', (unreplayable) =>
       refused(

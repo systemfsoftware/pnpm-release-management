@@ -6,7 +6,7 @@ interface VersionTarget {
   readonly surface: VersionSurface
 }
 
-export interface VersionTargets {
+interface VersionTargets {
   readonly manifest: VersionTarget
   readonly surfaces: ReadonlyArray<VersionTarget>
 }

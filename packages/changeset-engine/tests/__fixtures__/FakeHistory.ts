@@ -39,7 +39,7 @@ export interface FakeHistory {
   readonly range: ReadonlyArray<string>
 }
 
-export const INTENT_DIR = '.changeset'
+const INTENT_DIR = '.changeset'
 
 export const manifestPath = (name: string): string => `packages/${name}/package.json`
 
@@ -61,7 +61,7 @@ const entriesOf = (text: string): ReadonlyArray<{ readonly name: string; readonl
 
 const RANK: Record<Bump, number> = { none: 0, patch: 1, minor: 2, major: 3 }
 
-export const bumpedManifest = (name: string, bump: Bump): string => `{"name":"${name}","bump":"${bump}"}`
+const bumpedManifest = (name: string, bump: Bump): string => `{"name":"${name}","bump":"${bump}"}`
 
 export const modelRelease = (tree: Tree, consumed: ReadonlyArray<string>): Tree => {
   const owed: Record<string, Bump> = {}
