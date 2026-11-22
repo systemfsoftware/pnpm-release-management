@@ -1,30 +1,26 @@
 import {
-  type ChangeEvidence,
   EvidenceCommandFailed,
   type EvidenceRefusal,
-  type Member,
-  type PackageName,
   type RelativePath,
   type RepoRoot,
   type TaskName,
+  type TurboComparison,
   TurboDryRunDrifted,
   TurboDryRunUnreadable,
+  type TurboRun,
   WorktreeUnavailable,
 } from '@systemfsoftware/release-language'
 import { Effect, FileSystem } from 'effect'
 import * as HashMap from 'effect/HashMap'
-import * as HashSet from 'effect/HashSet'
 import * as Option from 'effect/Option'
 import * as Result from 'effect/Result'
 import * as S from 'effect/Schema'
 import type * as HttpClient from 'effect/unstable/http/HttpClient'
 import type { ChildProcessSpawner } from 'effect/unstable/process/ChildProcessSpawner'
-import { verdictTouched } from './change-verdict.js'
-import { gitLines, MANIFEST_GLOB, MANIFEST_SUFFIX, memberOf, membersAt, readText } from './evidence-io.js'
 import { runProcess } from './ProcessRun.js'
 import { type FetchedTurbo, fetchTurbo, TURBO_ENV } from './turbo-fetch.js'
 import type { TurboPin } from './turbo-pin.js'
-import { DryRunDocument } from './TurboDryRun.schema.js'
+import { DryRunDocument, GlobalFiles, GlobalInputs } from './TurboDryRun.schema.js'
 
 const WORKTREE_PREFIX = 'changeset-base-'
 
@@ -32,8 +28,6 @@ type Requirements = FileSystem.FileSystem | ChildProcessSpawner
 
 interface DryRun {
   readonly document: DryRunDocument
-  readonly matrix: HashMap.HashMap<string, string>
-  readonly dirs: HashMap.HashMap<string, RelativePath>
 }
 
 const decodeDryRun = (
@@ -81,19 +75,7 @@ const dryRunView = (
       }),
     )
   }
-  return Result.succeed({
-    document,
-    matrix,
-    dirs: HashMap.fromIterable(
-      requested.flatMap((entry) => {
-        const directory = entry.directory
-        if (directory === undefined) {
-          return []
-        }
-        return [[entry.package, directory]]
-      }),
-    ),
-  })
+  return Result.succeed({ document })
 }
 
 const dryRunAt = (
@@ -122,103 +104,61 @@ const dryRunAt = (
     return yield* Effect.fromResult(dryRunView(document, cwd, task))
   })
 
-interface TurboMembers {
-  readonly members: ReadonlyArray<Member>
-  readonly deleted: ReadonlyArray<PackageName>
+const inputPathOf = (directory: RelativePath | undefined, file: string): string => {
+  if (directory === undefined || directory === '.' || directory === '') return file
+  const parts: Array<string> = directory.split('/')
+  for (const part of file.split('/')) {
+    if (part === '..') parts.pop()
+    else if (part !== '.' && part !== '') parts.push(part)
+  }
+  return parts.join('/')
 }
 
-const headMembersWhen = (
-  root: RepoRoot,
-  needed: boolean,
-): Effect.Effect<ReadonlyArray<Member>, EvidenceRefusal, Requirements> => {
-  if (!needed) return Effect.succeed([])
-  return Effect.flatMap(gitLines(root, MANIFEST_GLOB), (paths) => membersAt(root, paths))
+const globalViewOf = (inputs: unknown): { readonly files: Record<string, string>; readonly other: string } => {
+  const decoded = S.decodeUnknownOption(GlobalInputs)(inputs)
+  if (Option.isNone(decoded)) return { files: {}, other: JSON.stringify(inputs ?? null) }
+  const { files, ...other } = decoded.value
+  return {
+    files: Option.getOrElse(S.decodeUnknownOption(GlobalFiles)(files), () => ({})),
+    other: JSON.stringify(other),
+  }
 }
 
-const manifestAt = (present: boolean, atHead: string, atBase: string): string => {
-  if (present) return atHead
-  return atBase
+const runOf = (run: DryRun): TurboRun => {
+  const global = globalViewOf(run.document.globalCacheInputs)
+  return {
+    tasks: run.document.tasks.map((task) => ({
+      taskId: task.taskId,
+      package: task.package,
+      hash: task.hash,
+      dependencies: [...(task.dependencies ?? [])],
+      inputs: Object.fromEntries(
+        Object.entries(task.inputs ?? {}).map(([file, hash]) => [inputPathOf(task.directory, file), hash]),
+      ),
+      externalHash: task.hashOfExternalDependencies ?? '',
+    })),
+    globalFiles: global.files,
+    globalOther: global.other,
+  }
 }
 
-const turboMembers = (
-  root: RepoRoot,
-  baseDir: string,
-  runs: ReadonlyArray<DryRun>,
-): Effect.Effect<TurboMembers, EvidenceRefusal, Requirements> =>
-  Effect.gen(function*() {
-    const fs = yield* FileSystem.FileSystem
-    const fromRuns = HashMap.fromIterable(runs.flatMap((run) => [...HashMap.toEntries(run.dirs)]))
-    const turboNames = HashSet.fromIterable(
-      runs.flatMap((run) => run.document.packages),
-    )
-    const unplaced = [...turboNames].some((name) => !HashMap.has(fromRuns, name))
-    const found = yield* headMembersWhen(root, unplaced)
-    const placed = found.filter((member, index) =>
-      HashSet.has(turboNames, member.name) &&
-      !HashMap.has(fromRuns, member.name) &&
-      found.findIndex((other) => other.name === member.name) === index
-    )
-    const dirs = HashMap.union(
-      HashMap.fromIterable(placed.map((member): readonly [string, RelativePath] => [member.name, member.dir])),
-      fromRuns,
-    )
-    const members: Array<Member> = []
-    const deleted: Array<PackageName> = []
-    for (const [, dir] of HashMap.toEntries(dirs)) {
-      const atHead = `${root}/${dir}${MANIFEST_SUFFIX}`
-      const present = yield* fs.exists(atHead).pipe(Effect.orElseSucceed(() => false))
-      const member = memberOf(dir, yield* readText(manifestAt(present, atHead, `${baseDir}/${dir}${MANIFEST_SUFFIX}`)))
-      if (Option.isNone(member)) continue
-      if (present) members.push(member.value)
-      else deleted.push(member.value.name)
-    }
-    return { members, deleted: deleted.sort() }
-  })
-
-const dryRunEvidence = (
+const comparisonAt = (
   root: RepoRoot,
   baseDir: string,
   task: TaskName,
   turbo: FetchedTurbo,
-  version: string,
-  changedFiles: ReadonlyArray<RelativePath>,
-): Effect.Effect<ChangeEvidence, EvidenceRefusal, Requirements> =>
-  Effect.gen(function*() {
-    const [baseRun, headRun] = yield* Effect.all(
-      [
-        dryRunAt(baseDir, turbo, task),
-        dryRunAt(root, turbo, task),
-      ],
-      { concurrency: 2 },
-    )
-    const { members, deleted } = yield* turboMembers(root, baseDir, [baseRun, headRun])
-    const evidence: ChangeEvidence = {
-      members: [...members],
-      deleted: [...deleted],
-      touched: verdictTouched(
-        baseRun.matrix,
-        headRun.matrix,
-        members,
-        changedFiles,
-      ),
-      raw: {
-        strategy: 'turbo',
-        task,
-        base: Object.fromEntries(HashMap.toEntries(baseRun.matrix)),
-        head: Object.fromEntries(HashMap.toEntries(headRun.matrix)),
-        engineVersion: version,
-      },
-    }
-    return evidence
-  })
+): Effect.Effect<TurboComparison, EvidenceRefusal, Requirements> =>
+  Effect.map(
+    Effect.all([dryRunAt(baseDir, turbo, task), dryRunAt(root, turbo, task)], { concurrency: 2 }),
+    ([baseRun, headRun]): TurboComparison => ({ task, base: runOf(baseRun), head: runOf(headRun) }),
+  )
 
-export const collectTurboEvidence = (
+export const compareTurboRuns = (
   root: RepoRoot,
   baseSha: string,
   task: TaskName,
   pin: TurboPin,
-  changedFiles: ReadonlyArray<RelativePath>,
-): Effect.Effect<ChangeEvidence, EvidenceRefusal, Requirements | HttpClient.HttpClient> =>
+): Effect.Effect<TurboComparison, EvidenceRefusal, Requirements | HttpClient.HttpClient> =>
   Effect.scoped(Effect.gen(function*() {
     const turbo = yield* fetchTurbo(pin)
     const fs = yield* FileSystem.FileSystem
@@ -246,7 +186,7 @@ export const collectTurboEvidence = (
       )
     }
     return yield* Effect.ensuring(
-      dryRunEvidence(root, baseDir, task, turbo, pin.version, changedFiles),
+      comparisonAt(root, baseDir, task, turbo),
       runProcess({
         program: 'git',
         args: ['worktree', 'remove', '--force', baseDir],

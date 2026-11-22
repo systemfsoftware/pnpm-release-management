@@ -1,5 +1,4 @@
 import { ChangeEvidenceLive } from '@systemfsoftware/process-adapter'
-import type { GitPort } from '@systemfsoftware/release-language'
 import { Effect, Layer, type Scope } from 'effect'
 import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 import type * as HttpClient from 'effect/unstable/http/HttpClient'
@@ -9,8 +8,7 @@ import { buildTarball } from './build-tarball.js'
 
 export const registryServing: Layer.Layer<HttpClient.HttpClient> = FetchHttpClient.layer
 
-export const evidenceServing = (git: Layer.Layer<GitPort>) =>
-  ChangeEvidenceLive.pipe(Layer.provide(git), Layer.provide(registryServing))
+export const evidenceServing = ChangeEvidenceLive.pipe(Layer.provide(registryServing))
 
 export interface ServedTurbo {
   readonly key: string

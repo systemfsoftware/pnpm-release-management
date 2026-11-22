@@ -1,74 +1,33 @@
 import { NodeServices } from '@effect/platform-node'
-import {
-  type ChangeEvidence,
-  ChangeEvidencePort,
-  EvidenceCommandFailed,
-  GitPort,
-  type TagRefusal,
-} from '@systemfsoftware/release-language'
+import { ChangeEvidencePort } from '@systemfsoftware/release-language'
 import { Effect, Layer } from 'effect'
-import * as Match from 'effect/Match'
 import * as HttpClient from 'effect/unstable/http/HttpClient'
-import { pathsTouched } from './change-verdict.js'
-import { deletedAt, gitLines, MANIFEST_GLOB, membersAt, refuseUnderTurbo } from './evidence-io.js'
-import { collectTurboEvidence } from './turbo-evidence.js'
+import { deletedAt, refuseUnderTurbo } from './evidence-io.js'
+import { changesBetween, commitsOf, fileAt, filesIn, rangeOf } from './history-io.js'
+import { compareTurboRuns } from './turbo-evidence.js'
 import { turboPin } from './turbo-pin.js'
 
-const refusalDetail = (refusal: TagRefusal): string =>
-  Match.value(refusal).pipe(
-    Match.tag('TagGitFailed', (failed) => `git command failed: ${failed.command}\n${failed.stderr}`),
-    Match.orElse((other) => other.path),
-  )
-
-const branchFault = (refusal: TagRefusal): EvidenceCommandFailed =>
-  new EvidenceCommandFailed({
-    program: 'git',
-    detail: `current branch unreadable: ${refusalDetail(refusal)}`,
-  })
-
-const evidencePort = (git: GitPort, client: HttpClient.HttpClient): ChangeEvidencePort => ({
-  pathsEvidence: (root, ref) =>
+const evidencePort = (client: HttpClient.HttpClient): ChangeEvidencePort => ({
+  range: (root, base) => rangeOf(root, base).pipe(Effect.provide(NodeServices.layer)),
+  refuseUnderTurbo: (root, range) =>
+    refuseUnderTurbo(root, range.base, range.head).pipe(Effect.provide(NodeServices.layer)),
+  commits: (root, range) => commitsOf(root, range).pipe(Effect.provide(NodeServices.layer)),
+  changes: (root, from, to) => changesBetween(root, from, to).pipe(Effect.provide(NodeServices.layer)),
+  filesIn: (root, rev, dir) => filesIn(root, rev, dir).pipe(Effect.provide(NodeServices.layer)),
+  fileAt: (root, rev, path) => fileAt(root, rev, path).pipe(Effect.provide(NodeServices.layer)),
+  deletedMembers: (root, range) =>
     Effect.gen(function*() {
-      const head = yield* git.currentBranch().pipe(Effect.mapError(branchFault))
-      yield* refuseUnderTurbo(root, ref, head)
-      const changed = yield* git.changedPaths(ref, head)
-      const members = yield* membersAt(root, yield* gitLines(root, MANIFEST_GLOB))
-      const [mergeBase = ref] = yield* gitLines(root, ['merge-base', ref, head])
-      const evidence: ChangeEvidence = {
-        members: [...members],
-        deleted: [...(yield* deletedAt(root, mergeBase, changed))],
-        touched: pathsTouched(members, changed),
-        raw: { strategy: 'paths', base: ref, changedPaths: [...changed] },
-      }
-      return evidence
+      const changed = yield* changesBetween(root, range.mergeBase, range.head)
+      return yield* deletedAt(root, range.mergeBase, changed.map((change) => change.path))
     }).pipe(Effect.provide(NodeServices.layer)),
-
-  turboEvidence: (root, ref, task) =>
+  turbo: (root, range, task) =>
     Effect.gen(function*() {
-      const head = yield* git.currentBranch().pipe(Effect.mapError(branchFault))
       const pinned = yield* turboPin(root)
-      const parsed = yield* gitLines(
-        root,
-        ['rev-parse', '--verify', `${ref}^{commit}`],
-      )
-      const baseSha = parsed[0]
-      if (baseSha === undefined) {
-        return yield* Effect.fail(
-          new EvidenceCommandFailed({
-            program: 'git',
-            detail: `git rev-parse printed no sha for ${ref}`,
-          }),
-        )
-      }
-      const changed = yield* git.changedPaths(ref, head)
-      return yield* collectTurboEvidence(root, baseSha, task, pinned, changed)
+      return yield* compareTurboRuns(root, range.mergeBase, task, pinned)
     }).pipe(Effect.provideService(HttpClient.HttpClient, client), Effect.provide(NodeServices.layer)),
 })
 
-export const ChangeEvidenceLive: Layer.Layer<ChangeEvidencePort, never, GitPort | HttpClient.HttpClient> = Layer
-  .effect(
-    ChangeEvidencePort,
-    Effect.gen(function*() {
-      return evidencePort(yield* GitPort, yield* HttpClient.HttpClient)
-    }),
-  )
+export const ChangeEvidenceLive: Layer.Layer<ChangeEvidencePort, never, HttpClient.HttpClient> = Layer.effect(
+  ChangeEvidencePort,
+  Effect.map(HttpClient.HttpClient, evidencePort),
+)

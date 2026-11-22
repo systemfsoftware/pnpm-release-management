@@ -1,28 +1,22 @@
 import { NodeServices } from '@effect/platform-node'
 import { Gherkin, Given, it, layer, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
 import { ChangeEvidenceLive } from '@systemfsoftware/process-adapter'
-import {
-  ChangeEvidencePort,
-  GitRef,
-  PathsGateUnderTurbo,
-  RelativePath,
-  RepoRoot,
-} from '@systemfsoftware/release-language'
+import { ChangeEvidencePort, GitRef, PathsGateUnderTurbo, RepoRoot } from '@systemfsoftware/release-language'
 import { Cause, Effect, Exit, Layer, Option } from 'effect'
 import { FileSystem } from 'effect/FileSystem'
 import { Path } from 'effect/Path'
 import { expect } from 'vitest'
-import { fakeGitChanging } from './__fixtures__/FakeGitPort.js'
 import { git } from './__fixtures__/real-git.js'
 import { registryServing, serveTurbo } from './__fixtures__/served-turbo.js'
 
 const Feature = makeFeature({ it, layer })
 
+const CHANGED = 'packages/pub/index.js'
+
 const TURBO = '2.10.1'
-const CHANGED = RelativePath.make('packages/pub/index.js')
 
 const live = Layer.merge(
-  ChangeEvidenceLive.pipe(Layer.provide(fakeGitChanging([CHANGED])), Layer.provide(registryServing)),
+  ChangeEvidenceLive.pipe(Layer.provide(registryServing)),
   NodeServices.layer,
 )
 
@@ -85,7 +79,12 @@ const repositoryServingChanges = (base: RootConfig, head: RootConfig) =>
   })
 
 const collectPathsEvidence = (root: string) =>
-  Effect.flatMap(ChangeEvidencePort, (port) => port.pathsEvidence(RepoRoot.make(root), GitRef.make('base')))
+  Effect.gen(function*() {
+    const port = yield* ChangeEvidencePort
+    const range = yield* port.range(RepoRoot.make(root), GitRef.make('base'))
+    yield* port.refuseUnderTurbo(RepoRoot.make(root), range)
+    return range
+  })
 
 const refusalOf = <E>(exit: Exit.Exit<unknown, E>): E | undefined =>
   Exit.match(exit, {
@@ -169,9 +168,9 @@ Feature('Classifying changes by directory only where turbo cannot').body(({ scen
           () => repositoryServingChanges(row.base, row.head),
         ),
         When('its changes are classified by directory')('evidence', (s) => collectPathsEvidence(s.fixture.root)),
-        Then('the changed publishable package is named as touched')((s) =>
+        Then('directory classification is allowed for the range')((s) =>
           Effect.gen(function*() {
-            expect(s.evidence.touched).toEqual(['@t/pub'])
+            expect(s.evidence.head).not.toBe(s.evidence.mergeBase)
             expect(s.fixture.served.requests).toEqual([])
             yield* removeRepository(s.fixture.root)
           })

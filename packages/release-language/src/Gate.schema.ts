@@ -1,7 +1,7 @@
 import * as S from 'effect/Schema'
 import { Bump } from './Intent.schema.js'
 import { CommitSha } from './Tag.schema.js'
-import { Member, PackageName, RelativePath } from './Workspace.schema.js'
+import { PackageName, RelativePath } from './Workspace.schema.js'
 
 export const ChangeRange = S.Struct({
   head: CommitSha,
@@ -23,12 +23,6 @@ export const RangeCommit = S.Struct({
   residue: S.Array(RelativePath),
 })
 export type RangeCommit = S.Schema.Type<typeof RangeCommit>
-
-export const WorkspaceMembers = S.Struct({
-  members: S.Array(Member),
-  deleted: S.Array(PackageName),
-})
-export type WorkspaceMembers = S.Schema.Type<typeof WorkspaceMembers>
 
 export const TurboTask = S.Struct({
   taskId: S.NonEmptyString,

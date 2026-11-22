@@ -67,7 +67,6 @@ export {
   TurboPinUnusable,
   TurboRun,
   TurboTask,
-  WorkspaceMembers,
   WorktreeUnavailable,
 } from './Gate.schema.js'
 export {
