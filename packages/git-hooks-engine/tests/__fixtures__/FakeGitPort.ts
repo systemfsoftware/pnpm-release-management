@@ -21,9 +21,7 @@ const decodePath = (
 
 export const makeFakeGitPort = (state: FakeGitState): Layer.Layer<GitPort> =>
   Layer.succeed(GitPort, {
-    currentBranch: () => unimplemented('currentBranch'),
     headSha: () => unimplemented('headSha'),
-    changedPaths: () => unimplemented('changedPaths'),
     remoteTags: () => unimplemented('remoteTags'),
     trackedChanges: () => unimplemented('trackedChanges'),
     commitRelease: () => unimplemented('commitRelease'),

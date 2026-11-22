@@ -1,6 +1,7 @@
 import { Effect } from 'effect'
 import * as S from 'effect/Schema'
 import * as SchemaGetter from 'effect/SchemaGetter'
+import { normalChangesetDir } from './IntentDocument.js'
 import { FsPath, GitRef, PackageName, PackageVersion, RelativePath } from './Workspace.schema.js'
 
 export const TaskName = S.NonEmptyString.pipe(S.brand('TaskName'))
@@ -207,11 +208,14 @@ const ReleaseConfigFull = S.Struct({
 export const ReleaseConfig = ReleaseConfigWire.pipe(
   S.decodeTo(ReleaseConfigFull, {
     decode: SchemaGetter.transform(
-      (wire: S.Schema.Type<typeof ReleaseConfigWire>) => ({
-        ...wire,
-        changelogDir: wire.changelogDir ??
-          `${wire.changesetDir}/changelogs`,
-      }),
+      (wire: S.Schema.Type<typeof ReleaseConfigWire>) => {
+        const changesetDir = normalChangesetDir(wire.changesetDir)
+        return {
+          ...wire,
+          changesetDir,
+          changelogDir: wire.changelogDir ?? `${changesetDir}/changelogs`,
+        }
+      },
     ),
     encode: SchemaGetter.transformOrFail((full) => S.decodeEffect(ReleaseConfigWire)(full).pipe(Effect.orDie)),
   }),

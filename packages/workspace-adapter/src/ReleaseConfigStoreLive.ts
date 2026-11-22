@@ -34,12 +34,8 @@ export const ReleaseConfigStoreLive: Layer.Layer<ReleaseConfigStore, never, File
     const fs = yield* FileSystem
     const path = yield* Path
 
-    const loadConfig = (root: RepoRoot): Effect.Effect<ReleaseConfig, ConfigRefusal> =>
+    const parseConfig = (text: string, file: FsPath): Effect.Effect<ReleaseConfig, ConfigRefusal> =>
       Effect.gen(function*() {
-        const file = FsPath.make(path.join(root, CONFIG_FILE))
-        const text = yield* readTextFile(fs, file).pipe(
-          Effect.mapError(() => ConfigUnreadable.make({ path: file })),
-        )
         const parsed = yield* Effect.try({
           try: () => parseJsonc(text),
           catch: (cause) => malformed(file, describeCause(cause)),
@@ -57,6 +53,15 @@ export const ReleaseConfigStoreLive: Layer.Layer<ReleaseConfigStore, never, File
         )
       })
 
-    return { loadConfig }
+    const loadConfig = (root: RepoRoot): Effect.Effect<ReleaseConfig, ConfigRefusal> =>
+      Effect.gen(function*() {
+        const file = FsPath.make(path.join(root, CONFIG_FILE))
+        const text = yield* readTextFile(fs, file).pipe(
+          Effect.mapError(() => ConfigUnreadable.make({ path: file })),
+        )
+        return yield* parseConfig(text, file)
+      })
+
+    return { loadConfig, parseConfig }
   }),
 )

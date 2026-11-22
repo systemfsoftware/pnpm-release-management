@@ -1,13 +1,12 @@
 import { ChangesetsPortLive } from '@systemfsoftware/changesets-adapter'
 import { resolveWorkspaceRoot } from '@systemfsoftware/cli-adapter'
+import { RelativePath, type ReleaseConfig, ReleaseConfigStore, type RepoRoot } from '@systemfsoftware/release-language'
 import {
-  RelativePath,
-  type ReleaseConfig,
-  ReleaseConfigStore,
-  type RepoRoot,
-  type VersionSurface,
-} from '@systemfsoftware/release-language'
-import type { BumpInput, PinRootManifestInput, SyncInput } from '@systemfsoftware/version-engine'
+  type PinRootManifestInput,
+  ROOT_MANIFEST,
+  type SyncInput,
+  versionTargetsOf,
+} from '@systemfsoftware/version-engine'
 import {
   ChangelogStoreLive,
   ChangesetStoreLive,
@@ -21,23 +20,6 @@ import type { ManifestPathRefused, SyncActionMissing } from './refusal.schema.js
 export interface Workspace {
   readonly root: RepoRoot
   readonly release: ReleaseConfig
-}
-
-interface VersionTarget {
-  readonly file: RelativePath
-  readonly surface: VersionSurface
-}
-
-interface VersionTargets {
-  readonly manifest: VersionTarget
-  readonly surfaces: ReadonlyArray<VersionTarget>
-}
-
-const ROOT_MANIFEST: RelativePath = RelativePath.make('package.json')
-
-const ROOT_TARGET: VersionTarget = {
-  file: ROOT_MANIFEST,
-  surface: { kind: 'json', path: ROOT_MANIFEST },
 }
 
 export const syncActionOf = (
@@ -84,52 +66,12 @@ export const storesOf = (workspace: Workspace) =>
     ChangesetStoreLive({ root: workspace.root, changesetDir: workspace.release.changesetDir }),
   )
 
-const surfaceTargetsOf = (
-  surfaces: ReadonlyArray<VersionSurface>,
-): ReadonlyArray<VersionTarget> =>
-  surfaces.flatMap((surface): ReadonlyArray<VersionTarget> => {
-    if (surface.kind !== 'toml') return [{ file: surface.path, surface }]
-    const path = surface.path
-    if (path === undefined) return []
-    return [{ file: path, surface }]
-  })
-
-const targetsOf = (release: ReleaseConfig): VersionTargets => {
-  const { versioning } = release
-  if (versioning.strategy === 'changesets') {
-    return { manifest: ROOT_TARGET, surfaces: surfaceTargetsOf(versioning.surfaces) }
-  }
-  return {
-    manifest: { file: versioning.manifest, surface: { kind: 'json', path: versioning.manifest } },
-    surfaces: surfaceTargetsOf(versioning.surfaces),
-  }
-}
-
-export const bumpRequestOf = (release: ReleaseConfig): BumpInput => {
-  const { versioning } = release
-  if (versioning.strategy === 'changesets') {
-    return {
-      strategy: 'changesets',
-      changelogDir: release.changelogDir,
-      surfaces: surfaceTargetsOf(versioning.surfaces),
-    }
-  }
-  const targets = targetsOf(release)
-  return {
-    strategy: 'surfaces',
-    changelogDir: release.changelogDir,
-    rootChangelog: versioning.changelog,
-    manifest: targets.manifest,
-    surfaces: targets.surfaces,
-  }
-}
-
 export const syncRequestOf = (
   release: ReleaseConfig,
   action: string,
   version: string | undefined,
 ): SyncInput => {
-  const targets = targetsOf(release)
+  const targets = versionTargetsOf(release)
   return {
     strategy: release.versioning.strategy,
     action,

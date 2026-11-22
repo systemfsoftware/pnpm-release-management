@@ -4,13 +4,10 @@ import {
   CommitSha,
   Count,
   FsPath,
-  GateIntentMissing,
-  GateUnknownPackage,
   GitPort,
   GitRef,
   OwnerName,
   PackageManifest,
-  PackageName,
   PullRequestGitFailed,
   PullRequestHeadInvalid,
   PullRequestTreeUnreadable,
@@ -23,7 +20,6 @@ import {
   TagGitFailed,
 } from '@systemfsoftware/release-language'
 import type {
-  GateRefusal,
   PrTitle,
   PullRequestRefusal,
   RemoteName,
@@ -38,7 +34,6 @@ import * as S from 'effect/Schema'
 import * as Stream from 'effect/Stream'
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 
-const currentBranchPath = FsPath.make('git:current-branch')
 const headShaPath = FsPath.make('git:head-sha')
 const remoteTagsPath = FsPath.make('git:remote-tags')
 const RELEASE_BOT_IDENTITY: ReadonlyArray<string> = [
@@ -54,10 +49,8 @@ const gitFailed = (args: ReadonlyArray<string>) => (stderr: string): PullRequest
 const tagGitFailed = (args: ReadonlyArray<string>) => (stderr: string): TagGitFailed =>
   TagGitFailed.make({ command: `git ${args.join(' ')}`, stderr: stderr.trim() })
 const repoSlugPath = FsPath.make('git:repo-slug')
-const diffPath = RelativePath.make('git:diff')
 
 const headRef = GitRef.make('HEAD')
-const unnamedPackage = PackageName.make('unknown')
 
 const scpRemote = /^[^:]+:([^/]+)\/([^/]+?)(?:\.git)?$/
 const httpsRemote = /^https?:\/\/[^/]+\/([^/]+)\/([^/]+?)(?:\.git)?$/
@@ -184,23 +177,8 @@ const makeGitPort = (
     })
 
   return {
-    currentBranch: (): Effect.Effect<GitRef, TagRefusal> =>
-      tagValue(['rev-parse', '--abbrev-ref', 'HEAD'], currentBranchPath, GitRef, (stdout) => stdout.trim()),
     headSha: (): Effect.Effect<CommitSha, TagRefusal> =>
       tagValue(['rev-parse', 'HEAD'], headShaPath, CommitSha, (stdout) => stdout.trim()),
-    changedPaths: (
-      base: GitRef,
-      head: GitRef,
-    ): Effect.Effect<ReadonlyArray<RelativePath>, GateRefusal> =>
-      capture<ReadonlyArray<RelativePath>, GateRefusal>(
-        ['diff', '--name-only', `${base}...${head}`],
-        () => GateIntentMissing.make({ packages: [unnamedPackage] }),
-        (stdout) =>
-          Result.mapError(
-            S.decodeUnknownResult(S.Array(RelativePath))(nonEmptyLines(stdout)),
-            () => GateUnknownPackage.make({ path: diffPath, package: unnamedPackage }),
-          ),
-      ),
     remoteTags: (
       remote: RemoteName,
     ): Effect.Effect<ReadonlyArray<ReleaseTag>, TagRefusal> =>

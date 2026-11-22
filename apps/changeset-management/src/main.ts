@@ -2,20 +2,21 @@ import { NodeRuntime, NodeServices } from '@effect/platform-node'
 import { gateChangesCell, newIntentCell } from '@systemfsoftware/changeset-engine'
 import { program, ReporterLive } from '@systemfsoftware/cli-adapter'
 import { Cell } from '@systemfsoftware/effect-cell-types'
-import { GitLive } from '@systemfsoftware/git-adapter'
 import { ChangeEvidenceLive } from '@systemfsoftware/process-adapter'
 import { ReleaseConfigStoreLive } from '@systemfsoftware/workspace-adapter'
 import { Effect, Layer, Option } from 'effect'
 import { Argument, Command, Flag } from 'effect/unstable/cli'
 import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 import { baseRefOf, storesOf, taskOf, workspaceOf } from './boundary.js'
+import { ReleaseReplayLive } from './release-replay.js'
 import { renderGate, renderRefusal, renderStaged } from './render.js'
 
 const VERSION = '0.0.0'
 
 const AppLive = Layer.mergeAll(
   ReleaseConfigStoreLive,
-  Layer.provide(ChangeEvidenceLive, Layer.merge(GitLive, FetchHttpClient.layer)),
+  Layer.provide(ChangeEvidenceLive, FetchHttpClient.layer),
+  Layer.provide(ReleaseReplayLive, ReleaseConfigStoreLive),
 ).pipe(Layer.provide(NodeServices.layer))
 
 const newIntent = Command.make('new', {
@@ -55,6 +56,7 @@ const check = Command.make('check', {
       return yield* Cell.run(Cell.provide(gateChangesCell, storesOf(workspace)), {
         root: workspace.root,
         ref,
+        changesetDir: workspace.release.changesetDir,
         strategy: workspace.release.gate.strategy,
         task: taskOf(workspace.release.gate),
         skipLiveness: flags.skipLiveness,

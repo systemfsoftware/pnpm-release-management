@@ -44,8 +44,8 @@ export const renderRefusal = (refusal: AppRefusal): Effect.Effect<void, never, R
         NewIntentSummaryMissing: () => '--summary is required, and must be one line',
         NewIntentPackagesEmpty: () => 'name at least one package',
         NewIntentPackageNameMalformed: (malformed) => `not workspace packages: ${malformed.given}`,
-        GateUnknownPackage: (unknown) => `${unknown.path} names non-member package "${unknown.package}"`,
-        GateIntentMissing: (missing) => `no intent names: ${missing.packages.join(', ')}`,
+        EvidenceShallowClone: (shallow) =>
+          `${shallow.root} is a shallow clone, so the gate cannot read the commits since the base — check out with fetch-depth: 0`,
         EvidenceFileUnreadable: (unreadable) => `cannot read ${unreadable.path}`,
         EvidenceCommandFailed: (failed) => `${failed.program} failed: ${failed.detail}`,
         TurboPinUnusable: (unusable) => `turbo pin unusable: ${unusable.detail}`,

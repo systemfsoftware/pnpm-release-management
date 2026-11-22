@@ -35,20 +35,38 @@ export { CycleStore } from './CycleStore.js'
 export { DecisionTypeId } from './decision.js'
 export { ForgePort } from './ForgePort.js'
 export {
-  ChangeEvidence,
+  BaseIntent,
+  ChangeRange,
+  DroppedRelease,
   EvidenceCommandFailed,
   EvidenceFileUnreadable,
   EvidenceRefusal,
+  EvidenceShallowClone,
+  GateBaseIntentMalformed,
   GateIntentMissing,
   GateRefusal,
+  GateReleaseDiverged,
+  GateReleaseDropped,
+  GateReleaseStale,
+  GateReleaseUnreplayable,
   GateUnknownPackage,
+  PathChange,
   PathsGateUnderTurbo,
   ProcessUnobservable,
   ProcessUnstartable,
+  RangeCommit,
+  ReleaseCandidate,
+  ReleaseCheck,
+  ReleaseReplayed,
+  ReleaseUnreplayed,
+  ReplayOutcome,
+  TurboComparison,
   TurboConfigFile,
   TurboDryRunDrifted,
   TurboDryRunUnreadable,
   TurboPinUnusable,
+  TurboRun,
+  TurboTask,
   WorktreeUnavailable,
 } from './Gate.schema.js'
 export {
@@ -74,7 +92,14 @@ export {
   IntentUnknownPackage,
   ReleaseBump,
 } from './Intent.schema.js'
-export { memberChangelogPathOf, parkedChangelogOf, releaseNotesOf, withVersionSection } from './MemberChangelog.js'
+export { isIntentFileName, isIntentPath, normalChangesetDir, parseIntentDocument } from './IntentDocument.js'
+export {
+  memberChangelogPathOf,
+  parkedChangelogOf,
+  releaseCreatedPaths,
+  releaseNotesOf,
+  withVersionSection,
+} from './MemberChangelog.js'
 export {
   NewIntentInvalidBump,
   NewIntentPackageNameMalformed,
@@ -101,6 +126,7 @@ export {
   ReleaseLabel,
 } from './PullRequest.schema.js'
 export { ReleaseConfigStore } from './ReleaseConfigStore.js'
+export { ReleaseReplayPort } from './ReleaseReplayPort.js'
 export {
   CheckKind,
   FormatRefused,

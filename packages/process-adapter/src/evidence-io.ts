@@ -14,13 +14,7 @@ import * as S from 'effect/Schema'
 import type { ChildProcessSpawner } from 'effect/unstable/process/ChildProcessSpawner'
 import { type ProcessFault, runProcess } from './ProcessRun.js'
 
-export const MANIFEST_SUFFIX = '/package.json'
-
-export const MANIFEST_GLOB: ReadonlyArray<string> = [
-  'ls-files',
-  '*package.json',
-  ':(exclude)repos/**',
-]
+const MANIFEST_SUFFIX = '/package.json'
 
 export const readText = (
   path: string,
@@ -86,7 +80,7 @@ const dirOf = (manifestPath: string): Option.Option<RelativePath> => {
   )
 }
 
-export const memberOf = (
+const memberOf = (
   dir: RelativePath,
   manifestText: string,
 ): Option.Option<Member> =>
@@ -99,29 +93,6 @@ export const memberOf = (
       publishable: manifest.private !== true,
     }),
   )
-
-export const membersAt = (
-  root: RepoRoot,
-  paths: ReadonlyArray<string>,
-): Effect.Effect<
-  ReadonlyArray<Member>,
-  EvidenceFileUnreadable,
-  FileSystem.FileSystem
-> =>
-  Effect.gen(function*() {
-    const members: Array<Member> = []
-    for (const manifestPath of paths) {
-      const dir = dirOf(manifestPath)
-      if (Option.isNone(dir)) continue
-      const member = memberOf(
-        dir.value,
-        yield* readText(`${root}/${manifestPath}`),
-      )
-      if (Option.isNone(member)) continue
-      members.push(member.value)
-    }
-    return members
-  })
 
 export const deletedAt = (
   root: RepoRoot,
