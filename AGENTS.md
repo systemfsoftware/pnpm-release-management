@@ -4,17 +4,16 @@ Release tooling for pnpm monorepos: change intents in `.changeset/` become versi
 Releases and npm publishes, driven by repository state on every push. Other repositories call its reusable workflows
 (`.github/workflows/release.yml`, `changeset-check.yml`) at `@main`.
 
-`AGENTS.md` is the canonical instruction file. `CLAUDE.md` includes it, `subtrees.toml` and `CONSTITUTION.md`.
+`AGENTS.md` is the canonical instruction file. `CLAUDE.md` includes it and `subtrees.toml`.
 
-| Doc                                 | Read when                                                                                                                                       |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CODING_STANDARDS.md`               | writing or changing code                                                                                                                        |
-| `REVIEW.md`                         | reviewing a change                                                                                                                              |
-| `CONTRIBUTING.md`                   | gates, commit messages, layout, adding a subcommand, the e2e test                                                                               |
-| `docs/ci.md`                        | changing a reusable workflow                                                                                                                    |
-| `CONSTITUTION.md`                   | architecture changes, rule authoring, or design disputes                                                                                        |
-| `repos/constitution/ENFORCEMENT.md` | building or changing an instrument that grades work (lint gates, stream rules, CI checks, thresholds, rubrics, advisors); situational read only |
-| `docs/solutions/`                   | before fixing a bug: past fixes and their prevention                                                                                            |
+| Doc                                                                      | Read when                                                                            |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| `CODING_STANDARDS.md`                                                    | writing or changing code                                                             |
+| `REVIEW.md`                                                              | reviewing a change                                                                   |
+| `CONTRIBUTING.md`                                                        | gates, commit messages, layout, adding a subcommand, the e2e test                    |
+| `docs/ci.md`                                                             | changing a reusable workflow                                                         |
+| `repos/constitution/CODING_STANDARDS.md`, `repos/constitution/REVIEW.md` | you plan, write or review any change; before you propose a test, a check or a design |
+| `docs/solutions/`                                                        | before fixing a bug: past fixes and their prevention                                 |
 
 ## Commands
 
