@@ -1,11 +1,11 @@
 import { NodeRuntime, NodeServices } from '@effect/platform-node'
 import { program, ReporterLive } from '@systemfsoftware/cli-adapter'
 import { Cell } from '@systemfsoftware/effect-cell-types'
-import { bumpCell, pinRootManifestCell, syncCell } from '@systemfsoftware/version-engine'
+import { bumpCell, bumpInputOf, pinRootManifestCell, syncCell } from '@systemfsoftware/version-engine'
 import { ReleaseConfigStoreLive } from '@systemfsoftware/workspace-adapter'
 import { Effect, Layer, Option, Result } from 'effect'
 import { Argument, Command, Flag } from 'effect/unstable/cli'
-import { bumpRequestOf, pinRequestOf, storesOf, syncRequestOf, syncWorkspaceOf, workspaceOf } from './boundary.js'
+import { pinRequestOf, storesOf, syncRequestOf, syncWorkspaceOf, workspaceOf } from './boundary.js'
 import {
   renderPinDecision,
   renderRefusal,
@@ -19,7 +19,7 @@ const configFlag = Flag.string('config').pipe(Flag.optional)
 const runBump = (config: Option.Option<string>) =>
   Effect.gen(function*() {
     const workspace = yield* workspaceOf(config)
-    const request = bumpRequestOf(workspace.release)
+    const request = bumpInputOf(workspace.release)
     return yield* Cell.run(Cell.provide(bumpCell, storesOf(workspace)), request)
   })
 

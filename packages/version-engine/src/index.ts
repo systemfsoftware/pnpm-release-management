@@ -12,6 +12,7 @@ export {
   WorkspaceVersionAlreadyCurrent,
   WorkspaceVersionRepinned,
 } from './pin-root-manifest.workflow.js'
+export { bumpInputOf, ROOT_MANIFEST, type VersionTargets, versionTargetsOf } from './release-requests.js'
 export {
   SyncActionUnknown,
   SyncAligned,

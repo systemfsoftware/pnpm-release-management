@@ -1,13 +1,5 @@
 import type { GitRef, ReleaseTag, RemoteName } from '@systemfsoftware/release-language'
-import {
-  BranchDeleted,
-  CommitSha,
-  Count,
-  GitPort,
-  GitRef as GitRefSchema,
-  OwnerName,
-  RepoName,
-} from '@systemfsoftware/release-language'
+import { BranchDeleted, CommitSha, Count, GitPort, OwnerName, RepoName } from '@systemfsoftware/release-language'
 import { Effect, Layer, Option } from 'effect'
 
 export interface FakeGitState {
@@ -37,9 +29,7 @@ export const makeFakeGit = (state: FakeGitState = {}) => {
     branchesDeleted: [],
   }
   const layer = Layer.succeed(GitPort, {
-    currentBranch: () => Effect.succeed(GitRefSchema.make('main')),
     headSha: () => Effect.succeed(CommitSha.make('deadbeef')),
-    changedPaths: () => Effect.succeed([]),
     remoteTags: () => Effect.succeed([...tags]),
     trackedChanges: () => Effect.succeed(Count.make(state.trackedChanges ?? 0)),
     commitRelease: (message) => {
