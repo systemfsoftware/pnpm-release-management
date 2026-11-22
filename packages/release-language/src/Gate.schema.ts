@@ -1,13 +1,92 @@
 import * as S from 'effect/Schema'
+import { Bump } from './Intent.schema.js'
+import { CommitSha } from './Tag.schema.js'
 import { Member, PackageName, RelativePath } from './Workspace.schema.js'
 
-export const ChangeEvidence = S.Struct({
-  members: S.Array(Member),
-  touched: S.Array(PackageName),
-  deleted: S.Array(PackageName),
-  raw: S.Unknown,
+export const ChangeRange = S.Struct({
+  head: CommitSha,
+  base: CommitSha,
+  mergeBase: CommitSha,
 })
-export type ChangeEvidence = S.Schema.Type<typeof ChangeEvidence>
+export type ChangeRange = S.Schema.Type<typeof ChangeRange>
+
+export const PathChange = S.Struct({
+  path: RelativePath,
+  status: S.Literals(['added', 'modified', 'deleted']),
+})
+export type PathChange = S.Schema.Type<typeof PathChange>
+
+export const RangeCommit = S.Struct({
+  sha: CommitSha,
+  parents: S.Array(CommitSha),
+  changes: S.Array(PathChange),
+  residue: S.Array(RelativePath),
+})
+export type RangeCommit = S.Schema.Type<typeof RangeCommit>
+
+export const WorkspaceMembers = S.Struct({
+  members: S.Array(Member),
+  deleted: S.Array(PackageName),
+})
+export type WorkspaceMembers = S.Schema.Type<typeof WorkspaceMembers>
+
+export const TurboTask = S.Struct({
+  taskId: S.NonEmptyString,
+  package: S.NonEmptyString,
+  hash: S.NonEmptyString,
+  dependencies: S.Array(S.NonEmptyString),
+  inputs: S.Record(S.String, S.String),
+  externalHash: S.String,
+})
+export type TurboTask = S.Schema.Type<typeof TurboTask>
+
+export const TurboRun = S.Struct({
+  tasks: S.Array(TurboTask),
+  globalFiles: S.Record(S.String, S.String),
+  globalOther: S.String,
+})
+export type TurboRun = S.Schema.Type<typeof TurboRun>
+
+export const TurboComparison = S.Struct({
+  task: S.NonEmptyString,
+  base: TurboRun,
+  head: TurboRun,
+})
+export type TurboComparison = S.Schema.Type<typeof TurboComparison>
+
+export const ReleaseCandidate = S.Struct({
+  commit: CommitSha,
+  parent: CommitSha,
+  consumed: S.Array(RelativePath),
+  intentOnly: S.Boolean,
+})
+export type ReleaseCandidate = S.Schema.Type<typeof ReleaseCandidate>
+
+export const ReleaseReplayed = S.TaggedStruct('ReleaseReplayed', {
+  divergent: S.Array(RelativePath),
+})
+export type ReleaseReplayed = S.Schema.Type<typeof ReleaseReplayed>
+
+export const ReleaseUnreplayed = S.TaggedStruct('ReleaseUnreplayed', {
+  reason: S.String,
+})
+export type ReleaseUnreplayed = S.Schema.Type<typeof ReleaseUnreplayed>
+
+export const ReplayOutcome = S.Union([ReleaseReplayed, ReleaseUnreplayed])
+export type ReplayOutcome = S.Schema.Type<typeof ReplayOutcome>
+
+export const ReleaseCheck = S.Struct({
+  candidate: ReleaseCandidate,
+  outcome: ReplayOutcome,
+  sinceParent: S.Array(RelativePath),
+})
+export type ReleaseCheck = S.Schema.Type<typeof ReleaseCheck>
+
+export const BaseIntent = S.Struct({
+  path: RelativePath,
+  packages: S.optional(S.Array(S.Struct({ name: PackageName, bump: Bump }))),
+})
+export type BaseIntent = S.Schema.Type<typeof BaseIntent>
 
 export const GateUnknownPackage = S.TaggedStruct('GateUnknownPackage', {
   path: RelativePath,
@@ -20,7 +99,51 @@ export const GateIntentMissing = S.TaggedStruct('GateIntentMissing', {
 })
 export type GateIntentMissing = S.Schema.Type<typeof GateIntentMissing>
 
-export const GateRefusal = S.Union([GateUnknownPackage, GateIntentMissing])
+export const GateReleaseDiverged = S.TaggedStruct('GateReleaseDiverged', {
+  commit: CommitSha,
+  paths: S.NonEmptyArray(RelativePath),
+})
+export type GateReleaseDiverged = S.Schema.Type<typeof GateReleaseDiverged>
+
+export const GateReleaseUnreplayable = S.TaggedStruct('GateReleaseUnreplayable', {
+  commit: CommitSha,
+  reason: S.String,
+})
+export type GateReleaseUnreplayable = S.Schema.Type<typeof GateReleaseUnreplayable>
+
+export const GateReleaseStale = S.TaggedStruct('GateReleaseStale', {
+  commit: CommitSha,
+  paths: S.NonEmptyArray(RelativePath),
+})
+export type GateReleaseStale = S.Schema.Type<typeof GateReleaseStale>
+
+export const GateBaseIntentMalformed = S.TaggedStruct('GateBaseIntentMalformed', {
+  path: RelativePath,
+})
+export type GateBaseIntentMalformed = S.Schema.Type<typeof GateBaseIntentMalformed>
+
+export const DroppedRelease = S.Struct({
+  package: PackageName,
+  pending: Bump,
+  remaining: S.optional(Bump),
+  intents: S.Array(RelativePath),
+})
+export type DroppedRelease = S.Schema.Type<typeof DroppedRelease>
+
+export const GateReleaseDropped = S.TaggedStruct('GateReleaseDropped', {
+  dropped: S.NonEmptyArray(DroppedRelease),
+})
+export type GateReleaseDropped = S.Schema.Type<typeof GateReleaseDropped>
+
+export const GateRefusal = S.Union([
+  GateUnknownPackage,
+  GateIntentMissing,
+  GateReleaseDiverged,
+  GateReleaseUnreplayable,
+  GateReleaseStale,
+  GateBaseIntentMalformed,
+  GateReleaseDropped,
+])
 export type GateRefusal = S.Schema.Type<typeof GateRefusal>
 
 export class EvidenceFileUnreadable extends S.TaggedError<EvidenceFileUnreadable>()('EvidenceFileUnreadable', {
@@ -30,6 +153,10 @@ export class EvidenceFileUnreadable extends S.TaggedError<EvidenceFileUnreadable
 export class EvidenceCommandFailed extends S.TaggedError<EvidenceCommandFailed>()('EvidenceCommandFailed', {
   program: S.String,
   detail: S.String,
+}) {}
+
+export class EvidenceShallowClone extends S.TaggedError<EvidenceShallowClone>()('EvidenceShallowClone', {
+  root: S.String,
 }) {}
 
 export class TurboPinUnusable extends S.TaggedError<TurboPinUnusable>()('TurboPinUnusable', {
@@ -70,6 +197,7 @@ export class TurboDryRunDrifted extends S.TaggedError<TurboDryRunDrifted>()('Tur
 export const EvidenceRefusal = S.Union([
   EvidenceFileUnreadable,
   EvidenceCommandFailed,
+  EvidenceShallowClone,
   TurboPinUnusable,
   PathsGateUnderTurbo,
   WorktreeUnavailable,

@@ -11,6 +11,19 @@ export const memberChangelogPathOf = (
   return RelativePath.make(`${changelogDir}/${member.name.replaceAll('/', '!')}@${version}.md`)
 }
 
+export const releaseCreatedPaths = (
+  storage: ChangelogStorage,
+  changelogDir: RelativePath,
+  members: ReadonlyArray<
+    { readonly name: PackageName; readonly dir: RelativePath; readonly manifest: { readonly version: PackageVersion } }
+  >,
+  rootChangelog: RelativePath | undefined,
+): ReadonlyArray<RelativePath> => {
+  const created = members.map((member) => memberChangelogPathOf(storage, changelogDir, member, member.manifest.version))
+  if (rootChangelog === undefined) return created
+  return [...created, rootChangelog]
+}
+
 export const parkedChangelogOf = (name: PackageName, version: PackageVersion, summary: string): string =>
   `# ${name}@${version}\n\n${summary}\n`
 
