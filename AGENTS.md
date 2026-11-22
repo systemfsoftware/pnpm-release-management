@@ -13,6 +13,8 @@ Releases and npm publishes, driven by repository state on every push. Other repo
 | `CONTRIBUTING.md`                                                        | gates, commit messages, layout, adding a subcommand, the e2e test                    |
 | `docs/ci.md`                                                             | changing a reusable workflow                                                         |
 | `repos/constitution/CODING_STANDARDS.md`, `repos/constitution/REVIEW.md` | you plan, write or review any change; before you propose a test, a check or a design |
+| `repos/constitution/GRADERS.md`                                          | you build or change a check: a lint rule, CI job, hook, threshold or rubric          |
+| `repos/constitution/WORKING.md`                                          | always; `CLAUDE.md` imports it                                                       |
 | `docs/solutions/`                                                        | before fixing a bug: past fixes and their prevention                                 |
 
 ## Commands
