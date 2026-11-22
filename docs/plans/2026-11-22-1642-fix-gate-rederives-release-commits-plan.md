@@ -180,6 +180,6 @@ Never run `pnpm check:ci` or the container e2e locally.
 | P1 renamed intent; changesetDir; piggyback; surfaces and root; merge base vs ref | R4/R5; R10; R1; KTD1; R9 |
 | P2 nested workspaces; `none` asymmetry; malformed deleted intent                 | R7; R5; R5 and R2        |
 
-- Every R has a test that fails when it breaks; each review finding (P0-1..P0-4, P1, P2) maps to a named test in the PR body.
+- Each review finding (P0-1..P0-4, P1, P2) is proved by command output pasted in the PR body; the tests stay at the one end-to-end proof plus the existing gate tests ported to the new evidence.
 - The PR is open by the bot, names #124 as superseded, pastes the end-to-end output, and its checks are green.
 - No abandoned-attempt code in the diff; the learning is in `docs/solutions/`.

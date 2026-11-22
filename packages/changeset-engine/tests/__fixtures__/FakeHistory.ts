@@ -63,7 +63,7 @@ const RANK: Record<Bump, number> = { none: 0, patch: 1, minor: 2, major: 3 }
 
 const bumpedManifest = (name: string, bump: Bump): string => `{"name":"${name}","bump":"${bump}"}`
 
-export const modelRelease = (tree: Tree, consumed: ReadonlyArray<string>): Tree => {
+const modelRelease = (tree: Tree, consumed: ReadonlyArray<string>): Tree => {
   const owed: Record<string, Bump> = {}
   for (const path of consumed) {
     for (const entry of entriesOf(tree[path] ?? '')) {
@@ -224,11 +224,3 @@ export const linear = (base: Tree, ...steps: ReadonlyArray<(tree: Tree) => Tree>
 }
 
 export const withFiles = (files: Tree) => (tree: Tree): Tree => ({ ...tree, ...files })
-
-export const without = (...paths: ReadonlyArray<string>) => (tree: Tree): Tree =>
-  Object.fromEntries(Object.entries(tree).filter(([path]) => !paths.includes(path)))
-
-export const released = (...consumed: ReadonlyArray<string>) => (tree: Tree): Tree => modelRelease(tree, consumed)
-
-export const steps = (...each: ReadonlyArray<(tree: Tree) => Tree>) => (tree: Tree): Tree =>
-  each.reduce((current, step) => step(current), tree)
