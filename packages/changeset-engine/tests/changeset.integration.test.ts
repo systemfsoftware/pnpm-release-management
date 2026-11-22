@@ -1,21 +1,11 @@
-import { gateChangesCell, newIntentCell } from '@systemfsoftware/changeset-engine'
+import { newIntentCell } from '@systemfsoftware/changeset-engine'
 import { Cell } from '@systemfsoftware/effect-cell-types'
 import { Gherkin, Given, it, layer, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
-import {
-  GitRef,
-  IntentSlug,
-  IntentSummary,
-  type Member,
-  PackageName,
-  PackageVersion,
-  RelativePath,
-  RepoRoot,
-} from '@systemfsoftware/release-language'
+import { IntentSlug, type Member, PackageName, PackageVersion, RelativePath } from '@systemfsoftware/release-language'
 import { Effect } from 'effect'
 import * as Layer from 'effect/Layer'
 import * as Match from 'effect/Match'
 import { expect } from 'vitest'
-import { fakeChangeEvidencePort } from './__fixtures__/FakeChangeEvidencePort.js'
 import { fakeChangesetStore } from './__fixtures__/FakeChangesetStore.js'
 import { fakeWorkspaceStore } from './__fixtures__/FakeWorkspaceStore.js'
 
@@ -28,20 +18,6 @@ const member = (name: string, publishable: boolean): Member => ({
   publishable,
 })
 
-type IntentEntryLike = { name: PackageName; bump: 'none' | 'patch' | 'minor' | 'major' }
-type IntentLike = { path: RelativePath; packages: IntentEntryLike[]; summary: IntentSummary }
-
-const intentEntry = (name: string, bump: 'none' | 'patch' | 'minor' | 'major'): IntentEntryLike => ({
-  name: PackageName.make(name),
-  bump,
-})
-
-const intent = (slug: string, entries: IntentEntryLike[]): IntentLike => ({
-  path: RelativePath.make(`.changeset/${slug}.md`),
-  packages: entries,
-  summary: IntentSummary.make('a change'),
-})
-
 const members = [member('@s/a', true), member('@s/b', false)]
 
 const failUnexpected = (message: string): never => {
@@ -49,178 +25,6 @@ const failUnexpected = (message: string): never => {
 }
 
 Feature('Changeset intents').body(({ scenario }) => {
-  {
-    const touched = [PackageName.make('@s/b')]
-    const live = Layer.mergeAll(
-      fakeWorkspaceStore(members),
-      fakeChangeEvidencePort({ members, touched, deleted: [], raw: null }),
-      fakeChangesetStore({ intents: [] }).layer,
-    )
-    const runnable = Cell.provide(live)(gateChangesCell)
-    scenario(
-      'A change that moves no publishable package leaves the gate vacant',
-      { scenarioLayer: live },
-      Gherkin.Do.pipe(
-        Given('a workspace with one publishable and one private member was prepared')(
-          'setup',
-          () => Effect.succeed({ runnable }),
-        ),
-        When('the gate examines the touched packages')('report', (s) =>
-          Cell.run(s.setup.runnable, {
-            root: RepoRoot.make('/repo'),
-            ref: GitRef.make('HEAD'),
-            strategy: 'paths',
-          })),
-        Then('the report is vacant and names both members')((s) => {
-          expect(s.report.ok).toBe(true)
-          expect(s.report.text).toContain('no publishable package changed (2 member(s))')
-        }),
-      ),
-    )
-  }
-
-  {
-    const deleted = [PackageName.make('@s/gone')]
-    const live = Layer.mergeAll(
-      fakeWorkspaceStore(members),
-      fakeChangeEvidencePort({ members, touched: [], deleted, raw: null }),
-      fakeChangesetStore({ intents: [] }).layer,
-    )
-    const runnable = Cell.provide(live)(gateChangesCell)
-    scenario(
-      'A package deleted on the head needs no intent and is listed as deleted',
-      { scenarioLayer: live },
-      Gherkin.Do.pipe(
-        Given('a change that deletes a package and records no intent')(
-          'setup',
-          () => Effect.succeed({ runnable }),
-        ),
-        When('the gate examines the touched packages')('report', (s) =>
-          Cell.run(s.setup.runnable, {
-            root: RepoRoot.make('/repo'),
-            ref: GitRef.make('HEAD'),
-            strategy: 'paths',
-          })),
-        Then('the gate passes and the report names the deleted package')((s) => {
-          expect(s.report.ok).toBe(true)
-          expect(s.report.text).toContain('1 package(s) deleted, nothing left to release — @s/gone')
-        }),
-      ),
-    )
-  }
-
-  {
-    const touched = [PackageName.make('@s/a')]
-    const live = Layer.mergeAll(
-      fakeWorkspaceStore(members),
-      fakeChangeEvidencePort({ members, touched, deleted: [], raw: null }),
-      fakeChangesetStore({ intents: [intent('fix-a', [intentEntry('@s/a', 'patch')])] }).layer,
-    )
-    const runnable = Cell.provide(live)(gateChangesCell)
-    scenario(
-      'Every moved publishable package named by an intent satisfies the gate',
-      { scenarioLayer: live },
-      Gherkin.Do.pipe(
-        Given('an intent naming the moved publishable package was recorded')(
-          'setup',
-          () => Effect.succeed({ runnable }),
-        ),
-        When('the gate examines the touched packages')('report', (s) =>
-          Cell.run(s.setup.runnable, {
-            root: RepoRoot.make('/repo'),
-            ref: GitRef.make('HEAD'),
-            strategy: 'paths',
-          })),
-        Then('the report is satisfied and names the moved package')((s) => {
-          expect(s.report.ok).toBe(true)
-          expect(s.report.text).toContain('1 publishable package(s) changed')
-          expect(s.report.text).toContain('@s/a')
-        }),
-      ),
-    )
-  }
-
-  {
-    const touched = [PackageName.make('@s/a')]
-    const live = Layer.mergeAll(
-      fakeWorkspaceStore(members),
-      fakeChangeEvidencePort({ members, touched, deleted: [], raw: null }),
-      fakeChangesetStore({ intents: [intent('other', [intentEntry('@s/b', 'none')])] }).layer,
-    )
-    const runnable = Cell.provide(live)(gateChangesCell)
-    scenario(
-      'A moved publishable package with no intent is refused with guidance',
-      { scenarioLayer: live },
-      Gherkin.Do.pipe(
-        Given('the only intent names an unmoved package was recorded')('setup', () => Effect.succeed({ runnable })),
-        When('the gate examines the touched packages')('report', (s) =>
-          Cell.run(s.setup.runnable, {
-            root: RepoRoot.make('/repo'),
-            ref: GitRef.make('HEAD'),
-            strategy: 'paths',
-          })),
-        Then('the report refuses and shows the missing frontmatter')((s) => {
-          expect(s.report.ok).toBe(false)
-          expect(s.report.text).toContain('no intent names: @s/a')
-          expect(s.report.text).toContain('"@s/a": patch')
-        }),
-      ),
-    )
-  }
-
-  {
-    const live = Layer.mergeAll(
-      fakeWorkspaceStore(members),
-      fakeChangeEvidencePort({ members, touched: [], deleted: [], raw: null }),
-      fakeChangesetStore({ intents: [intent('ghost', [intentEntry('ghost-pkg', 'patch')])] }).layer,
-    )
-    const runnable = Cell.provide(live)(gateChangesCell)
-    scenario(
-      'An intent naming a package outside the workspace is refused',
-      { scenarioLayer: live },
-      Gherkin.Do.pipe(
-        Given('an intent naming a non-member package was recorded')('setup', () => Effect.succeed({ runnable })),
-        When('the gate examines the touched packages')('report', (s) =>
-          Cell.run(s.setup.runnable, {
-            root: RepoRoot.make('/repo'),
-            ref: GitRef.make('HEAD'),
-            strategy: 'paths',
-          })),
-        Then('the report refuses and names the unknown package')((s) => {
-          expect(s.report.ok).toBe(false)
-          expect(s.report.text).toContain('names non-member package "ghost-pkg"')
-        }),
-      ),
-    )
-  }
-
-  {
-    const live = Layer.mergeAll(
-      fakeWorkspaceStore(members),
-      fakeChangeEvidencePort({ members, touched: [], deleted: [], raw: null }),
-      fakeChangesetStore({ intents: [intent('ghost', [intentEntry('ghost-pkg', 'patch')])] }).layer,
-    )
-    const runnable = Cell.provide(live)(gateChangesCell)
-    scenario(
-      'Unknown packages pass a vacant gate when the liveness check is skipped',
-      { scenarioLayer: live },
-      Gherkin.Do.pipe(
-        Given('an intent naming a non-member package was recorded')('setup', () => Effect.succeed({ runnable })),
-        When('the gate runs with liveness skipped')('report', (s) =>
-          Cell.run(s.setup.runnable, {
-            root: RepoRoot.make('/repo'),
-            ref: GitRef.make('HEAD'),
-            strategy: 'paths',
-            skipLiveness: true,
-          })),
-        Then('the report is vacant')((s) => {
-          expect(s.report.ok).toBe(true)
-          expect(s.report.text).toContain('no publishable package changed')
-        }),
-      ),
-    )
-  }
-
   {
     const store = fakeChangesetStore()
     const live = Layer.mergeAll(fakeWorkspaceStore(members), store.layer)

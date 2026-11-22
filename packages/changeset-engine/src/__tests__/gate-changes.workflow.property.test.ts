@@ -1,142 +1,148 @@
 import { it } from '@effect/vitest'
-import { gateChangesCell } from '@systemfsoftware/changeset-engine'
-import { Cell } from '@systemfsoftware/effect-cell-types'
-import {
-  GitRef,
-  type Intent,
-  IntentSummary,
-  type Member,
-  PackageName,
-  PackageVersion,
-  RelativePath,
-  RepoRoot,
-} from '@systemfsoftware/release-language'
-import { Effect, Layer } from 'effect'
+import type { Bump } from '@systemfsoftware/release-language'
+import { Effect } from 'effect'
 import * as fc from 'effect/testing/FastCheck'
-import { fakeChangeEvidencePort } from '../../tests/__fixtures__/FakeChangeEvidencePort.js'
-import { fakeChangesetStore } from '../../tests/__fixtures__/FakeChangesetStore.js'
-import { fakeWorkspaceStore } from '../../tests/__fixtures__/FakeWorkspaceStore.js'
+import {
+  type FakeHistory,
+  gateReport,
+  intentPath,
+  intentText,
+  manifestPath,
+  member,
+  modelRelease,
+  type Tree,
+} from '../../tests/__fixtures__/FakeHistory.js'
 
-const nameArb = fc.stringMatching(/^[a-z][a-z0-9-]{0,9}$/)
-const pkgArb = nameArb.map((name) => PackageName.make(name))
-const bumpArb = fc.constantFrom('none', 'patch', 'minor', 'major')
+const PACKAGES = ['a', 'b', 'c'] as const
+const SLUGS = ['w', 'x', 'y', 'z'] as const
+const RANK: Record<Bump, number> = { none: 0, patch: 1, minor: 2, major: 3 }
 
-const memberArb = fc.record({
-  name: pkgArb,
-  dir: nameArb.map((dir) => RelativePath.make(`packages/${dir}`)),
-  manifest: fc.record({
-    name: pkgArb,
-    version: fc.constant(PackageVersion.make('0.1.0')),
-  }),
-  publishable: fc.boolean(),
+const members = PACKAGES.map((name) => member(name))
+
+const bumpArb = fc.constantFrom<Bump>('none', 'patch', 'minor', 'major')
+
+const entriesArb = fc.dictionary(fc.constantFrom(...PACKAGES), bumpArb, { minKeys: 1, maxKeys: 3 })
+
+const intentsArb = fc.dictionary(fc.constantFrom(...SLUGS), entriesArb, { maxKeys: 3 })
+
+type Intents = Readonly<Record<string, Readonly<Record<string, Bump>>>>
+
+const baseTree = (intents: Intents): Tree => ({
+  ...Object.fromEntries(PACKAGES.map((name) => [manifestPath(name), `{"name":"${name}"}`])),
+  ...Object.fromEntries(Object.entries(intents).map(([slug, entries]) => [intentPath(slug), intentText(entries)])),
 })
 
-const membersArb = fc.uniqueArray(memberArb, {
-  selector: (member) => member.name,
-  maxLength: 4,
-})
+const intentFiles = (tree: Tree): Tree =>
+  Object.fromEntries(Object.entries(tree).filter(([path]) => !path.startsWith('.changeset/')))
 
-const intentNameArbFrom = (names: ReadonlyArray<PackageName>) => {
-  if (names.length > 0) {
-    return fc.oneof(
-      { arbitrary: fc.constantFrom(...names), weight: 3 },
-      { arbitrary: pkgArb, weight: 1 },
-    )
-  }
-  return pkgArb
-}
-
-const intentArbFrom = (names: ReadonlyArray<PackageName>): fc.Arbitrary<Intent> =>
-  fc.record({
-    path: nameArb.map((slug) => RelativePath.make(`.changeset/${slug}.md`)),
-    packages: fc.array(
-      fc.record({
-        name: intentNameArbFrom(names),
-        bump: bumpArb,
-      }),
-      { minLength: 1, maxLength: 3 },
-    ),
-    summary: fc.stringMatching(/^[a-z]{1,12}$/).map((line) => IntentSummary.make(line)),
-  })
-
-const touchedArbFrom = (members: ReadonlyArray<Member>): fc.Arbitrary<ReadonlyArray<PackageName>> => {
-  if (members.length === 0) {
-    return fc.constant([])
-  }
-  return fc.array(fc.constantFrom(...members.map((m) => m.name)), { maxLength: 4 })
-}
-
-const scenarioArb = membersArb.chain((members) =>
-  fc.tuple(
-    touchedArbFrom(members),
-    fc.uniqueArray(intentArbFrom(members.map((m) => m.name)), {
-      selector: (intent) => intent.path,
-      maxLength: 3,
+const highestOf = (intents: Intents, name: string): number =>
+  Math.max(
+    0,
+    ...Object.values(intents).flatMap((entries) => {
+      const bump = entries[name]
+      if (bump === undefined) return []
+      return [RANK[bump]]
     }),
-    fc.boolean(),
-  ).map(([touched, intents, skipLiveness]) => ({ members, touched, intents, skipLiveness }))
-)
-
-const classification = (text: string): string => {
-  if (text.includes('names non-member package')) return 'GateUnknownPackage'
-  if (text.includes('no publishable package changed')) return 'GateVacant'
-  if (text.includes('no intent names')) return 'GateIntentMissing'
-  return 'GateSatisfied'
-}
-
-const oracle = (scenario: {
-  members: ReadonlyArray<Member>
-  touched: ReadonlyArray<PackageName>
-  intents: ReadonlyArray<Intent>
-  skipLiveness: boolean
-}): { ok: boolean; tag: string } => {
-  const names = scenario.members.map((m) => m.name)
-  const publishable = scenario.members.filter((m) => m.publishable).map((m) => m.name)
-  const moved = scenario.touched.filter((n) => publishable.includes(n)).sort()
-  const foreign = scenario.intents
-    .flatMap((intent) => intent.packages.map((entry) => entry.name))
-    .filter((name) => !names.includes(name) && !scenario.skipLiveness)
-  if (foreign.length > 0) return { ok: false, tag: 'GateUnknownPackage' }
-  if (moved.length === 0) return { ok: true, tag: 'GateVacant' }
-  const missing = moved.filter((name) =>
-    !scenario.intents.some((intent) => intent.packages.some((entry) => entry.name === name))
   )
-  if (missing.length > 0) return { ok: false, tag: 'GateIntentMissing' }
-  return { ok: true, tag: 'GateSatisfied' }
-}
 
-const gateEffect = (scenario: {
-  members: ReadonlyArray<Member>
-  touched: ReadonlyArray<PackageName>
-  intents: ReadonlyArray<Intent>
-  skipLiveness: boolean
-}): Effect.Effect<boolean> => {
-  const program = Cell.provide(Layer.mergeAll(
-    fakeWorkspaceStore(scenario.members),
-    fakeChangeEvidencePort({
-      members: scenario.members,
-      touched: scenario.touched,
-      deleted: [],
-      raw: null,
-    }),
-    fakeChangesetStore({ intents: scenario.intents }).layer,
-  ))(gateChangesCell)
-  return Effect.map(
-    Cell.run(program, {
-      root: RepoRoot.make('/repo'),
-      ref: GitRef.make('HEAD'),
-      strategy: 'paths',
-      skipLiveness: scenario.skipLiveness,
-    }),
-    (report) => {
-      const expected = oracle(scenario)
-      return report.ok === expected.ok && classification(report.text) === expected.tag
-    },
-  ).pipe(Effect.orElseSucceed(() => false))
+const conserved = (before: Intents, after: Intents): boolean =>
+  PACKAGES.every((name) => highestOf(before, name) <= highestOf(after, name))
+
+const editHistory = (before: Intents, deletedFirst: ReadonlyArray<string>, after: Intents): FakeHistory => {
+  const m0 = baseTree(before)
+  const c1 = Object.fromEntries(
+    Object.entries(m0).filter(([path]) => !deletedFirst.map(intentPath).includes(path)),
+  )
+  const c2 = { ...intentFiles(m0), ...baseTree(after) }
+  return {
+    mergeBase: 'm0',
+    commits: [
+      { sha: 'm0', parents: [], tree: m0 },
+      { sha: 'c1', parents: ['m0'], tree: c1 },
+      { sha: 'c2', parents: ['c1'], tree: c2 },
+    ],
+    range: ['c1', 'c2'],
+  }
 }
 
 it.effect.prop(
-  '∀scenario_GateVerdict_=Oracle',
-  [scenarioArb],
-  ([scenario]) => gateEffect(scenario),
+  '∀intentEdits_GatePasses_=EveryPackageKeepsItsHighestOwedBump',
+  [intentsArb, fc.subarray([...SLUGS]), intentsArb],
+  ([before, deletedFirst, after]) =>
+    Effect.map(gateReport({ members, history: editHistory(before, deletedFirst, after) }), (report) => {
+      if (conserved(before, after)) return report.ok
+      return !report.ok && report.text.includes('drops releases')
+    }),
+)
+
+const SURFACES = [
+  'src/feature.ts',
+  'release.jsonc',
+  'pnpm-workspace.yaml',
+  'package.json',
+  'packages/b/package.json',
+  'packages/b/src/index.ts',
+  '.changeset/config.json',
+  '.changeset/other.md',
+] as const
+
+const STALE_SURFACES: ReadonlyArray<string> = [
+  'release.jsonc',
+  'pnpm-workspace.yaml',
+  'package.json',
+  'packages/b/package.json',
+  '.changeset/config.json',
+]
+
+const staleHistory = (advanced: ReadonlyArray<string>): FakeHistory => {
+  const p0 = { ...baseTree({ x: { a: 'patch' } }), 'release.jsonc': '{"changesetDir":".changeset"}' }
+  const m0 = {
+    ...p0,
+    ...Object.fromEntries(advanced.map((path) => [path, `{"changesetDir":".changeset","at":"${path}"}`])),
+  }
+  const r1 = modelRelease(p0, [intentPath('x')])
+  const merged = { ...m0, ...r1 }
+  const draft = Object.fromEntries(
+    Object.entries(merged).filter(([path]) => path !== intentPath('x')),
+  )
+  return {
+    mergeBase: 'm0',
+    commits: [
+      { sha: 'p0', parents: [], tree: p0 },
+      { sha: 'm0', parents: ['p0'], tree: m0 },
+      { sha: 'r1', parents: ['p0'], tree: r1 },
+      { sha: 'q1', parents: ['m0', 'r1'], tree: draft },
+    ],
+    range: ['r1', 'q1'],
+  }
+}
+
+it.effect.prop(
+  '∀baseAdvance_StaleRelease_=AdvanceTouchesAReleaseSurface',
+  [fc.subarray([...SURFACES])],
+  ([advanced]) =>
+    Effect.map(
+      gateReport({ members: [...members, member('other-pkg')], history: staleHistory(advanced) }),
+      (report) => {
+        if (advanced.some((path) => STALE_SURFACES.includes(path))) {
+          return !report.ok && report.text.includes('cut from an older base')
+        }
+        return report.ok
+      },
+    ),
+)
+
+it.effect.prop(
+  '∀consumedSubset_ReleasePasses_=UnconsumedIntentsStayLive',
+  [intentsArb.filter((intents) => Object.keys(intents).length > 0), fc.subarray([...SLUGS], { minLength: 1 })],
+  ([before, consumedSlugs]) => {
+    const consumed = consumedSlugs.filter((slug) => before[slug] !== undefined).map(intentPath)
+    const m0 = baseTree(before)
+    const history: FakeHistory = {
+      mergeBase: 'm0',
+      commits: [{ sha: 'm0', parents: [], tree: m0 }, { sha: 'r1', parents: ['m0'], tree: modelRelease(m0, consumed) }],
+      range: ['r1'],
+    }
+    return Effect.map(gateReport({ members, history }), (report) => report.ok)
+  },
 )

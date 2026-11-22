@@ -72,7 +72,7 @@ export type ReplayOutcome = S.Schema.Type<typeof ReplayOutcome>
 export const ReleaseCheck = S.Struct({
   candidate: ReleaseCandidate,
   outcome: ReplayOutcome,
-  sinceParent: S.Array(RelativePath),
+  staleSurfaces: S.Array(RelativePath),
 })
 export type ReleaseCheck = S.Schema.Type<typeof ReleaseCheck>
 

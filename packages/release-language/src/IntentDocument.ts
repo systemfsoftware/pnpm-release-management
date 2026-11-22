@@ -83,7 +83,3 @@ export const normalChangesetDir = (dir: string): RelativePath => {
   if (parts.length === 0) return RelativePath.make(dir)
   return RelativePath.make(parts.join('/'))
 }
-
-const BUMP_RANK: Record<Bump, number> = { none: 0, patch: 1, minor: 2, major: 3 }
-
-export const bumpRank = (bump: Bump): number => BUMP_RANK[bump]

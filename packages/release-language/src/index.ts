@@ -92,7 +92,7 @@ export {
   IntentUnknownPackage,
   ReleaseBump,
 } from './Intent.schema.js'
-export { bumpRank, isIntentFileName, isIntentPath, normalChangesetDir, parseIntentDocument } from './IntentDocument.js'
+export { isIntentFileName, isIntentPath, normalChangesetDir, parseIntentDocument } from './IntentDocument.js'
 export {
   memberChangelogPathOf,
   parkedChangelogOf,
