@@ -53,7 +53,7 @@ Feature('Changeset intents').body(({ scenario }) => {
     const touched = [PackageName.make('@s/b')]
     const live = Layer.mergeAll(
       fakeWorkspaceStore(members),
-      fakeChangeEvidencePort({ members, touched, deleted: [], raw: null }),
+      fakeChangeEvidencePort({ members, touched, deleted: [], changed: [], consumed: [], raw: null }),
       fakeChangesetStore({ intents: [] }).layer,
     )
     const runnable = Cell.provide(live)(gateChangesCell)
@@ -83,7 +83,7 @@ Feature('Changeset intents').body(({ scenario }) => {
     const deleted = [PackageName.make('@s/gone')]
     const live = Layer.mergeAll(
       fakeWorkspaceStore(members),
-      fakeChangeEvidencePort({ members, touched: [], deleted, raw: null }),
+      fakeChangeEvidencePort({ members, touched: [], deleted, changed: [], consumed: [], raw: null }),
       fakeChangesetStore({ intents: [] }).layer,
     )
     const runnable = Cell.provide(live)(gateChangesCell)
@@ -113,7 +113,7 @@ Feature('Changeset intents').body(({ scenario }) => {
     const touched = [PackageName.make('@s/a')]
     const live = Layer.mergeAll(
       fakeWorkspaceStore(members),
-      fakeChangeEvidencePort({ members, touched, deleted: [], raw: null }),
+      fakeChangeEvidencePort({ members, touched, deleted: [], changed: [], consumed: [], raw: null }),
       fakeChangesetStore({ intents: [intent('fix-a', [intentEntry('@s/a', 'patch')])] }).layer,
     )
     const runnable = Cell.provide(live)(gateChangesCell)
@@ -144,7 +144,7 @@ Feature('Changeset intents').body(({ scenario }) => {
     const touched = [PackageName.make('@s/a')]
     const live = Layer.mergeAll(
       fakeWorkspaceStore(members),
-      fakeChangeEvidencePort({ members, touched, deleted: [], raw: null }),
+      fakeChangeEvidencePort({ members, touched, deleted: [], changed: [], consumed: [], raw: null }),
       fakeChangesetStore({ intents: [intent('other', [intentEntry('@s/b', 'none')])] }).layer,
     )
     const runnable = Cell.provide(live)(gateChangesCell)
@@ -171,7 +171,7 @@ Feature('Changeset intents').body(({ scenario }) => {
   {
     const live = Layer.mergeAll(
       fakeWorkspaceStore(members),
-      fakeChangeEvidencePort({ members, touched: [], deleted: [], raw: null }),
+      fakeChangeEvidencePort({ members, touched: [], deleted: [], changed: [], consumed: [], raw: null }),
       fakeChangesetStore({ intents: [intent('ghost', [intentEntry('ghost-pkg', 'patch')])] }).layer,
     )
     const runnable = Cell.provide(live)(gateChangesCell)
@@ -197,7 +197,7 @@ Feature('Changeset intents').body(({ scenario }) => {
   {
     const live = Layer.mergeAll(
       fakeWorkspaceStore(members),
-      fakeChangeEvidencePort({ members, touched: [], deleted: [], raw: null }),
+      fakeChangeEvidencePort({ members, touched: [], deleted: [], changed: [], consumed: [], raw: null }),
       fakeChangesetStore({ intents: [intent('ghost', [intentEntry('ghost-pkg', 'patch')])] }).layer,
     )
     const runnable = Cell.provide(live)(gateChangesCell)

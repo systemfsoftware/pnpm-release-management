@@ -9,6 +9,7 @@ import {
   type Intent,
   type IntentRefusal,
   type MemberRefusal,
+  RelativePath,
   RepoRoot,
   TaskName,
   WorkspaceStore,
@@ -24,6 +25,7 @@ const GateRequest = Wire.wire({
   ref: Wire.mint(GitRef),
   strategy: Wire.mint(S.Literals(['paths', 'turbo'])),
   task: Wire.mint(S.optional(TaskName)),
+  changesetDir: Wire.mint(S.optional(RelativePath)),
   skipLiveness: Wire.mint(S.optional(S.Boolean)),
 })
 
@@ -56,9 +58,9 @@ const read = (
   Effect.gen(function*() {
     const evidence = yield* Effect.flatMap(ChangeEvidencePort, (port) => {
       if (request.strategy === 'turbo') {
-        return port.turboEvidence(request.root, request.ref, request.task ?? buildTask())
+        return port.turboEvidence(request.root, request.ref, request.task ?? buildTask(), request.changesetDir)
       }
-      return port.pathsEvidence(request.root, request.ref)
+      return port.pathsEvidence(request.root, request.ref, request.changesetDir)
     })
     const workspace = yield* WorkspaceStore
     const store = yield* ChangesetStore
@@ -71,6 +73,8 @@ const read = (
       members,
       touched: evidence.touched,
       deleted: evidence.deleted,
+      changed: evidence.changed,
+      consumed: evidence.consumed,
       intents,
       skipLiveness: request.skipLiveness,
     })

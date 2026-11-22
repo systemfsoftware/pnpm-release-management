@@ -20,7 +20,15 @@ import * as S from 'effect/Schema'
 import type * as HttpClient from 'effect/unstable/http/HttpClient'
 import type { ChildProcessSpawner } from 'effect/unstable/process/ChildProcessSpawner'
 import { verdictTouched } from './change-verdict.js'
-import { gitLines, MANIFEST_GLOB, MANIFEST_SUFFIX, memberOf, membersAt, readText } from './evidence-io.js'
+import {
+  consumedIntentsAt,
+  gitLines,
+  MANIFEST_GLOB,
+  MANIFEST_SUFFIX,
+  memberOf,
+  membersAt,
+  readText,
+} from './evidence-io.js'
 import { runProcess } from './ProcessRun.js'
 import { type FetchedTurbo, fetchTurbo, TURBO_ENV } from './turbo-fetch.js'
 import type { TurboPin } from './turbo-pin.js'
@@ -178,10 +186,12 @@ const turboMembers = (
 const dryRunEvidence = (
   root: RepoRoot,
   baseDir: string,
+  baseSha: string,
   task: TaskName,
   turbo: FetchedTurbo,
   version: string,
   changedFiles: ReadonlyArray<RelativePath>,
+  changesetDir: RelativePath,
 ): Effect.Effect<ChangeEvidence, EvidenceRefusal, Requirements> =>
   Effect.gen(function*() {
     const [baseRun, headRun] = yield* Effect.all(
@@ -201,6 +211,8 @@ const dryRunEvidence = (
         members,
         changedFiles,
       ),
+      changed: [...changedFiles],
+      consumed: [...(yield* consumedIntentsAt(root, baseSha, changesetDir, changedFiles))],
       raw: {
         strategy: 'turbo',
         task,
@@ -218,6 +230,7 @@ export const collectTurboEvidence = (
   task: TaskName,
   pin: TurboPin,
   changedFiles: ReadonlyArray<RelativePath>,
+  changesetDir: RelativePath,
 ): Effect.Effect<ChangeEvidence, EvidenceRefusal, Requirements | HttpClient.HttpClient> =>
   Effect.scoped(Effect.gen(function*() {
     const turbo = yield* fetchTurbo(pin)
@@ -246,7 +259,7 @@ export const collectTurboEvidence = (
       )
     }
     return yield* Effect.ensuring(
-      dryRunEvidence(root, baseDir, task, turbo, pin.version, changedFiles),
+      dryRunEvidence(root, baseDir, baseSha, task, turbo, pin.version, changedFiles, changesetDir),
       runProcess({
         program: 'git',
         args: ['worktree', 'remove', '--force', baseDir],

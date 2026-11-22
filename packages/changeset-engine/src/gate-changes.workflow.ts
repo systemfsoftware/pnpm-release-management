@@ -16,6 +16,8 @@ export class GateCommand extends S.TaggedClass<GateCommand>()('GateCommand', {
   members: S.Array(Member),
   touched: S.Array(PackageName),
   deleted: S.Array(PackageName),
+  changed: S.Array(RelativePath),
+  consumed: S.Array(Intent),
   intents: S.Array(Intent),
   skipLiveness: S.optional(S.Boolean),
 }) {}
@@ -82,13 +84,32 @@ const movedSoFar = (command: GateCommand): ReadonlyArray<PackageName> =>
     .filter((name) => command.members.some((member) => member.publishable && member.name === name))
     .sort()
 
+const namesPackage = (intents: ReadonlyArray<Intent>, name: PackageName): boolean =>
+  intents.some((intent) => intent.packages.some((entry) => entry.name === name))
+
+const releasesPackage = (intents: ReadonlyArray<Intent>, name: PackageName): boolean =>
+  intents.some((intent) => intent.packages.some((entry) => entry.name === name && entry.bump !== 'none'))
+
+const onlyVersionBumpFiles = (member: Member, changed: ReadonlyArray<RelativePath>): boolean => {
+  const manifest = `${member.dir}/package.json`
+  const changelog = `${member.dir}/CHANGELOG.md`
+  const owned = changed.filter((file) => file === manifest || file.startsWith(`${member.dir}/`))
+  if (owned.length === 0) return false
+  return owned.every((file) => file === manifest || file === changelog)
+}
+
+const consumedBy = (command: GateCommand, member: Member): boolean =>
+  releasesPackage(command.consumed, member.name) && onlyVersionBumpFiles(member, command.changed)
+
 const unnamedCaseOf = (
   command: GateCommand,
   moved: ReadonlyArray<PackageName>,
 ): UnnamedCase | undefined => {
-  const unnamed = moved.filter((name) =>
-    !command.intents.some((intent) => intent.packages.some((entry) => entry.name === name))
-  )
+  const unnamed = moved.filter((name) => {
+    if (namesPackage(command.intents, name)) return false
+    const member = command.members.find((candidate) => candidate.name === name)
+    return member === undefined || !consumedBy(command, member)
+  })
   const first = unnamed[0]
   if (first === undefined) return undefined
   return { _tag: 'Unnamed', packages: [first, ...unnamed.slice(1)] }

@@ -1,9 +1,11 @@
 import {
   EvidenceCommandFailed,
   EvidenceFileUnreadable,
+  type Intent,
   type Member,
   PackageManifest,
   type PackageName,
+  parseIntentDocument,
   PathsGateUnderTurbo,
   RelativePath,
   type RepoRoot,
@@ -144,4 +146,36 @@ export const deletedAt = (
       if (Option.isSome(member)) deleted.push(member.value.name)
     }
     return deleted.sort()
+  })
+
+const intentPathIn = (changesetDir: RelativePath, file: RelativePath): RelativePath | undefined => {
+  const prefix = `${changesetDir}/`
+  if (!file.startsWith(prefix)) return undefined
+  const name = file.slice(prefix.length)
+  if (name === '' || name.includes('/') || !name.endsWith('.md') || name === 'README.md') return undefined
+  return file
+}
+
+export const consumedIntentsAt = (
+  root: RepoRoot,
+  base: string,
+  changesetDir: RelativePath,
+  changed: ReadonlyArray<RelativePath>,
+): Effect.Effect<
+  ReadonlyArray<Intent>,
+  EvidenceCommandFailed | ProcessFault,
+  FileSystem.FileSystem | ChildProcessSpawner
+> =>
+  Effect.gen(function*() {
+    const fs = yield* FileSystem.FileSystem
+    const consumed: Array<Intent> = []
+    for (const changedPath of changed) {
+      const intentPath = intentPathIn(changesetDir, changedPath)
+      if (intentPath === undefined) continue
+      if (yield* fs.exists(`${root}/${changedPath}`).pipe(Effect.orElseSucceed(() => false))) continue
+      const shown = yield* gitLines(root, ['show', `${base}:${changedPath}`])
+      const parsed = parseIntentDocument(intentPath, shown.join('\n'))
+      if (parsed !== undefined) consumed.push(parsed)
+    }
+    return consumed.sort((left, right) => left.path.localeCompare(right.path))
   })

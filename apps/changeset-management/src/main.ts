@@ -57,6 +57,7 @@ const check = Command.make('check', {
         ref,
         strategy: workspace.release.gate.strategy,
         task: taskOf(workspace.release.gate),
+        changesetDir: workspace.release.changesetDir,
         skipLiveness: flags.skipLiveness,
       })
     }),

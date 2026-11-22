@@ -1,10 +1,13 @@
 import * as S from 'effect/Schema'
+import { Intent } from './Intent.schema.js'
 import { Member, PackageName, RelativePath } from './Workspace.schema.js'
 
 export const ChangeEvidence = S.Struct({
   members: S.Array(Member),
   touched: S.Array(PackageName),
   deleted: S.Array(PackageName),
+  changed: S.Array(RelativePath),
+  consumed: S.Array(Intent),
   raw: S.Unknown,
 })
 export type ChangeEvidence = S.Schema.Type<typeof ChangeEvidence>

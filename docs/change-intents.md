@@ -34,3 +34,13 @@ authored and committed as `github-actions[bot]
 <41898282+github-actions[bot]@users.noreply.github.com>`, passed to that one
 `git commit` with `-c`, so `pr` needs no git identity on the runner and changes
 no git config.
+
+`changeset check` reads the diff, not a branch name. A deleted intent still
+counts: when a change deletes `.changeset/*.md` and only bumps versions and
+writes changelog entries for the packages those intents name, the gate treats
+the deletion as the intent for that move. That is why the release PR passes on
+a merge-queue draft branch as well as on its own head branch. A package that
+moves without an intent on disk, or with a changed source file alongside its
+bump, is still refused. Only `package.json` and `CHANGELOG.md` count as the
+version-bump shape; a consumed intent with a `none` bump releases nothing and
+does not explain a version move.

@@ -34,7 +34,6 @@ permissions: {}
 jobs:
   require-intent:
     name: a publishable-package change needs an intent
-    if: github.head_ref != 'changeset-release/main'
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 60
     permissions:

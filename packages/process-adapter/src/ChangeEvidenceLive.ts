@@ -4,15 +4,18 @@ import {
   ChangeEvidencePort,
   EvidenceCommandFailed,
   GitPort,
+  RelativePath,
   type TagRefusal,
 } from '@systemfsoftware/release-language'
 import { Effect, Layer } from 'effect'
 import * as Match from 'effect/Match'
 import * as HttpClient from 'effect/unstable/http/HttpClient'
 import { pathsTouched } from './change-verdict.js'
-import { deletedAt, gitLines, MANIFEST_GLOB, membersAt, refuseUnderTurbo } from './evidence-io.js'
+import { consumedIntentsAt, deletedAt, gitLines, MANIFEST_GLOB, membersAt, refuseUnderTurbo } from './evidence-io.js'
 import { collectTurboEvidence } from './turbo-evidence.js'
 import { turboPin } from './turbo-pin.js'
+
+const DEFAULT_CHANGESET_DIR = RelativePath.make('.changeset')
 
 const refusalDetail = (refusal: TagRefusal): string =>
   Match.value(refusal).pipe(
@@ -27,7 +30,7 @@ const branchFault = (refusal: TagRefusal): EvidenceCommandFailed =>
   })
 
 const evidencePort = (git: GitPort, client: HttpClient.HttpClient): ChangeEvidencePort => ({
-  pathsEvidence: (root, ref) =>
+  pathsEvidence: (root, ref, changesetDir = DEFAULT_CHANGESET_DIR) =>
     Effect.gen(function*() {
       const head = yield* git.currentBranch().pipe(Effect.mapError(branchFault))
       yield* refuseUnderTurbo(root, ref, head)
@@ -38,12 +41,14 @@ const evidencePort = (git: GitPort, client: HttpClient.HttpClient): ChangeEviden
         members: [...members],
         deleted: [...(yield* deletedAt(root, mergeBase, changed))],
         touched: pathsTouched(members, changed),
+        changed: [...changed],
+        consumed: [...(yield* consumedIntentsAt(root, mergeBase, changesetDir, changed))],
         raw: { strategy: 'paths', base: ref, changedPaths: [...changed] },
       }
       return evidence
     }).pipe(Effect.provide(NodeServices.layer)),
 
-  turboEvidence: (root, ref, task) =>
+  turboEvidence: (root, ref, task, changesetDir = DEFAULT_CHANGESET_DIR) =>
     Effect.gen(function*() {
       const head = yield* git.currentBranch().pipe(Effect.mapError(branchFault))
       const pinned = yield* turboPin(root)
@@ -61,7 +66,7 @@ const evidencePort = (git: GitPort, client: HttpClient.HttpClient): ChangeEviden
         )
       }
       const changed = yield* git.changedPaths(ref, head)
-      return yield* collectTurboEvidence(root, baseSha, task, pinned, changed)
+      return yield* collectTurboEvidence(root, baseSha, task, pinned, changed, changesetDir)
     }).pipe(Effect.provideService(HttpClient.HttpClient, client), Effect.provide(NodeServices.layer)),
 })
 
