@@ -16,6 +16,7 @@ import {
   RelativePath,
   type ReleaseCandidate,
   type ReleaseCheck,
+  type ReleaseConfig,
   ReleaseConfigStore,
   ReleaseReplayPort,
   RepoRoot,
@@ -66,23 +67,38 @@ const buildTask = (): TaskName => TaskName.make('build')
 
 type Requirements = ChangeEvidencePort | ReleaseReplayPort | ReleaseConfigStore | WorkspaceStore | ChangesetStore
 
-const baseDirOf = (
+interface BaseRelease {
+  readonly changesetDir: RelativePath
+  readonly surfaces: ReadonlyArray<string>
+}
+
+const surfacePathsOf = (versioning: ReleaseConfig['versioning']): ReadonlyArray<string> => {
+  const paths = versioning.surfaces.flatMap((surface): ReadonlyArray<string> => {
+    if (surface.path === undefined) return []
+    return [surface.path]
+  })
+  if (versioning.strategy === 'surfaces') return [versioning.manifest, ...paths]
+  return paths
+}
+
+const baseReleaseOf = (
   request: GateRequestInput,
   range: ChangeRange,
-): Effect.Effect<RelativePath, GateReadError, ChangeEvidencePort | ReleaseConfigStore> =>
+): Effect.Effect<BaseRelease, GateReadError, ChangeEvidencePort | ReleaseConfigStore> =>
   Effect.gen(function*() {
     const port = yield* ChangeEvidencePort
     const text = yield* port.fileAt(request.root, range.mergeBase, CONFIG_FILE)
-    if (text === undefined) return request.changesetDir
+    if (text === undefined) return { changesetDir: request.changesetDir, surfaces: [] }
     const store = yield* ReleaseConfigStore
     const config = yield* store.parseConfig(text, FsPath.make(`${range.mergeBase}:${CONFIG_FILE}`))
-    return config.changesetDir
+    return { changesetDir: config.changesetDir, surfaces: surfacePathsOf(config.versioning) }
   })
 
 const checksOf = (
   request: GateRequestInput,
   range: ChangeRange,
   dirs: IntentDirs,
+  surfaces: ReadonlyArray<string>,
   candidates: ReadonlyArray<ReleaseCandidate>,
 ): Effect.Effect<ReadonlyArray<ReleaseCheck>, GateReadError, ChangeEvidencePort | ReleaseReplayPort> =>
   Effect.gen(function*() {
@@ -93,7 +109,11 @@ const checksOf = (
         const outcome = yield* replay.replay(request.root, candidate)
         if (candidate.parent === range.mergeBase) return { candidate, outcome, staleSurfaces: [] }
         const since = yield* port.changes(request.root, candidate.parent, range.mergeBase)
-        return { candidate, outcome, staleSurfaces: staleSurfacesOf(since.map((change) => change.path), dirs) }
+        return {
+          candidate,
+          outcome,
+          staleSurfaces: staleSurfacesOf(since.map((change) => change.path), dirs, surfaces),
+        }
       }))
   })
 
@@ -117,6 +137,15 @@ const baseIntentsOf = (
       }))
   })
 
+const owedAtBaseOf = (
+  dirs: IntentDirs,
+  atBase: ReadonlyArray<RelativePath>,
+  touchedAtBase: ReadonlyArray<RelativePath>,
+): ReadonlyArray<RelativePath> => {
+  if (dirs.base === dirs.head) return touchedAtBase
+  return atBase
+}
+
 const turboWhenNeeded = (
   request: GateRequestInput,
   range: ChangeRange,
@@ -134,14 +163,21 @@ const read = (request: GateRequestInput): Effect.Effect<GateCommand, GateReadErr
     const range = yield* port.range(request.root, request.ref)
     if (request.strategy === 'paths') yield* port.refuseUnderTurbo(request.root, range)
     const commits = yield* port.commits(request.root, range)
-    const dirs: IntentDirs = { base: yield* baseDirOf(request, range), head: request.changesetDir }
+    const baseRelease = yield* baseReleaseOf(request, range)
+    const dirs: IntentDirs = { base: baseRelease.changesetDir, head: request.changesetDir }
     const atBase = (yield* port.filesIn(request.root, range.mergeBase, dirs.base)).filter((path) =>
       isIntentPath(dirs.base, path)
     )
-    const checks = yield* checksOf(request, range, dirs, releaseCandidatesOf(commits, atBase, dirs))
+    const checks = yield* checksOf(
+      request,
+      range,
+      dirs,
+      baseRelease.surfaces,
+      releaseCandidatesOf(commits, atBase, dirs),
+    )
     const net = yield* port.changes(request.root, range.mergeBase, range.head)
     const touchedAtBase = net.map((change) => change.path).filter((path) => atBase.includes(path))
-    const baseIntents = yield* baseIntentsOf(request, range, touchedAtBase)
+    const baseIntents = yield* baseIntentsOf(request, range, owedAtBaseOf(dirs, atBase, touchedAtBase))
     const workspace = yield* WorkspaceStore
     const store = yield* ChangesetStore
     const members = yield* workspace.listMembers()

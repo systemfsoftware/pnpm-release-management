@@ -27,8 +27,8 @@ const releaseCandidateOf = (
   if (parent === undefined || second !== undefined) return undefined
   const intentChanges = commit.changes.filter((change) => isIntentFile(dirs, change.path))
   if (intentChanges.some((change) => change.status !== 'deleted')) return undefined
-  const consumed = intentChanges.map((change) => change.path).filter((path) => baseIntents.includes(path))
-  if (consumed.length === 0) return undefined
+  const consumed = intentChanges.map((change) => change.path)
+  if (!consumed.some((path) => baseIntents.includes(path))) return undefined
   return {
     commit: commit.sha,
     parent,
@@ -87,9 +87,11 @@ const RELEASE_SURFACES: ReadonlyArray<string> = ['release.jsonc', 'pnpm-workspac
 export const staleSurfacesOf = (
   sinceParent: ReadonlyArray<RelativePath>,
   dirs: IntentDirs,
+  surfaces: ReadonlyArray<string>,
 ): ReadonlyArray<RelativePath> =>
   sinceParent.filter((path) =>
     RELEASE_SURFACES.includes(path) ||
+    surfaces.includes(path) ||
     path.endsWith('/package.json') ||
     (path.startsWith(`${dirs.base}/`) && !isIntentFile(dirs, path))
   )

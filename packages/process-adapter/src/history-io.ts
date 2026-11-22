@@ -73,10 +73,11 @@ export const changesBetween = (
   from: string,
   to: string,
 ): Effect.Effect<ReadonlyArray<PathChange>, GitFault, ChildProcessSpawner> =>
-  Effect.map(
-    gitText(root, ['diff-tree', '-r', '-z', '--no-renames', '--name-status', from, to]),
-    statusChanges,
-  )
+  Effect.gen(function*() {
+    const fork = yield* gitText(root, ['merge-base', from, to])
+    const text = yield* gitText(root, ['diff-tree', '-r', '-z', '--no-renames', '--name-status', fork.trim(), to])
+    return statusChanges(text)
+  })
 
 const namesBetween = (
   root: RepoRoot,

@@ -50,15 +50,19 @@ merge base and `HEAD` one at a time.
   check and names each path, so a manifest edit, a dropped sibling release or
   an extra file cannot ride in a release commit.
 - A release commit cut from an older base is refused when the base has since
-  changed `release.jsonc`, `pnpm-workspace.yaml`, any `package.json` or a
-  non-intent file in the changeset directory; regenerate the release.
+  changed `release.jsonc`, `pnpm-workspace.yaml`, any `package.json`, a version
+  surface `release.jsonc` names, or a non-intent file in the changeset
+  directory; regenerate the release. Commits between the base and the release
+  commit's parent belong to the change itself and do not make it stale.
 - Every other changed path belongs to the feature. Each publishable package
   that owns one (the deepest member directory wins) needs a live intent naming
   it, `none` included. A merge commit's own edits, beyond merging its parents,
   count as feature changes.
 - Intent edits may split, merge, move or rewrite intents, but each package must
   keep at least the highest bump that the merge-base intents changed or deleted
-  here still owed it, unless a verified release commit consumed them.
+  here still owed it, unless a verified release commit consumed them. Moving
+  the changeset directory carries every pending intent: each one at the old
+  directory still owes its bump.
 - Under the `turbo` gate a package whose task hash moved without it owning a
   changed path passes when every moved task it depends on is accounted for
   (named, released, or itself accounted for) and no feature-changed file

@@ -230,8 +230,7 @@ const turboAccountingOf = (comparison: TurboComparison, facts: PackageFacts): Tu
   return {
     moved: (name) =>
       taskMoved(idOf(name)) ||
-      (taskIn(comparison.head, idOf(name)) === undefined && taskIn(comparison.base, idOf(name)) === undefined &&
-        facts.ownsChange(name)),
+      (taskIn(comparison.head, idOf(name)) === undefined && facts.ownsChange(name)),
     accounted: (name) => !taskMoved(idOf(name)) || accounted.includes(idOf(name)),
   }
 }
