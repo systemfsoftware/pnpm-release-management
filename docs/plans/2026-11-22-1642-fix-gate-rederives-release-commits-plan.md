@@ -13,7 +13,7 @@ execution: code
 
 - **Objective:** a consumer's release PR passes `changeset-check.yml` on any branch, including a merge-queue draft, while no other change can drop, smuggle past or partially consume a pending intent, and a package moved only through an accounted upstream needs no intent of its own.
 - **Means:** each intent-consuming commit is replayed through the repository's own bump cell from its parent and must equal it byte for byte (KTD1); everything else is gated as a feature change (KTD2, KTD6).
-- **Authority:** the owner's ruling in the task (user-directed KTDs), then the Gemini rulings the owner delegated (user-approved KTDs), then `CONSTITUTION.md` and `CODING_STANDARDS.md`.
+- **Authority:** the maintainer's ruling in the task (user-directed KTDs), then the adversarial-review rulings the maintainer delegated (user-approved KTDs), then `CONSTITUTION.md` and `CODING_STANDARDS.md`.
 - **Stop conditions:** a settled decision proves infeasible; a grader would need weakening.
 - **Execution profile:** one PR on `feat-gate-rederive-release`, superseding #124; the executor opens it and watches CI.
 
@@ -27,7 +27,7 @@ execution: code
 
 ### Problem Frame
 
-The gate failed a release PR whenever it ran under a branch other than `changeset-release/main`, because consuming an intent deletes it (timescale-drizzle PR #32, run 45005781652 on `mergify/merge-queue/bd2037b94e`). #124 recognised a "release shape" by file kinds; Gemini's red team showed it lets a non-release PR delete an intent and smuggle manifest edits, drops siblings of a partially consumed intent, refuses legitimate surfaces and batched drafts, and keeps failing transitive dependents under turbo.
+The gate failed a release PR whenever it ran under a branch other than `changeset-release/main`, because consuming an intent deletes it (timescale-drizzle PR #32, run 45005781652 on `mergify/merge-queue/bd2037b94e`). #124 recognised a "release shape" by file kinds; an adversarial review showed it lets a non-release PR delete an intent and smuggle manifest edits, drops siblings of a partially consumed intent, refuses legitimate surfaces and batched drafts, and keeps failing transitive dependents under turbo.
 
 ### Requirements
 
@@ -73,7 +73,7 @@ The gate failed a release PR whenever it ran under a branch other than `changese
 
 - KTD1. **Replay oracle in a temporary worktree.** `git worktree add --detach <tmp> <parent>`, delete the intents the commit does not consume, run `bumpCell` in-process with the stores rooted at `<tmp>` and `<tmp>`'s `release.jsonc`, restore the removed intents, stage exactly as `commitRelease` does (`git add --update`, then the untracked paths among the created changelogs derived by one shared function that `pr` also uses), `git write-tree` with `core.autocrlf=false`, compare with the commit's tree, list divergence with `git diff-tree -r --name-only`. (session-settled: user-directed — chosen over #124's path heuristic: smuggling, partial consumption and rejected surfaces.)
 - KTD2. **Per-commit decomposition.** `git rev-list --parents H ^B`. Non-merge commits are diffed against their parent with `--no-renames`. A two-parent merge's residue is the diff between `git merge-tree --write-tree p1 p2` (exit 0 or 1) and the merge tree; an octopus's residue is every path it changes against its first parent. Residues are feature-owned. (session-settled: user-approved — chosen over a whole-range replay: batches mix feature merges and the release commit.)
-- KTD3. **Release detection by replay; intent edits by (package, bump) conservation.** Conservation is computed once over the range (R5) as a per-package highest-bump comparison, the multiset rule settled with Gemini made exact for merged duplicates, in-place edits and multi-commit rewrites. (session-settled: user-approved — chosen over git rename detection and 1-to-1 pairing: splitting or merging intents would read as consumption.)
+- KTD3. **Release detection by replay; intent edits by (package, bump) conservation.** Conservation is computed once over the range (R5) as a per-package highest-bump comparison, the multiset rule settled in review made exact for merged duplicates, in-place edits and multi-commit rewrites. (session-settled: user-approved — chosen over git rename detection and 1-to-1 pairing: splitting or merging intents would read as consumption.)
 - KTD4. **Staleness check (R3).** (session-settled: user-approved — chosen over replaying at the merge base: the oracle must start from the commit's own parent.)
 - KTD5. **Fail-closed ownership (R6).** (session-settled: user-approved — chosen over defaulting unexplained paths to release-owned: criss-cross merge bases leave paths no listed commit touches.)
 - KTD6. **Turbo accounting as a least fixpoint over every moved task dependency (R8).** (session-settled: user-approved — chosen over "some moved dependency": a bundled private upstream would ship unreleased.)
@@ -171,7 +171,7 @@ Never run `pnpm check:ci` or the container e2e locally.
 
 ## Definition of Done
 
-| Gemini finding                                                                   | Answered by              |
+| Review finding                                                                   | Answered by              |
 | -------------------------------------------------------------------------------- | ------------------------ |
 | P0-1 transitive dependents                                                       | R8, KTD6                 |
 | P0-2 smuggling via a deleted intent                                              | R1, R5, KTD1             |
@@ -180,6 +180,6 @@ Never run `pnpm check:ci` or the container e2e locally.
 | P1 renamed intent; changesetDir; piggyback; surfaces and root; merge base vs ref | R4/R5; R10; R1; KTD1; R9 |
 | P2 nested workspaces; `none` asymmetry; malformed deleted intent                 | R7; R5; R5 and R2        |
 
-- Every R has a test that fails when it breaks; each Gemini finding (P0-1..P0-4, P1, P2) maps to a named test in the PR body.
+- Every R has a test that fails when it breaks; each review finding (P0-1..P0-4, P1, P2) maps to a named test in the PR body.
 - The PR is open by the bot, names #124 as superseded, pastes the end-to-end output, and its checks are green.
 - No abandoned-attempt code in the diff; the learning is in `docs/solutions/`.
