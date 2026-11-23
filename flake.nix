@@ -162,6 +162,10 @@
 
                   ms@2.1.3: {}
               '';
+              scopedParser = import ./nix/lib/pnpm-lock.nix {
+                inherit (pkgs) lib;
+                registries = parser.registriesFromNpmrc "@thing:registry=https://registry.example.test:4873/\nstrict-peer-dependencies=true\n";
+              };
               accepted = builtins.tryEval (builtins.deepSeq (parser.tarballCacheData unresolvedFixture) true);
               expectedCache = {
                 "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz" = { hash = "sha512-wells-formed-ms-integrity"; };
@@ -177,6 +181,21 @@
                 || throw "pnpm-lock.nix: unresolvedPackages did not report the entry with no resolution";
               assert parser.tarballCacheData wellFormedFixture == expectedCache
                 || throw "pnpm-lock.nix: a well-formed lockfile did not produce the expected tarball cache";
+              assert parser.registriesFromNpmrc "@thing:registry=https://registry.example.test:4873/\nstrict-peer-dependencies=true\n"
+                == { "@thing" = "https://registry.example.test:4873/"; }
+                || throw "pnpm-lock.nix: registriesFromNpmrc did not read the scope's registry line";
+              assert scopedParser.tarballCacheData wellFormedFixture == expectedCache
+                || throw "pnpm-lock.nix: a registry line for an unrelated scope changed a URL";
+              assert (import ./nix/lib/pnpm-lock.nix {
+                inherit (pkgs) lib;
+                registries = { "@scope" = "https://registry.example.test:4873/"; };
+              }).tarballCacheData wellFormedFixture == {
+                "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz" = { hash = "sha512-wells-formed-ms-integrity"; };
+                "https://registry.example.test:4873/@scope/thing/-/thing-2.0.0.tgz" = {
+                  hash = "sha512-wells-formed-thing-integrity";
+                };
+              }
+                || throw "pnpm-lock.nix: a scoped package did not take its scope's registry URL";
               "touch $out\n"
             );
 

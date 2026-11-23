@@ -20,7 +20,13 @@ let
   supported = if workspaceFile == null || !(builtins.pathExists workspaceFile)
     then { }
     else platforms.fromWorkspace workspaceFile;
-  tarballCacheData = (import ./pnpm-lock.nix { inherit (pkgs) lib; }).tarballCacheDataFor supported lockFile;
+  # A scope the repository routes to its own registry (`@scope:registry=` in the .npmrc beside the lockfile) is fetched
+  # from there; every other package keeps the public registry's URL.
+  npmrcFile = src + "/.npmrc";
+  registries =
+    if pkgs.lib.isDerivation src || !(builtins.pathExists npmrcFile) then { }
+    else (import ./pnpm-lock.nix { inherit (pkgs) lib; }).registriesFromNpmrc (builtins.readFile npmrcFile);
+  tarballCacheData = (import ./pnpm-lock.nix { inherit (pkgs) lib; inherit registries; }).tarballCacheDataFor supported lockFile;
 
   # One fixed-output derivation per tarball, keyed by the integrity the lockfile
   # records. mitm-cache replays them as a registry, so pnpm installs offline.

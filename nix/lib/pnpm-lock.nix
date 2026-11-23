@@ -8,6 +8,9 @@
 # the tarball cache and the store stay ordinary per-system derivations.
 {
   lib,
+  # Scope -> registry URL (`{ "@younna-ai" = "https://host:4873/"; }`). pnpm writes no `tarball:` for a package a
+  # scoped registry serves, so without this its tarball URL is the public registry's and the fetch cannot find it.
+  registries ? { },
 }:
 let
   trim = lib.trim;
@@ -172,7 +175,12 @@ let
     else if lib.hasPrefix "http" version then
       version
     else
-      "https://registry.npmjs.org/${scopedName}/-/${packageName}-${version}.tgz";
+      let
+        scope = if lib.hasPrefix "@" scopedName then builtins.head (lib.splitString "/" scopedName) else null;
+        registry = if scope != null then registries.${scope} or null else null;
+        base = if registry != null then lib.removeSuffix "/" registry else "https://registry.npmjs.org";
+      in
+      "${base}/${scopedName}/-/${packageName}-${version}.tgz";
 
   integrityOf =
     name: resolution:
@@ -197,6 +205,18 @@ let
       (fetched supported lockFile);
 in
 {
+  # The `@scope:registry=URL` lines of an .npmrc, as the `registries` argument takes them.
+  registriesFromNpmrc =
+    npmrc:
+    lib.listToAttrs (
+      lib.concatMap (
+        line:
+        let
+          m = builtins.match "[[:space:]]*(@[^:[:space:]]+):registry[[:space:]]*=[[:space:]]*([^[:space:]]+)[[:space:]]*" line;
+        in
+        if m == null then [ ] else [ (lib.nameValuePair (builtins.elemAt m 0) (builtins.elemAt m 1)) ]
+      ) (lib.splitString "\n" npmrc)
+    );
   # Names of `packages:` entries that carry no `resolution:` line, for callers
   # and checks that want the list without triggering the throw in `packagesOf`.
   inherit unresolvedPackages;
