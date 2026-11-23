@@ -1,5 +1,7 @@
 # Review
 
+@repos/constitution/REVIEW.md
+@repos/constitution/CODING_STANDARDS.md
 @CODING_STANDARDS.md
 
 ## Severity
