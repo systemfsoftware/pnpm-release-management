@@ -1,8 +1,8 @@
 {
   "devDependencies": {
-    "@commitlint/cli": "^21.2.1",
-    "@commitlint/config-conventional": "^21.2.0",
-    "@commitlint/types": "^21.2.0",
+    "@commitlint/cli": "^21.2.4",
+    "@commitlint/config-conventional": "^21.2.4",
+    "@commitlint/types": "^21.2.3",
     "@effect/tsgo": "0.50.0",
     "@effect/vitest": "4.0.0-rc.112",
     "@systemfsoftware/all": "1.1.3",
