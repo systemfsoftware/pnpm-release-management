@@ -205,16 +205,18 @@ let
       (fetched supported lockFile);
 in
 {
-  # The `@scope:registry=URL` lines of an .npmrc, as the `registries` argument takes them.
+  # The `@scope:registry=URL` lines of an .npmrc, as the `registries` argument takes them. As npm's ini reader does, a
+  # value may be quoted, an unquoted value ends at a `#` or `;` comment, and a later line for a scope wins.
   registriesFromNpmrc =
     npmrc:
-    lib.listToAttrs (
+    lib.foldl' (acc: pair: acc // { ${pair.name} = pair.value; }) { } (
       lib.concatMap (
         line:
         let
-          m = builtins.match "[[:space:]]*(@[^:[:space:]]+):registry[[:space:]]*=[[:space:]]*([^[:space:]]+)[[:space:]]*" line;
+          m = builtins.match ''[[:space:]]*(@[^:[:space:]]+):registry[[:space:]]*=[[:space:]]*("([^"]*)"|'([^']*)'|([^[:space:]#;]+))[[:space:]]*([#;].*)?'' line;
+          value = lib.findFirst (v: v != null) null [ (builtins.elemAt m 2) (builtins.elemAt m 3) (builtins.elemAt m 4) ];
         in
-        if m == null then [ ] else [ (lib.nameValuePair (builtins.elemAt m 0) (builtins.elemAt m 1)) ]
+        if m == null then [ ] else [ (lib.nameValuePair (builtins.elemAt m 0) value) ]
       ) (lib.splitString "\n" npmrc)
     );
   # Names of `packages:` entries that carry no `resolution:` line, for callers
