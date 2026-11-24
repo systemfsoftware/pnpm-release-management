@@ -202,6 +202,9 @@
                 @f:registry=https://f.example.test/
                 @f:registry=
                 @g:registry="https://g.example.test/
+                @h:registry= ;
+                @i:registry=https://i.example.test/
+                @i:registry=" # an unclosed quote before a comment is skipped
               '')
                 == {
                   "@a" = "https://a.example.test/";
@@ -209,6 +212,7 @@
                   "@c" = "https://c.example.test/";
                   "@d" = "https://last.example.test/";
                   "@e" = "https://e.example.test/npm#v1";
+                  "@i" = "https://i.example.test/";
                 }
                 || throw "pnpm-lock.nix: registriesFromNpmrc misread a commented, quoted, repeated, emptied or unclosed scope line";
               assert (routedStore { }).tarballCacheData == {
