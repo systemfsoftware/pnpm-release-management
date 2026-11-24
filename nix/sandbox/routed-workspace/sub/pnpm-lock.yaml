@@ -1,0 +1,10 @@
+lockfileVersion: '9.0'
+
+packages:
+
+  '@scope/thing@2.0.0':
+    resolution: {integrity: sha512-routed-thing-integrity}
+
+snapshots:
+
+  '@scope/thing@2.0.0': {}
