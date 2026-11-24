@@ -11,8 +11,9 @@
   # src, e.g. { ".deps" = <derivation holding *.tgz>; }. They have no URL
   # to fetch, so the store takes them from here.
   files ? { },
-  # Scope -> registry URL, for a caller whose .npmrc is not beside the lockfile in a source tree (a derivation src).
-  # By default the `@scope:registry=` lines of the .npmrc beside the lockfile.
+  # Scope -> registry URL. By default the `@scope:registry=` lines of src's .npmrc, which the store's `pnpm install`
+  # reads because it runs at src's root whatever lockFile is. A caller whose src is a derivation (so its .npmrc cannot be
+  # read at evaluation time) passes them here; a value given here replaces the .npmrc's lines entirely.
   registries ? null,
 }:
 let
@@ -23,10 +24,10 @@ let
   supported = if workspaceFile == null || !(builtins.pathExists workspaceFile)
     then { }
     else platforms.fromWorkspace workspaceFile;
-  # A scope the repository routes to its own registry (`@scope:registry=` in the .npmrc beside the lockfile) is fetched
-  # from there; every other package keeps the public registry's URL.
+  # A scope the repository routes to its own registry (`@scope:registry=` in src's .npmrc) is fetched from there; every
+  # other package keeps the public registry's URL.
   pnpmLock = import ./pnpm-lock.nix { inherit (pkgs) lib; };
-  npmrcFile = dirOf lockFile + "/.npmrc";
+  npmrcFile = src + "/.npmrc";
   routed =
     if registries != null then registries
     else if pkgs.lib.isDerivation src || !(builtins.pathExists npmrcFile) then { }

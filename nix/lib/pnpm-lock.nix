@@ -206,18 +206,19 @@ let
 in
 {
   # The `@scope:registry=URL` lines of an .npmrc, as the `registries` argument takes them. As npm's ini reader does, a
-  # value may be quoted, an unquoted value ends at a `#` or `;` comment, and a later line for a scope wins.
+  # value may be quoted, a comment starts at a `#` or `;` after whitespace, an empty value unsets the scope, and a later
+  # line for a scope wins. A line this cannot read (an unclosed quote) is skipped, as no registry.
   registriesFromNpmrc =
     npmrc:
-    lib.foldl' (acc: pair: acc // { ${pair.name} = pair.value; }) { } (
+    lib.foldl' (acc: pair: if pair.value == "" then removeAttrs acc [ pair.name ] else acc // { ${pair.name} = pair.value; }) { } (
       lib.concatMap (
         line:
         let
-          m = builtins.match ''[[:space:]]*(@[^:[:space:]]+):registry[[:space:]]*=[[:space:]]*("([^"]*)"|'([^']*)'|([^[:space:]#;]+))[[:space:]]*([#;].*)?'' line;
-          value = lib.findFirst (v: v != null) null [ (builtins.elemAt m 2) (builtins.elemAt m 3) (builtins.elemAt m 4) ];
+          m = builtins.match ''[[:space:]]*(@[^:[:space:]]+):registry[[:space:]]*=[[:space:]]*("([^"]*)"|'([^']*)'|([^[:space:]"']*))([[:space:]]+[#;].*)?[[:space:]]*'' line;
+          value = lib.findFirst (v: v != null) "" [ (builtins.elemAt m 2) (builtins.elemAt m 3) (builtins.elemAt m 4) ];
         in
         if m == null then [ ] else [ (lib.nameValuePair (builtins.elemAt m 0) value) ]
-      ) (lib.splitString "\n" npmrc)
+      ) (lib.splitString "\n" (lib.removePrefix (builtins.fromJSON ''"\ufeff"'') npmrc))
     );
   # Names of `packages:` entries that carry no `resolution:` line, for callers
   # and checks that want the list without triggering the throw in `packagesOf`.

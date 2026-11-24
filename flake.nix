@@ -192,28 +192,33 @@
               assert parser.registriesFromNpmrc "@thing:registry=https://registry.example.test:4873/\nstrict-peer-dependencies=true\n"
                 == { "@thing" = "https://registry.example.test:4873/"; }
                 || throw "pnpm-lock.nix: registriesFromNpmrc did not read the scope's registry line";
-              assert parser.registriesFromNpmrc ''
+              assert parser.registriesFromNpmrc (builtins.fromJSON ''"\ufeff"'' + ''
                 @a:registry=https://a.example.test/ # routed to a
                 @b:registry="https://b.example.test/"
                 @c:registry='https://c.example.test/' ; quoted
                 @d:registry=https://first.example.test/
                 @d:registry=https://last.example.test/
-              ''
+                @e:registry=https://e.example.test/npm#v1
+                @f:registry=https://f.example.test/
+                @f:registry=
+                @g:registry="https://g.example.test/
+              '')
                 == {
                   "@a" = "https://a.example.test/";
                   "@b" = "https://b.example.test/";
                   "@c" = "https://c.example.test/";
                   "@d" = "https://last.example.test/";
+                  "@e" = "https://e.example.test/npm#v1";
                 }
-                || throw "pnpm-lock.nix: registriesFromNpmrc misread a commented, quoted or repeated scope line";
+                || throw "pnpm-lock.nix: registriesFromNpmrc misread a commented, quoted, repeated, emptied or unclosed scope line";
               assert (routedStore { }).tarballCacheData == {
                 "https://registry.example.test:4873/@scope/thing/-/thing-2.0.0.tgz" = { hash = "sha512-routed-thing-integrity"; };
               }
-                || throw "pnpm-store.nix: the .npmrc beside a lockfile in a subdirectory did not route its scope";
+                || throw "pnpm-store.nix: src's .npmrc did not route the scope of a lockfile kept outside src's root";
               assert (routedStore { registries = { "@scope" = "https://given.example.test/"; }; }).tarballCacheData == {
                 "https://given.example.test/@scope/thing/-/thing-2.0.0.tgz" = { hash = "sha512-routed-thing-integrity"; };
               }
-                || throw "pnpm-store.nix: an explicit registries argument did not route its scope";
+                || throw "pnpm-store.nix: an explicit registries argument did not replace src's .npmrc";
               assert scopedParser.tarballCacheData wellFormedFixture == expectedCache
                 || throw "pnpm-lock.nix: a registry line for an unrelated scope changed a URL";
               assert (import ./nix/lib/pnpm-lock.nix {
