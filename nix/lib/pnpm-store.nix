@@ -11,6 +11,10 @@
   # src, e.g. { ".deps" = <derivation holding *.tgz>; }. They have no URL
   # to fetch, so the store takes them from here.
   files ? { },
+  # Scope -> registry URL. By default the `@scope:registry=` lines of src's .npmrc, which the store's `pnpm install`
+  # reads because it runs at src's root whatever lockFile is. A caller whose src is a derivation (so its .npmrc cannot be
+  # read at evaluation time) passes them here; a value given here replaces the .npmrc's lines entirely.
+  registries ? null,
 }:
 let
   platforms = import ./pnpm-platforms.nix {
@@ -20,7 +24,15 @@ let
   supported = if workspaceFile == null || !(builtins.pathExists workspaceFile)
     then { }
     else platforms.fromWorkspace workspaceFile;
-  tarballCacheData = (import ./pnpm-lock.nix { inherit (pkgs) lib; }).tarballCacheDataFor supported lockFile;
+  # A scope the repository routes to its own registry (`@scope:registry=` in src's .npmrc) is fetched from there; every
+  # other package keeps the public registry's URL.
+  pnpmLock = import ./pnpm-lock.nix { inherit (pkgs) lib; };
+  npmrcFile = src + "/.npmrc";
+  routed =
+    if registries != null then registries
+    else if pkgs.lib.isDerivation src || !(builtins.pathExists npmrcFile) then { }
+    else pnpmLock.registriesFromNpmrc (builtins.readFile npmrcFile);
+  tarballCacheData = (import ./pnpm-lock.nix { inherit (pkgs) lib; registries = routed; }).tarballCacheDataFor supported lockFile;
 
   # One fixed-output derivation per tarball, keyed by the integrity the lockfile
   # records. mitm-cache replays them as a registry, so pnpm installs offline.
@@ -59,5 +71,5 @@ let
   };
 in
 {
-  inherit mitmCache store copyFiles;
+  inherit mitmCache store copyFiles tarballCacheData;
 }

@@ -1,10 +1,14 @@
 import { Context, type Effect } from 'effect'
 import type { ConfigRefusal, ReleaseConfig } from './Config.schema.js'
-import type { RepoRoot } from './Workspace.schema.js'
+import type { FsPath, RepoRoot } from './Workspace.schema.js'
 
 export interface ReleaseConfigStore {
   readonly loadConfig: (
     root: RepoRoot,
+  ) => Effect.Effect<ReleaseConfig, ConfigRefusal, never>
+  readonly parseConfig: (
+    text: string,
+    file: FsPath,
   ) => Effect.Effect<ReleaseConfig, ConfigRefusal, never>
 }
 

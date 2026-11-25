@@ -8,6 +8,9 @@
 # the tarball cache and the store stay ordinary per-system derivations.
 {
   lib,
+  # Scope -> registry URL (`{ "@younna-ai" = "https://host:4873/"; }`). pnpm writes no `tarball:` for a package a
+  # scoped registry serves, so without this its tarball URL is the public registry's and the fetch cannot find it.
+  registries ? { },
 }:
 let
   trim = lib.trim;
@@ -172,7 +175,12 @@ let
     else if lib.hasPrefix "http" version then
       version
     else
-      "https://registry.npmjs.org/${scopedName}/-/${packageName}-${version}.tgz";
+      let
+        scope = if lib.hasPrefix "@" scopedName then builtins.head (lib.splitString "/" scopedName) else null;
+        registry = if scope != null then registries.${scope} or null else null;
+        base = if registry != null then lib.removeSuffix "/" registry else "https://registry.npmjs.org";
+      in
+      "${base}/${scopedName}/-/${packageName}-${version}.tgz";
 
   integrityOf =
     name: resolution:
@@ -197,6 +205,21 @@ let
       (fetched supported lockFile);
 in
 {
+  # The `@scope:registry=URL` lines of an .npmrc, as the `registries` argument takes them. As npm's ini reader does, a
+  # value may be quoted, a comment starts at a `#` or `;` that begins the value or follows whitespace, an empty value unsets the scope, and a later
+  # line for a scope wins. A line this cannot read (an unclosed quote) is skipped, as no registry.
+  registriesFromNpmrc =
+    npmrc:
+    lib.foldl' (acc: pair: if pair.value == "" then removeAttrs acc [ pair.name ] else acc // { ${pair.name} = pair.value; }) { } (
+      lib.concatMap (
+        line:
+        let
+          m = builtins.match ''[[:space:]]*(@[^:[:space:]]+):registry[[:space:]]*=[[:space:]]*("([^"]*)"|'([^']*)'|([^[:space:]"'#;][^[:space:]"']*)|)([[:space:]]*[#;].*)?[[:space:]]*'' line;
+          value = lib.findFirst (v: v != null) "" [ (builtins.elemAt m 2) (builtins.elemAt m 3) (builtins.elemAt m 4) ];
+        in
+        if m == null then [ ] else [ (lib.nameValuePair (builtins.elemAt m 0) value) ]
+      ) (lib.splitString "\n" (lib.removePrefix (builtins.fromJSON ''"\ufeff"'') npmrc))
+    );
   # Names of `packages:` entries that carry no `resolution:` line, for callers
   # and checks that want the list without triggering the throw in `packagesOf`.
   inherit unresolvedPackages;

@@ -1,6 +1,6 @@
 import { Cell, Wire } from '@systemfsoftware/effect-cell-types'
 import type { IntentRefusal, MemberRefusal, PullRequestRefusal, TagRefusal } from '@systemfsoftware/release-language'
-import { memberChangelogPathOf } from '@systemfsoftware/release-language'
+import { releaseCreatedPaths } from '@systemfsoftware/release-language'
 import {
   ChangesetStore,
   Count,
@@ -78,12 +78,7 @@ const read = (
     const changes = yield* git.trackedChanges()
     const storage = yield* workspace.changelogStorage()
     const members = yield* workspace.listMembers()
-    const created = members.map((member) =>
-      memberChangelogPathOf(storage, request.changelogDir, member, member.manifest.version)
-    )
-    if (request.rootChangelog !== undefined) {
-      created.push(request.rootChangelog)
-    }
+    const created = releaseCreatedPaths(storage, request.changelogDir, members, request.rootChangelog)
     const slug = yield* git.repoSlug()
     const existing = yield* forge.openPullRequest(slug, request.branch)
     const body = yield* readBody(workspace, request.body, request.bodyFile)

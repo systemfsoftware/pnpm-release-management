@@ -1,18 +1,12 @@
 import { Context, type Effect, type Option } from 'effect'
 import type { PrTitle } from './Config.schema.js'
-import type { GateRefusal } from './Gate.schema.js'
 import type { BranchDeleted, PullRequestRefusal } from './PullRequest.schema.js'
 import type { StagedChecksRefusal, StagedPath } from './StagedChecks.schema.js'
 import type { CommitSha, RemoteName, RepoSlug, TaggedTree, TagRefusal } from './Tag.schema.js'
 import type { Count, GitRef, RelativePath, ReleaseTag } from './Workspace.schema.js'
 
 export interface GitPort {
-  readonly currentBranch: () => Effect.Effect<GitRef, TagRefusal, never>
   readonly headSha: () => Effect.Effect<CommitSha, TagRefusal, never>
-  readonly changedPaths: (
-    base: GitRef,
-    head: GitRef,
-  ) => Effect.Effect<ReadonlyArray<RelativePath>, GateRefusal, never>
   readonly remoteTags: (
     remote: RemoteName,
   ) => Effect.Effect<ReadonlyArray<ReleaseTag>, TagRefusal, never>

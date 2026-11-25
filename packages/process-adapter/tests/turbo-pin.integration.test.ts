@@ -2,9 +2,8 @@ import { NodeServices } from '@effect/platform-node'
 import { Gherkin, Given, it, layer, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
 import {
   ChangeEvidencePort,
-  EvidenceCommandFailed,
+  CommitSha,
   GitRef,
-  RelativePath,
   RepoRoot,
   TaskName,
   TurboPinUnusable,
@@ -13,7 +12,6 @@ import { Cause, Effect, Exit, Option } from 'effect'
 import { FileSystem } from 'effect/FileSystem'
 import { Path } from 'effect/Path'
 import { expect } from 'vitest'
-import { fakeGitChanging, FakeGitOnMain } from './__fixtures__/FakeGitPort.js'
 import { git } from './__fixtures__/real-git.js'
 import { evidenceServing, serveTurbo } from './__fixtures__/served-turbo.js'
 
@@ -21,7 +19,6 @@ const Feature = makeFeature({ it, layer })
 
 const TURBO = '2.10.1'
 const OTHER_TURBO = '2.10.0'
-const CHANGED = [RelativePath.make('packages/pub/index.js')]
 
 const lockfile = (packages?: string): string => {
   const head = [
@@ -122,10 +119,17 @@ const removeRepository = (root: string) =>
   Effect.flatMap(FileSystem, (fs) => fs.remove(root, { recursive: true, force: true }))
 
 const turboEvidenceAt = (root: string, ref: string) =>
-  Effect.flatMap(
-    ChangeEvidencePort,
-    (port) => port.turboEvidence(RepoRoot.make(root), GitRef.make(ref), TaskName.make('build')),
-  )
+  Effect.gen(function*() {
+    const port = yield* ChangeEvidencePort
+    const range = yield* port.range(RepoRoot.make(root), GitRef.make(ref))
+    return yield* port.turbo(RepoRoot.make(root), range, TaskName.make('build'))
+  })
+
+const turboOutsideARepository = (root: string) =>
+  Effect.flatMap(ChangeEvidencePort, (port) => {
+    const sha = CommitSha.make('0'.repeat(40))
+    return port.turbo(RepoRoot.make(root), { head: sha, base: sha, mergeBase: sha }, TaskName.make('build'))
+  })
 
 const refusalOf = <E>(exit: Exit.Exit<unknown, E>): E | undefined =>
   Exit.match(exit, {
@@ -167,11 +171,10 @@ Feature('Turbo change evidence runs the turbo the lockfile pins').body(({ scenar
         'refusals',
         (s) =>
           Effect.gen(function*() {
-            const provided = evidenceServing(FakeGitOnMain)
             const collect = (shape: Shape) =>
-              Effect.exit(turboEvidenceAt(s.dirs.dir(shape), 'main')).pipe(
+              Effect.exit(turboOutsideARepository(s.dirs.dir(shape))).pipe(
                 Effect.map(refusalOf),
-                Effect.provide(provided),
+                Effect.provide(evidenceServing),
               )
             return {
               stream: yield* collect('stream'),
@@ -181,11 +184,11 @@ Feature('Turbo change evidence runs the turbo the lockfile pins').body(({ scenar
           }),
       ),
       Then(
-        'both lockfile shapes pass the pin and stop at git, the env-only stream is refused at the pin, and no registry is asked',
+        'both lockfile shapes pass the pin and stop at the missing platform package, the env-only stream is refused at the pin, and no registry is asked',
       )((s) =>
         Effect.gen(function*() {
-          expect(s.refusals.stream).toBeInstanceOf(EvidenceCommandFailed)
-          expect(s.refusals.single).toBeInstanceOf(EvidenceCommandFailed)
+          expect(detailOf(s.refusals.stream)).toContain('records no integrity')
+          expect(detailOf(s.refusals.single)).toContain('records no integrity')
           expect(s.refusals.unpinned).toBeInstanceOf(TurboPinUnusable)
           expect(detailOf(s.refusals.unpinned)).toBe(
             "change-evidence: no lockfileVersion 9.0 document in pnpm-lock.yaml pins 'turbo' as a root devDependency",
@@ -208,16 +211,17 @@ Feature('Turbo change evidence runs the turbo the lockfile pins').body(({ scenar
         'evidence',
         (s) =>
           turboEvidenceAt(s.fixture.root, 'base').pipe(
-            Effect.provide(evidenceServing(fakeGitChanging(CHANGED))),
+            Effect.provide(evidenceServing),
           ),
       ),
-      Then('the fetched binary judges both sides, the pin is the engine version, and the registry was asked once')(
+      Then('the fetched binary runs on both sides, the changed package moves, and the registry was asked once')(
         (s) =>
           Effect.gen(function*() {
             const fs = yield* FileSystem
-            expect(s.evidence.members.map((member) => member.name)).toEqual(['@t/pub'])
-            expect(s.evidence.touched).toEqual(['@t/pub'])
-            expect(s.evidence.raw).toMatchObject({ strategy: 'turbo', engineVersion: TURBO })
+            const hashes = (run: typeof s.evidence.head) => run.tasks.map((task) => [task.package, task.hash])
+            expect(hashes(s.evidence.head).map(([name]) => name)).toEqual(['@t/pub'])
+            expect(hashes(s.evidence.base)).not.toEqual(hashes(s.evidence.head))
+            expect(s.evidence.head.tasks[0]?.taskId).toBe('@t/pub#build')
             expect(s.fixture.served.requests).toEqual([new URL(s.fixture.served.url).pathname])
             expect(yield* fs.exists(`${s.fixture.root}/node_modules`)).toBe(false)
             yield* removeRepository(s.fixture.root)
@@ -238,7 +242,7 @@ Feature('Turbo change evidence runs the turbo the lockfile pins').body(({ scenar
         'exit',
         (s) =>
           Effect.exit(turboEvidenceAt(s.fixture.root, 'base')).pipe(
-            Effect.provide(evidenceServing(fakeGitChanging(CHANGED))),
+            Effect.provide(evidenceServing),
           ),
       ),
       Then('the refusal names the reported version and the pinned one')((s) =>
@@ -266,7 +270,7 @@ Feature('Turbo change evidence runs the turbo the lockfile pins').body(({ scenar
         'exit',
         (s) =>
           Effect.exit(turboEvidenceAt(s.fixture.root, 'base')).pipe(
-            Effect.provide(evidenceServing(fakeGitChanging(CHANGED))),
+            Effect.provide(evidenceServing),
           ),
       ),
       Then('the refusal names the fetched integrity against the recorded one')((s) =>
@@ -294,7 +298,7 @@ Feature('Turbo change evidence runs the turbo the lockfile pins').body(({ scenar
         'exit',
         (s) =>
           Effect.exit(turboEvidenceAt(s.fixture.root, 'base')).pipe(
-            Effect.provide(evidenceServing(fakeGitChanging(CHANGED))),
+            Effect.provide(evidenceServing),
           ),
       ),
       Then('the refusal names the package and the platform, and the registry is never asked')((s) =>
@@ -323,7 +327,7 @@ Feature('Turbo change evidence runs the turbo the lockfile pins').body(({ scenar
         'exit',
         (s) =>
           Effect.exit(turboEvidenceAt(s.fixture.root, 'base')).pipe(
-            Effect.provide(evidenceServing(fakeGitChanging(CHANGED))),
+            Effect.provide(evidenceServing),
           ),
       ),
       Then('the refusal names the pin and the URL it came from, and the registry was asked once')(

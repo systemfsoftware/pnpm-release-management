@@ -1,44 +1,14 @@
 import { NodeServices } from '@effect/platform-node'
 import { Gherkin, Given, it, layer, makeFeature, Then, When } from '@systemfsoftware/effect-gherkin-spec'
-import {
-  type ChangeEvidence,
-  ChangeEvidencePort,
-  GitRef,
-  RelativePath,
-  RepoRoot,
-  TaskName,
-} from '@systemfsoftware/release-language'
+import { ChangeEvidencePort, GitRef, RepoRoot } from '@systemfsoftware/release-language'
 import { Effect } from 'effect'
 import { FileSystem } from 'effect/FileSystem'
 import { Path } from 'effect/Path'
 import { expect } from 'vitest'
-import { fakeGitChanging } from './__fixtures__/FakeGitPort.js'
 import { git } from './__fixtures__/real-git.js'
-import { evidenceServing, serveTurbo } from './__fixtures__/served-turbo.js'
+import { evidenceServing } from './__fixtures__/served-turbo.js'
 
 const Feature = makeFeature({ it, layer })
-
-const TURBO = '2.10.1'
-
-const lockfile = (packages: string): string =>
-  [
-    "lockfileVersion: '9.0'",
-    '',
-    'importers:',
-    '',
-    '  .:',
-    '    devDependencies:',
-    '      turbo:',
-    `        specifier: ^${TURBO}`,
-    `        version: ${TURBO}`,
-    '',
-    'packages:',
-    '',
-    packages,
-    '',
-  ].join('\n')
-
-const CHANGED = [RelativePath.make('packages/gone/index.js'), RelativePath.make('packages/gone/package.json')]
 
 const GONE = [
   { kind: 'private', manifest: { name: '@t/gone', version: '1.0.0', private: true } },
@@ -47,7 +17,6 @@ const GONE = [
 
 const repositoryDeleting = (gone: (typeof GONE)[number]['manifest']) =>
   Effect.gen(function*() {
-    const served = yield* serveTurbo({ pin: TURBO })
     const fs = yield* FileSystem
     const path = yield* Path
     const root = yield* fs.makeTempDirectory({ prefix: 'deleted-packages-' })
@@ -56,7 +25,6 @@ const repositoryDeleting = (gone: (typeof GONE)[number]['manifest']) =>
         fs.makeDirectory(path.dirname(path.join(root, file)), { recursive: true }),
         () => fs.writeFileString(path.join(root, file), text),
       )
-    yield* write('pnpm-lock.yaml', lockfile(served.packagesYaml()))
     yield* write('packages/keep/package.json', JSON.stringify({ name: '@t/keep', version: '1.0.0' }))
     yield* write('packages/gone/package.json', JSON.stringify(gone))
     yield* write('packages/gone/index.js', 'export const gone = 1\n')
@@ -67,58 +35,47 @@ const repositoryDeleting = (gone: (typeof GONE)[number]['manifest']) =>
     yield* fs.remove(path.join(root, 'packages/gone'), { recursive: true })
     yield* git(root, 'add', '-A')
     yield* git(root, 'commit', '-q', '-m', 'delete gone')
-    return { root, served }
+    return root
   })
-
-const evidenceOf = (root: string) =>
-  Effect.gen(function*() {
-    const port = yield* ChangeEvidencePort
-    return {
-      turbo: yield* port.turboEvidence(RepoRoot.make(root), GitRef.make('base'), TaskName.make('build')),
-      paths: yield* port.pathsEvidence(RepoRoot.make(root), GitRef.make('base')),
-    }
-  })
-
-const expectDeletedOnly = (evidence: ChangeEvidence) => {
-  expect(evidence.deleted).toEqual(['@t/gone'])
-  expect(evidence.touched).toEqual([])
-  expect(evidence.members.map((member) => member.name)).toEqual(['@t/keep'])
-}
 
 const repositoryDeletingOnBothSides = Effect.gen(function*() {
-  const { root, served } = yield* repositoryDeleting(GONE[1].manifest)
+  const root = yield* repositoryDeleting(GONE[1].manifest)
   yield* git(root, 'checkout', '-q', '-b', 'upstream', 'base')
   yield* git(root, 'rm', '-q', '-r', 'packages/gone')
   yield* git(root, 'commit', '-q', '-m', 'upstream deletes gone too')
   yield* git(root, 'checkout', '-q', 'main')
-  return { root, served }
+  return root
 })
+
+const deletedAgainst = (root: string, base: string) =>
+  Effect.gen(function*() {
+    const port = yield* ChangeEvidencePort
+    const range = yield* port.range(RepoRoot.make(root), GitRef.make(base))
+    return yield* port.deletedMembers(RepoRoot.make(root), range)
+  }).pipe(Effect.provide(evidenceServing))
+
+const removed = (root: string) =>
+  Effect.gen(function*() {
+    const fs = yield* FileSystem
+    yield* fs.remove(root, { recursive: true, force: true })
+  })
 
 Feature('Change evidence counts a package deleted on the head').body(({ scenario }) => {
   for (const { kind, manifest } of GONE) {
     scenario(
-      `Deleting a ${kind} package lists it as deleted and moves nothing`,
+      `Deleting a ${kind} package lists it as deleted`,
       { scenarioLayer: NodeServices.layer },
       Gherkin.Do.pipe(
         Given(`a repository whose head deletes a ${kind} package present at base`)(
-          'fixture',
+          'root',
           () => repositoryDeleting(manifest),
         ),
-        When('turbo and paths evidence are collected against base')(
-          'evidence',
-          (s) =>
-            evidenceOf(s.fixture.root).pipe(
-              Effect.provide(evidenceServing(fakeGitChanging(CHANGED))),
-            ),
-        ),
-        Then('both read the deleted manifest from base, list it as deleted, and name no package to release')(
-          (s) =>
-            Effect.gen(function*() {
-              const fs = yield* FileSystem
-              expectDeletedOnly(s.evidence.turbo)
-              expectDeletedOnly(s.evidence.paths)
-              yield* fs.remove(s.fixture.root, { recursive: true, force: true })
-            }),
+        When('deleted members are collected against base')('deleted', (s) => deletedAgainst(s.root, 'base')),
+        Then('the manifest is read at base and the package is listed as deleted')((s) =>
+          Effect.gen(function*() {
+            expect(s.deleted).toEqual(['@t/gone'])
+            yield* removed(s.root)
+          })
         ),
       ),
     )
@@ -128,22 +85,17 @@ Feature('Change evidence counts a package deleted on the head').body(({ scenario
     { scenarioLayer: NodeServices.layer },
     Gherkin.Do.pipe(
       Given('a stacked head deleting a package that its base branch deleted after the fork')(
-        'fixture',
+        'root',
         () => repositoryDeletingOnBothSides,
       ),
-      When('paths evidence is collected against the base branch')(
-        'evidence',
-        (s) =>
-          Effect.gen(function*() {
-            const port = yield* ChangeEvidencePort
-            return yield* port.pathsEvidence(RepoRoot.make(s.fixture.root), GitRef.make('upstream'))
-          }).pipe(Effect.provide(evidenceServing(fakeGitChanging(CHANGED)))),
+      When('deleted members are collected against the base branch')(
+        'deleted',
+        (s) => deletedAgainst(s.root, 'upstream'),
       ),
       Then('the manifest is read at the merge-base and the package is listed as deleted')((s) =>
         Effect.gen(function*() {
-          const fs = yield* FileSystem
-          expectDeletedOnly(s.evidence)
-          yield* fs.remove(s.fixture.root, { recursive: true, force: true })
+          expect(s.deleted).toEqual(['@t/gone'])
+          yield* removed(s.root)
         })
       ),
     ),

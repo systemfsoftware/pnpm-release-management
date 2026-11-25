@@ -9,6 +9,7 @@ import {
   type ChangesetsRefusal,
   FsPath,
   type GitRef,
+  isIntentFileName,
   ManifestInvalid,
   ManifestUnreadable,
   manifestVersionErrorOf,
@@ -30,15 +31,7 @@ import * as S from 'effect/Schema'
 import { projectPlan } from './plan.js'
 
 const CHANGESET_DIR = '.changeset'
-const README_FILE = 'readme.md'
-const IGNORED_FILES = ['AGENTS.md', 'CLAUDE.md', 'GEMINI.md']
 const FRONTMATTER = /^---\r?\n[\s\S]*?\r?\n---/
-
-const isIntentFile = (name: string): boolean =>
-  name.endsWith('.md') &&
-  !name.startsWith('.') &&
-  name.toLowerCase() !== README_FILE &&
-  !IGNORED_FILES.includes(name)
 
 const configJsonOf = (base: GitRef) => ({
   changelog: false,
@@ -49,6 +42,7 @@ const configJsonOf = (base: GitRef) => ({
   // A plain range on a sibling's name resolves from the registry (pnpm's linkWorkspacePackages is false), so it names a
   // published release; rewriting it to the version this release PR is about to publish breaks the frozen install.
   bumpVersionsWithWorkspaceProtocolOnly: true,
+  // A private member is never published, so a release neither versions it nor writes its CHANGELOG.
   privatePackages: { version: false, tag: false },
   format: false,
   ___experimentalUnsafeOptions_WILL_CHANGE_IN_PATCH: { updateInternalDependents: 'always' },
@@ -65,7 +59,7 @@ const malformedPathOf = (
     if (!present) return RelativePathSchema.make(CHANGESET_DIR)
     const none: ReadonlyArray<string> = []
     const names = yield* fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => none))
-    const candidates = [...names].filter(isIntentFile).sort()
+    const candidates = [...names].filter(isIntentFileName).sort()
     for (const name of candidates) {
       const text = yield* fs.readFileString(path.join(dir, name)).pipe(Effect.orElseSucceed(() => ''))
       if (!FRONTMATTER.test(text)) return RelativePathSchema.make(`${CHANGESET_DIR}/${name}`)

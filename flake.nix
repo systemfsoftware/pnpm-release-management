@@ -132,6 +132,14 @@
           pnpm-lock-parser =
             let
               parser = import ./nix/lib/pnpm-lock.nix { inherit (pkgs) lib; };
+              routedStore = args: import ./nix/lib/pnpm-store.nix ({
+                inherit pkgs;
+                inherit (iplFor pkgs.stdenv.hostPlatform.system) iplConfigHook;
+                pnpm = pkgs.pnpm_12;
+                pname = "routed";
+                src = ./nix/sandbox/routed-workspace;
+                lockFile = ./nix/sandbox/routed-workspace/sub/pnpm-lock.yaml;
+              } // args);
               unresolvedFixture = builtins.toFile "pnpm-lock-unresolved.yaml" ''
                 lockfileVersion: '9.0'
 
@@ -162,6 +170,10 @@
 
                   ms@2.1.3: {}
               '';
+              scopedParser = import ./nix/lib/pnpm-lock.nix {
+                inherit (pkgs) lib;
+                registries = parser.registriesFromNpmrc "@thing:registry=https://registry.example.test:4873/\nstrict-peer-dependencies=true\n";
+              };
               accepted = builtins.tryEval (builtins.deepSeq (parser.tarballCacheData unresolvedFixture) true);
               expectedCache = {
                 "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz" = { hash = "sha512-wells-formed-ms-integrity"; };
@@ -177,6 +189,52 @@
                 || throw "pnpm-lock.nix: unresolvedPackages did not report the entry with no resolution";
               assert parser.tarballCacheData wellFormedFixture == expectedCache
                 || throw "pnpm-lock.nix: a well-formed lockfile did not produce the expected tarball cache";
+              assert parser.registriesFromNpmrc "@thing:registry=https://registry.example.test:4873/\nstrict-peer-dependencies=true\n"
+                == { "@thing" = "https://registry.example.test:4873/"; }
+                || throw "pnpm-lock.nix: registriesFromNpmrc did not read the scope's registry line";
+              assert parser.registriesFromNpmrc (builtins.fromJSON ''"\ufeff"'' + ''
+                @a:registry=https://a.example.test/ # routed to a
+                @b:registry="https://b.example.test/"
+                @c:registry='https://c.example.test/' ; quoted
+                @d:registry=https://first.example.test/
+                @d:registry=https://last.example.test/
+                @e:registry=https://e.example.test/npm#v1
+                @f:registry=https://f.example.test/
+                @f:registry=
+                @g:registry="https://g.example.test/
+                @h:registry= ;
+                @i:registry=https://i.example.test/
+                @i:registry=" # an unclosed quote before a comment is skipped
+              '')
+                == {
+                  "@a" = "https://a.example.test/";
+                  "@b" = "https://b.example.test/";
+                  "@c" = "https://c.example.test/";
+                  "@d" = "https://last.example.test/";
+                  "@e" = "https://e.example.test/npm#v1";
+                  "@i" = "https://i.example.test/";
+                }
+                || throw "pnpm-lock.nix: registriesFromNpmrc misread a commented, quoted, repeated, emptied or unclosed scope line";
+              assert (routedStore { }).tarballCacheData == {
+                "https://registry.example.test:4873/@scope/thing/-/thing-2.0.0.tgz" = { hash = "sha512-routed-thing-integrity"; };
+              }
+                || throw "pnpm-store.nix: src's .npmrc did not route the scope of a lockfile kept outside src's root";
+              assert (routedStore { registries = { "@scope" = "https://given.example.test/"; }; }).tarballCacheData == {
+                "https://given.example.test/@scope/thing/-/thing-2.0.0.tgz" = { hash = "sha512-routed-thing-integrity"; };
+              }
+                || throw "pnpm-store.nix: an explicit registries argument did not replace src's .npmrc";
+              assert scopedParser.tarballCacheData wellFormedFixture == expectedCache
+                || throw "pnpm-lock.nix: a registry line for an unrelated scope changed a URL";
+              assert (import ./nix/lib/pnpm-lock.nix {
+                inherit (pkgs) lib;
+                registries = { "@scope" = "https://registry.example.test:4873/"; };
+              }).tarballCacheData wellFormedFixture == {
+                "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz" = { hash = "sha512-wells-formed-ms-integrity"; };
+                "https://registry.example.test:4873/@scope/thing/-/thing-2.0.0.tgz" = {
+                  hash = "sha512-wells-formed-thing-integrity";
+                };
+              }
+                || throw "pnpm-lock.nix: a scoped package did not take its scope's registry URL";
               "touch $out\n"
             );
 
