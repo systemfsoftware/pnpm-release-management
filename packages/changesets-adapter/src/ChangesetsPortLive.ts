@@ -34,7 +34,8 @@ const configJsonOf = (base: GitRef) => ({
   // A plain range on a sibling's name resolves from the registry (pnpm's linkWorkspacePackages is false), so it names a
   // published release; rewriting it to the version this release PR is about to publish breaks the frozen install.
   bumpVersionsWithWorkspaceProtocolOnly: true,
-  privatePackages: { version: true, tag: false },
+  // A private member is never published, so a release neither versions it nor writes its CHANGELOG.
+  privatePackages: { version: false, tag: false },
   format: false,
   ___experimentalUnsafeOptions_WILL_CHANGE_IN_PATCH: { updateInternalDependents: 'always' },
 })
