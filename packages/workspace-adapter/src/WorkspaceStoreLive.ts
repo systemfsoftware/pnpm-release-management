@@ -6,7 +6,7 @@ import {
   ManifestUnreadable,
   type Member,
   type MemberRefusal,
-  PackageManifest,
+  type PackageManifest,
   PackageVersion,
   RelativePath,
   type RepoRoot,
@@ -34,7 +34,7 @@ const invalid = (path: FsPath, reason: string): MemberRefusal => ManifestInvalid
 const defaultPrivateVersion = (
   manifest: S.Schema.Type<typeof ManifestText>,
   path: FsPath,
-): Effect.Effect<S.Schema.Type<typeof ManifestText>, MemberRefusal> => {
+): Effect.Effect<PackageManifest, MemberRefusal> => {
   if (manifest.private === true) {
     return Effect.succeed({ ...manifest, version: PackageVersion.make('0.0.0') })
   }
@@ -67,13 +67,10 @@ export const WorkspaceStoreLive = (
           const manifest = yield* S.decodeUnknownEffect(ManifestText)(text).pipe(
             Effect.mapError((error) => invalid(file, error.message)),
           )
-          let versioned = manifest
           if (manifest.version === undefined) {
-            versioned = yield* defaultPrivateVersion(manifest, file)
+            return yield* defaultPrivateVersion(manifest, file)
           }
-          return yield* S.decodeUnknownEffect(PackageManifest)(versioned).pipe(
-            Effect.mapError((error) => invalid(file, error.message)),
-          )
+          return { ...manifest, version: manifest.version }
         })
 
       const runPnpm = (

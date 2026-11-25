@@ -114,6 +114,10 @@ Feature('A workspace listing names why it could not read the workspace').body(({
         Effect.gen(function*() {
           return yield* (yield* WorkspaceStore).listMembers()
         }).pipe(Effect.provide(WorkspaceStoreLive(s.root)))),
+      When('the private member is read directly')('direct', (s) =>
+        Effect.gen(function*() {
+          return yield* (yield* WorkspaceStore).readManifest(RelativePath.make('packages/private'))
+        }).pipe(Effect.provide(WorkspaceStoreLive(s.root)))),
       Then('the private member has an internal version without a manifest rewrite')((s) =>
         Effect.gen(function*() {
           const fs = yield* FileSystem
@@ -124,6 +128,7 @@ Feature('A workspace listing names why it could not read the workspace').body(({
             publishable: false,
             manifest: { private: true, version: '0.0.0' },
           })
+          expect(s.direct).toMatchObject({ private: true, version: '0.0.0' })
           const manifest = yield* fs.readFileString(path.join(s.root, 'packages/private/package.json'))
           expect(manifest).not.toContain('"version"')
         })
@@ -147,10 +152,18 @@ Feature('A workspace listing names why it could not read the workspace').body(({
             return yield* (yield* WorkspaceStore).listMembers()
           }).pipe(Effect.provide(WorkspaceStoreLive(s.root))),
         )),
+      When('the publishable member is read directly')('directOutcome', (s) =>
+        refusalOf(
+          Effect.gen(function*() {
+            return yield* (yield* WorkspaceStore).readManifest(RelativePath.make('packages/publishable'))
+          }).pipe(Effect.provide(WorkspaceStoreLive(s.root))),
+        )),
       Then('the refusal names the publishable member manifest')((s) =>
         Effect.sync(() => {
           expect(s.outcome).toMatchObject({ _tag: 'refused', refusal: { _tag: 'ManifestInvalid' } })
           expect(JSON.stringify(s.outcome)).toContain('packages/publishable/package.json')
+          expect(s.directOutcome).toMatchObject({ _tag: 'refused', refusal: { _tag: 'ManifestInvalid' } })
+          expect(JSON.stringify(s.directOutcome)).toContain('packages/publishable/package.json')
         })
       ),
     ),
