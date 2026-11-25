@@ -6,7 +6,8 @@ import {
   ManifestUnreadable,
   type Member,
   type MemberRefusal,
-  type PackageManifest,
+  PackageManifest,
+  PackageVersion,
   RelativePath,
   type RepoRoot,
   type RootFile,
@@ -29,6 +30,16 @@ const STORAGE_ARGS = ['config', 'get', 'versioning.changelog.storage']
 
 const unreadable = (path: FsPath): MemberRefusal => ManifestUnreadable.make({ path })
 const invalid = (path: FsPath, reason: string): MemberRefusal => ManifestInvalid.make({ path, reason })
+
+const defaultPrivateVersion = (
+  manifest: S.Schema.Type<typeof ManifestText>,
+  path: FsPath,
+): Effect.Effect<S.Schema.Type<typeof ManifestText>, MemberRefusal> => {
+  if (manifest.private === true) {
+    return Effect.succeed({ ...manifest, version: PackageVersion.make('0.0.0') })
+  }
+  return Effect.fail(invalid(path, 'version is required for a publishable workspace member'))
+}
 
 const spawnReasonOf = (error: PlatformError): string => {
   const cause = error.reason.cause
@@ -53,7 +64,14 @@ export const WorkspaceStoreLive = (
         Effect.gen(function*() {
           const file = FsPath.make(path.join(root, dir, MANIFEST_FILE))
           const text = yield* readTextFile(fs, file).pipe(Effect.mapError(() => unreadable(file)))
-          return yield* S.decodeUnknownEffect(ManifestText)(text).pipe(
+          const manifest = yield* S.decodeUnknownEffect(ManifestText)(text).pipe(
+            Effect.mapError((error) => invalid(file, error.message)),
+          )
+          let versioned = manifest
+          if (manifest.version === undefined) {
+            versioned = yield* defaultPrivateVersion(manifest, file)
+          }
+          return yield* S.decodeUnknownEffect(PackageManifest)(versioned).pipe(
             Effect.mapError((error) => invalid(file, error.message)),
           )
         })
