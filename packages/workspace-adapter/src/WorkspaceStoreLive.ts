@@ -4,9 +4,11 @@ import {
   FsPath,
   ManifestInvalid,
   ManifestUnreadable,
+  manifestVersionErrorOf,
   type Member,
   type MemberRefusal,
   type PackageManifest,
+  PackageVersion,
   RelativePath,
   type RepoRoot,
   type RootFile,
@@ -29,6 +31,15 @@ const STORAGE_ARGS = ['config', 'get', 'versioning.changelog.storage']
 
 const unreadable = (path: FsPath): MemberRefusal => ManifestUnreadable.make({ path })
 const invalid = (path: FsPath, reason: string): MemberRefusal => ManifestInvalid.make({ path, reason })
+
+const normalizeManifestVersion = (
+  manifest: S.Schema.Type<typeof ManifestText>,
+  path: FsPath,
+): Effect.Effect<PackageManifest, MemberRefusal> => {
+  const error = manifestVersionErrorOf(manifest, path)
+  if (error !== undefined) return Effect.fail(error)
+  return Effect.succeed({ ...manifest, version: manifest.version ?? PackageVersion.make('0.0.0') })
+}
 
 const spawnReasonOf = (error: PlatformError): string => {
   const cause = error.reason.cause
@@ -53,9 +64,10 @@ export const WorkspaceStoreLive = (
         Effect.gen(function*() {
           const file = FsPath.make(path.join(root, dir, MANIFEST_FILE))
           const text = yield* readTextFile(fs, file).pipe(Effect.mapError(() => unreadable(file)))
-          return yield* S.decodeUnknownEffect(ManifestText)(text).pipe(
+          const manifest = yield* S.decodeUnknownEffect(ManifestText)(text).pipe(
             Effect.mapError((error) => invalid(file, error.message)),
           )
+          return yield* normalizeManifestVersion(manifest, file)
         })
 
       const runPnpm = (

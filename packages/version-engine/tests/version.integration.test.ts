@@ -254,6 +254,7 @@ Feature('Versioning packages').body(({ scenario }) => {
                   expect(changesets.state.intents.size).toEqual(1)
                   expect(surfaces.state.versions.get(brandPath('package.json'))).toEqual('1.2.3')
                 }),
+                Match.tag('VersionPrivatePackage', () => failUnexpected('expected an unknown package')),
                 Match.tag('VersionIntentMalformed', () => failUnexpected('expected an unknown package')),
                 Match.tag('VersionSurfaceMissing', () => failUnexpected('expected an unknown package')),
                 Match.tag('VersionLockStale', () => failUnexpected('expected an unknown package')),
@@ -1203,6 +1204,7 @@ Feature('Versioning packages').body(({ scenario }) => {
                 Match.tag('VersionUnknownPackage', (unknown) => {
                   expect(unknown.package).toEqual('ghost')
                 }),
+                Match.tag('VersionPrivatePackage', () => failUnexpected('expected an unknown package')),
                 Match.tag('VersionCargoPackageMissing', () => failUnexpected('expected an unknown package')),
                 Match.tag('VersionIntentMalformed', () => failUnexpected('expected an unknown package')),
                 Match.tag('VersionSurfaceMissing', () => failUnexpected('expected an unknown package')),

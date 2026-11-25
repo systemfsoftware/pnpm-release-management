@@ -148,6 +148,8 @@ export const renderRefusal = (refusal: AppRefusal): Effect.Effect<void, never, R
         refuse(fields('CommandUnstartable', [['command', unstartable.command], ['reason', unstartable.reason]])),
       VersionIntentMalformed: (malformed) => refuse(fields('VersionIntentMalformed', [['path', malformed.path]])),
       VersionUnknownPackage: (unknown) => refuse(fields('VersionUnknownPackage', [['package', unknown.package]])),
+      VersionPrivatePackage: (privatePackage) =>
+        refuse(fields('VersionPrivatePackage', [['package', privatePackage.package], ['path', privatePackage.path]])),
       VersionSurfaceMissing: (missing) => refuse(fields('VersionSurfaceMissing', [['path', missing.path]])),
       VersionLockStale: (stale) => refuse(fields('VersionLockStale', [['path', stale.path]])),
       VersionCargoPackageMissing: (missing) => refuse(fields('VersionCargoPackageMissing', [['path', missing.path]])),
@@ -186,6 +188,8 @@ export const renderSyncRefusal = (
       SyncActionUnknown: () => refuse('usage: sync-versions.ts <check|bump> [version]'),
       VersionIntentMalformed: (malformed) => refuse(fields('VersionIntentMalformed', [['path', malformed.path]])),
       VersionUnknownPackage: (unknown) => refuse(fields('VersionUnknownPackage', [['package', unknown.package]])),
+      VersionPrivatePackage: (privatePackage) =>
+        refuse(fields('VersionPrivatePackage', [['package', privatePackage.package], ['path', privatePackage.path]])),
       VersionSurfaceMissing: (missing) => refuse(fields('VersionSurfaceMissing', [['path', missing.path]])),
       VersionLockStale: (stale) => refuse(fields('VersionLockStale', [['path', stale.path]])),
       VersionCargoPackageMissing: (missing) => refuse(fields('VersionCargoPackageMissing', [['path', missing.path]])),
