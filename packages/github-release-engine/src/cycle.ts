@@ -3,12 +3,13 @@ import type {
   LegacyRelease,
   Member,
   PackageName,
-  PackageVersion,
   RelativePath,
 } from '@systemfsoftware/release-language'
-import { CycleEntry, memberChangelogPathOf, ReleaseTag } from '@systemfsoftware/release-language'
+import { CycleEntry, memberChangelogPathOf, PackageVersion, ReleaseTag } from '@systemfsoftware/release-language'
 
 export const tagOf = (name: PackageName, version: PackageVersion): ReleaseTag => ReleaseTag.make(`${name}@v${version}`)
+
+const UNINITIALIZED = PackageVersion.make('0.0.0')
 
 export const cycleOf = (
   members: ReadonlyArray<Member>,
@@ -19,6 +20,7 @@ export const cycleOf = (
 ): ReadonlyArray<CycleEntry> =>
   members
     .filter((member) => member.publishable)
+    .filter((member) => member.manifest.version !== UNINITIALIZED)
     .filter((member) => remoteTags.includes(tagOf(member.name, member.manifest.version)) === false)
     .filter((member) => legacyReleased.some((release) => release.package === member.name) === false)
     .map((member) =>

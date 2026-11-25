@@ -94,7 +94,7 @@ it.prop(
       return false
     }
     const decision = outcome.success
-    if (cycle.length > 0) {
+    if (cycle.length > 0 && pending === 0) {
       return Match.value(decision).pipe(
         Match.tag('PlanRelease', (release) => entriesEqual([...release.cycle], [...cycle])),
         Match.tag('PlanVersion', () => false),
