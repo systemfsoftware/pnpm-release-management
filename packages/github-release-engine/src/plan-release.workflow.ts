@@ -53,7 +53,7 @@ const planCaseOf = (command: PlanCommand): PlanCase => {
     return UnknownDeferredCase.make({ packages: [firstUnknown, ...restUnknown] })
   }
   const [firstOwed, ...restOwed] = command.cycle
-  if (firstOwed !== undefined) {
+  if (firstOwed !== undefined && command.pending === 0) {
     return OwedCase.make({ cycle: [firstOwed, ...restOwed] })
   }
   if (command.pending > 0) {

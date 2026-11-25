@@ -119,7 +119,7 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
       cycles.layer,
     )
     scenario(
-      'Owed tags drain before pending work',
+      'Pending work drains before owed tags',
       { scenarioLayer: live },
       Gherkin.Do.pipe(
         Given('one pending intent and one owed tag')(
@@ -131,18 +131,18 @@ Feature('Releasing versions to GitHub').body(({ scenario }) => {
             onFailure: (refusal) => ({ _tag: 'refused' as const, refusal }),
             onSuccess: (value) => ({ _tag: 'decided' as const, value }),
           })),
-        Then('the plan enters the publish phase with a one-item cycle')((s) => {
+        Then('the plan enters the version phase carrying the owed cycle')((s) => {
           Match.value(s.outcome).pipe(
             Match.tag('decided', (decided) => {
-              expect(decided.value.phase).toEqual('release')
+              expect(decided.value.phase).toEqual('version')
               expect(decided.value.pendingIntents).toEqual(Count.make(1))
               expect(decided.value.thisCycle).toEqual(Count.make(1))
               Match.value(decided.value.decision).pipe(
-                Match.tag('PlanRelease', (release) => {
-                  expect(release.cycle.length).toEqual(1)
+                Match.tag('PlanVersion', (version) => {
+                  expect(version.cycle.length).toEqual(1)
                 }),
-                Match.tag('PlanVersion', () => failUnexpected('expected PlanRelease')),
-                Match.tag('PlanSettled', () => failUnexpected('expected PlanRelease')),
+                Match.tag('PlanRelease', () => failUnexpected('expected PlanVersion')),
+                Match.tag('PlanSettled', () => failUnexpected('expected PlanVersion')),
                 Match.exhaustive,
               )
             }),
