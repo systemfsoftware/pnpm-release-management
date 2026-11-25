@@ -129,6 +129,8 @@ Feature('A workspace listing names why it could not read the workspace').body(({
             manifest: { private: true, version: '0.0.0' },
           })
           expect(s.direct).toMatchObject({ private: true, version: '0.0.0' })
+          const publishable = s.members.find((member) => member.name === '@e2e/publishable')
+          expect(publishable).toMatchObject({ publishable: true, manifest: { version: '1.2.3' } })
           const manifest = yield* fs.readFileString(path.join(s.root, 'packages/private/package.json'))
           expect(manifest).not.toContain('"version"')
         })

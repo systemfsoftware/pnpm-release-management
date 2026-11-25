@@ -89,6 +89,12 @@ export const PackageManifest = S.Struct({
 })
 export type PackageManifest = S.Schema.Type<typeof PackageManifest>
 
+export const PackageManifestWire = S.Struct({
+  ...PackageManifest.fields,
+  version: S.optional(PackageVersion),
+})
+export type PackageManifestWire = S.Schema.Type<typeof PackageManifestWire>
+
 export const Member = S.Struct({
   name: PackageName,
   dir: RelativePath,

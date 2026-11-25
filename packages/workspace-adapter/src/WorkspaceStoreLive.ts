@@ -4,6 +4,7 @@ import {
   FsPath,
   ManifestInvalid,
   ManifestUnreadable,
+  manifestVersionErrorOf,
   type Member,
   type MemberRefusal,
   type PackageManifest,
@@ -31,14 +32,13 @@ const STORAGE_ARGS = ['config', 'get', 'versioning.changelog.storage']
 const unreadable = (path: FsPath): MemberRefusal => ManifestUnreadable.make({ path })
 const invalid = (path: FsPath, reason: string): MemberRefusal => ManifestInvalid.make({ path, reason })
 
-const defaultPrivateVersion = (
+const normalizeManifestVersion = (
   manifest: S.Schema.Type<typeof ManifestText>,
   path: FsPath,
 ): Effect.Effect<PackageManifest, MemberRefusal> => {
-  if (manifest.private === true) {
-    return Effect.succeed({ ...manifest, version: PackageVersion.make('0.0.0') })
-  }
-  return Effect.fail(invalid(path, 'version is required for a publishable workspace member'))
+  const error = manifestVersionErrorOf(manifest, path)
+  if (error !== undefined) return Effect.fail(error)
+  return Effect.succeed({ ...manifest, version: manifest.version ?? PackageVersion.make('0.0.0') })
 }
 
 const spawnReasonOf = (error: PlatformError): string => {
@@ -67,10 +67,7 @@ export const WorkspaceStoreLive = (
           const manifest = yield* S.decodeUnknownEffect(ManifestText)(text).pipe(
             Effect.mapError((error) => invalid(file, error.message)),
           )
-          if (manifest.version === undefined) {
-            return yield* defaultPrivateVersion(manifest, file)
-          }
-          return { ...manifest, version: manifest.version }
+          return yield* normalizeManifestVersion(manifest, file)
         })
 
       const runPnpm = (

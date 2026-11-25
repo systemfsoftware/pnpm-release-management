@@ -6,19 +6,27 @@ import { readChangesets } from '@changesets/read'
 import { getPackages } from '@manypkg/get-packages'
 import {
   ChangesetsPort,
+  type ChangesetsRefusal,
+  FsPath,
   type GitRef,
+  ManifestInvalid,
+  ManifestUnreadable,
+  manifestVersionErrorOf,
+  PackageManifestWire,
   PackageName,
   type PlannedBump,
   type RelativePath,
   RelativePath as RelativePathSchema,
   type RepoRoot,
   VersionIntentMalformed,
+  VersionPrivatePackage,
   VersionUnknownPackage,
 } from '@systemfsoftware/release-language'
-import { Effect, Layer } from 'effect'
+import { Effect, HashMap, Layer, Option } from 'effect'
 import { FileSystem } from 'effect/FileSystem'
 import { Path } from 'effect/Path'
 import * as Result from 'effect/Result'
+import * as S from 'effect/Schema'
 import { projectPlan } from './plan.js'
 
 const CHANGESET_DIR = '.changeset'
@@ -41,7 +49,7 @@ const configJsonOf = (base: GitRef) => ({
   // A plain range on a sibling's name resolves from the registry (pnpm's linkWorkspacePackages is false), so it names a
   // published release; rewriting it to the version this release PR is about to publish breaks the frozen install.
   bumpVersionsWithWorkspaceProtocolOnly: true,
-  privatePackages: { version: true, tag: false },
+  privatePackages: { version: false, tag: false },
   format: false,
   ___experimentalUnsafeOptions_WILL_CHANGE_IN_PATCH: { updateInternalDependents: 'always' },
 })
@@ -73,8 +81,17 @@ const assemble = (fs: FileSystem, path: Path, root: RepoRoot, base: GitRef) =>
   Effect.gen(function*() {
     const packages = yield* Effect.tryPromise({
       try: () => getPackages(root),
-      catch: (cause) => cause,
-    }).pipe(Effect.orDie)
+      catch: () => ManifestUnreadable.make({ path: FsPath.make(root) }),
+    })
+    yield* Effect.forEach(packages.packages, (pkg) =>
+      Effect.gen(function*() {
+        const file = FsPath.make(path.join(pkg.dir, 'package.json'))
+        const manifest = yield* S.decodeUnknownEffect(PackageManifestWire)(pkg.packageJson).pipe(
+          Effect.mapError((error) => ManifestInvalid.make({ path: file, reason: error.message })),
+        )
+        const error = manifestVersionErrorOf(manifest, file)
+        if (error !== undefined) return yield* Effect.fail(error)
+      }), { concurrency: 1 })
     const parsed = validateConfig(configJsonOf(base), packages)
     if (parsed.errors !== undefined) {
       return yield* Effect.die(new Error(`invalid changesets config: ${parsed.errors.join('; ')}`))
@@ -91,19 +108,36 @@ const assemble = (fs: FileSystem, path: Path, root: RepoRoot, base: GitRef) =>
       const malformed = yield* malformedPathOf(fs, path, root)
       return yield* Effect.fail(VersionIntentMalformed.make({ path: malformed }))
     }
-    const known = packages.packages.map((pkg) => pkg.packageJson.name)
+    const byName = HashMap.fromIterable(packages.packages.map((pkg) => [pkg.packageJson.name, pkg] as const))
     for (const changeset of outcome.success) {
       for (const release of changeset.releases) {
-        if (!known.includes(release.name)) {
+        const pkg = HashMap.get(byName, release.name)
+        if (Option.isNone(pkg)) {
           return yield* Effect.fail(VersionUnknownPackage.make({ package: PackageName.make(release.name) }))
+        }
+        if (pkg.value.packageJson.private === true) {
+          return yield* Effect.fail(VersionPrivatePackage.make({
+            package: PackageName.make(release.name),
+            path: RelativePathSchema.make(path.relative(root, pkg.value.dir)),
+          }))
         }
       }
     }
     const preState = yield* Effect.tryPromise({
       try: () => readPreState(root),
-      catch: (cause) => cause,
-    }).pipe(Effect.orDie)
-    const plan = assembleReleasePlan([...outcome.success], packages, config, preState)
+      catch: () => ManifestUnreadable.make({ path: FsPath.make(path.join(root, CHANGESET_DIR, 'pre.json')) }),
+    })
+    const planned = yield* Effect.try({
+      try: () => assembleReleasePlan([...outcome.success], packages, config, preState),
+      catch: () => VersionIntentMalformed.make({ path: RelativePathSchema.make(CHANGESET_DIR) }),
+    })
+    const plan = {
+      ...planned,
+      releases: planned.releases.filter((release) => {
+        const pkg = HashMap.get(byName, release.name)
+        return Option.isNone(pkg) || pkg.value.packageJson.private !== true
+      }),
+    }
     return { packages, config, plan }
   })
 
@@ -112,7 +146,7 @@ const planOf = (
   path: Path,
   root: RepoRoot,
   base: GitRef,
-): Effect.Effect<PlannedBump, VersionIntentMalformed | VersionUnknownPackage> =>
+): Effect.Effect<PlannedBump, ChangesetsRefusal> =>
   Effect.gen(function*() {
     const assembled = yield* assemble(fs, path, root, base)
     return projectPlan({
@@ -128,7 +162,7 @@ const applyOf = (
   path: Path,
   root: RepoRoot,
   base: GitRef,
-): Effect.Effect<void, VersionIntentMalformed | VersionUnknownPackage> =>
+): Effect.Effect<void, ChangesetsRefusal> =>
   Effect.gen(function*() {
     const assembled = yield* assemble(fs, path, root, base)
     yield* Effect.promise(async () => {

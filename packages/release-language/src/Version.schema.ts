@@ -13,6 +13,12 @@ export const VersionUnknownPackage = S.TaggedStruct('VersionUnknownPackage', {
 })
 export type VersionUnknownPackage = S.Schema.Type<typeof VersionUnknownPackage>
 
+export const VersionPrivatePackage = S.TaggedStruct('VersionPrivatePackage', {
+  package: PackageName,
+  path: RelativePath,
+})
+export type VersionPrivatePackage = S.Schema.Type<typeof VersionPrivatePackage>
+
 export const VersionSurfaceMissing = S.TaggedStruct('VersionSurfaceMissing', {
   path: RelativePath,
 })
@@ -46,6 +52,7 @@ export type RootManifestUnwritable = S.Schema.Type<
 export const VersionRefusal = S.Union([
   VersionIntentMalformed,
   VersionUnknownPackage,
+  VersionPrivatePackage,
   VersionSurfaceMissing,
   VersionLockStale,
   VersionCargoPackageMissing,

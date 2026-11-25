@@ -1,8 +1,14 @@
 import { Context, type Effect } from 'effect'
 import type { PlannedBump } from './ChangesetsPort.schema.js'
-import type { VersionIntentMalformed, VersionUnknownPackage } from './Version.schema.js'
+import type { VersionIntentMalformed, VersionPrivatePackage, VersionUnknownPackage } from './Version.schema.js'
+import type { ManifestInvalid, ManifestUnreadable } from './Workspace.schema.js'
 
-export type ChangesetsRefusal = VersionIntentMalformed | VersionUnknownPackage
+export type ChangesetsRefusal =
+  | VersionIntentMalformed
+  | VersionUnknownPackage
+  | VersionPrivatePackage
+  | ManifestInvalid
+  | ManifestUnreadable
 
 export interface ChangesetsPort {
   readonly plan: () => Effect.Effect<PlannedBump, ChangesetsRefusal, never>

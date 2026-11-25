@@ -189,6 +189,7 @@ Feature('Changesets versioning').body(({ scenario }) => {
                 Match.tag('VersionUnknownPackage', (unknown) => {
                   expect(unknown.package).toEqual('@e2e/ghost')
                 }),
+                Match.tag('VersionPrivatePackage', () => failUnexpected('expected an unknown package')),
                 Match.tag('VersionIntentMalformed', () => failUnexpected('expected an unknown package')),
                 Match.tag('VersionSurfaceMissing', () => failUnexpected('expected an unknown package')),
                 Match.tag('VersionLockStale', () => failUnexpected('expected an unknown package')),

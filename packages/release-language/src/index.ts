@@ -83,6 +83,7 @@ export {
   NewIntentRequest,
   NewIntentSummaryMissing,
 } from './NewIntent.schema.js'
+export { manifestVersionErrorOf } from './PackageManifest.js'
 export { CycleEntry, PlanCapturedMalformed, PlanDeferredUnknown, PlanRefusal } from './Plan.schema.js'
 export { ProcessPort } from './ProcessPort.js'
 export {
@@ -137,6 +138,7 @@ export {
   VersionCargoPackageMissing,
   VersionIntentMalformed,
   VersionLockStale,
+  VersionPrivatePackage,
   VersionRefusal,
   VersionSurfaceMissing,
   VersionUnknownPackage,
@@ -154,6 +156,7 @@ export {
   MemberRefusal,
   OwnerName,
   PackageManifest,
+  PackageManifestWire,
   PackageName,
   PackageVersion,
   RelativePath,
