@@ -5,10 +5,11 @@ if [ "$#" -eq 0 ]; then
   exit 2
 fi
 
-npm_cli() { npx --yes npm@^11.15.0 "$@"; }
+# The nodejs on PATH (nixpkgs nodejs_24) bundles an npm new enough for `npm trust` (11.15 or later).
+npm_cli() { npm "$@"; }
 
 if ! npm_cli whoami >/dev/null 2>&1; then
-  echo "npm-trust: no npm session; run: npx npm@^11.15.0 login" >&2
+  echo "npm-trust: no npm session; run: npm login" >&2
   exit 1
 fi
 
