@@ -91,6 +91,21 @@ const namesBetween = (
 
 const MERGE_CONFLICTED = 1
 
+const NO_COMMON_ANCESTOR = 1
+
+const shareAncestor = (
+  root: RepoRoot,
+  first: CommitSha,
+  second: CommitSha,
+): Effect.Effect<boolean, GitFault, ChildProcessSpawner> =>
+  Effect.gen(function*() {
+    const args = ['merge-base', first, second]
+    const out = yield* gitOutcome(root, args)
+    if (out.code === 0) return true
+    if (out.code === NO_COMMON_ANCESTOR) return false
+    return yield* Effect.fail(failed(args, out.code, out.stderr))
+  })
+
 const mergeResidue = (
   root: RepoRoot,
   sha: CommitSha,
@@ -125,7 +140,11 @@ const commitOf = (
       return { sha: commit, parents, changes: yield* changesBetween(root, first, commit), residue: [] }
     }
     if (parents.length === 2) {
-      return { sha: commit, parents, changes: [], residue: yield* mergeResidue(root, commit, first, second) }
+      const related = yield* shareAncestor(root, first, second)
+      if (related) {
+        return { sha: commit, parents, changes: [], residue: yield* mergeResidue(root, commit, first, second) }
+      }
+      return { sha: commit, parents, changes: [], residue: yield* namesBetween(root, first, commit) }
     }
     return { sha: commit, parents, changes: [], residue: yield* namesBetween(root, first, commit) }
   })
