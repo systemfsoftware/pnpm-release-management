@@ -57,7 +57,10 @@ merge base and `HEAD` one at a time.
 - Every other changed path belongs to the feature. Each publishable package
   that owns one (the deepest member directory wins) needs a live intent naming
   it, `none` included. A merge commit's own edits, beyond merging its parents,
-  count as feature changes.
+  count as feature changes. A two-parent merge whose parents share no ancestor
+  — a first `git subtree add --squash`, whose second parent is a parentless
+  squash commit — has no merge base to compare against, so its own edits are
+  every path that differs between its first parent and the merge commit.
 - Intent edits may split, merge, move or rewrite intents, but each package must
   keep at least the highest bump that the merge-base intents changed or deleted
   here still owed it, unless a verified release commit consumed them. Moving
