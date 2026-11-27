@@ -23,7 +23,7 @@ import {
   VersionPrivatePackage,
   VersionUnknownPackage,
 } from '@systemfsoftware/release-language'
-import { Effect, HashMap, Layer, Option } from 'effect'
+import { Effect, HashMap, HashSet, Layer, Option } from 'effect'
 import { FileSystem } from 'effect/FileSystem'
 import { Path } from 'effect/Path'
 import * as Result from 'effect/Result'
@@ -33,7 +33,7 @@ import { projectPlan } from './plan.js'
 const CHANGESET_DIR = '.changeset'
 const FRONTMATTER = /^---\r?\n[\s\S]*?\r?\n---/
 
-const configJsonOf = (base: GitRef) => ({
+const configJsonOf = (base: GitRef, ignored: ReadonlyArray<string>) => ({
   changelog: false,
   commit: false,
   access: 'public',
@@ -42,8 +42,10 @@ const configJsonOf = (base: GitRef) => ({
   // A plain range on a sibling's name resolves from the registry (pnpm's linkWorkspacePackages is false), so it names a
   // published release; rewriting it to the version this release PR is about to publish breaks the frozen install.
   bumpVersionsWithWorkspaceProtocolOnly: true,
-  // A private member is never published, so a release neither versions it nor writes its CHANGELOG.
-  privatePackages: { version: false, tag: false },
+  // A private member is never published, but the bump an intent gives it is the version a surface bound to it follows (a
+  // cargo crate, say), so changesets versions a private member an intent names and ignores every other private member.
+  privatePackages: { version: true, tag: false },
+  ignore: [...ignored],
   format: false,
   ___experimentalUnsafeOptions_WILL_CHANGE_IN_PATCH: { updateInternalDependents: 'always' },
 })
@@ -77,7 +79,7 @@ const assemble = (fs: FileSystem, path: Path, root: RepoRoot, base: GitRef) =>
       try: () => getPackages(root),
       catch: () => ManifestUnreadable.make({ path: FsPath.make(root) }),
     })
-    yield* Effect.forEach(packages.packages, (pkg) =>
+    const manifests = yield* Effect.forEach(packages.packages, (pkg) =>
       Effect.gen(function*() {
         const file = FsPath.make(path.join(pkg.dir, 'package.json'))
         const manifest = yield* S.decodeUnknownEffect(PackageManifestWire)(pkg.packageJson).pipe(
@@ -85,31 +87,45 @@ const assemble = (fs: FileSystem, path: Path, root: RepoRoot, base: GitRef) =>
         )
         const error = manifestVersionErrorOf(manifest, file)
         if (error !== undefined) return yield* Effect.fail(error)
+        return { name: pkg.packageJson.name, version: manifest.version }
       }), { concurrency: 1 })
-    const parsed = validateConfig(configJsonOf(base), packages)
+    const unversioned = HashSet.fromIterable(
+      manifests.filter((manifest) => manifest.version === undefined).map((manifest) => manifest.name),
+    )
+    const dir = path.join(root, CHANGESET_DIR)
+    const present = yield* fs.exists(dir).pipe(Effect.orElseSucceed(() => false))
+    const changesets: Awaited<ReturnType<typeof readChangesets>> = []
+    if (present) {
+      const outcome = yield* Effect.tryPromise({
+        try: () => readChangesets(root),
+        catch: (cause) => cause,
+      }).pipe(Effect.result)
+      if (Result.isFailure(outcome)) {
+        const malformed = yield* malformedPathOf(fs, path, root)
+        return yield* Effect.fail(VersionIntentMalformed.make({ path: malformed }))
+      }
+      changesets.push(...outcome.success)
+    }
+    const namedByIntent = HashSet.fromIterable(
+      changesets.flatMap((changeset) => changeset.releases.map((release) => release.name)),
+    )
+    const ignoredPrivateMembers = packages.packages
+      .filter((pkg) => pkg.packageJson.private === true && !HashSet.has(namedByIntent, pkg.packageJson.name))
+      .map((pkg) => pkg.packageJson.name)
+    const parsed = validateConfig(configJsonOf(base, ignoredPrivateMembers), packages)
     if (parsed.errors !== undefined) {
       return yield* Effect.die(new Error(`invalid changesets config: ${parsed.errors.join('; ')}`))
     }
     const config = parsed.config
-    const dir = path.join(root, CHANGESET_DIR)
-    const present = yield* fs.exists(dir).pipe(Effect.orElseSucceed(() => false))
     if (!present) return { packages, config, plan: EMPTY_PLAN }
-    const outcome = yield* Effect.tryPromise({
-      try: () => readChangesets(root),
-      catch: (cause) => cause,
-    }).pipe(Effect.result)
-    if (Result.isFailure(outcome)) {
-      const malformed = yield* malformedPathOf(fs, path, root)
-      return yield* Effect.fail(VersionIntentMalformed.make({ path: malformed }))
-    }
     const byName = HashMap.fromIterable(packages.packages.map((pkg) => [pkg.packageJson.name, pkg] as const))
-    for (const changeset of outcome.success) {
+    for (const changeset of changesets) {
       for (const release of changeset.releases) {
         const pkg = HashMap.get(byName, release.name)
         if (Option.isNone(pkg)) {
           return yield* Effect.fail(VersionUnknownPackage.make({ package: PackageName.make(release.name) }))
         }
-        if (pkg.value.packageJson.private === true) {
+        if (pkg.value.packageJson.private === true && HashSet.has(unversioned, release.name)) {
           return yield* Effect.fail(VersionPrivatePackage.make({
             package: PackageName.make(release.name),
             path: RelativePathSchema.make(path.relative(root, pkg.value.dir)),
@@ -121,17 +137,10 @@ const assemble = (fs: FileSystem, path: Path, root: RepoRoot, base: GitRef) =>
       try: () => readPreState(root),
       catch: () => ManifestUnreadable.make({ path: FsPath.make(path.join(root, CHANGESET_DIR, 'pre.json')) }),
     })
-    const planned = yield* Effect.try({
-      try: () => assembleReleasePlan([...outcome.success], packages, config, preState),
+    const plan = yield* Effect.try({
+      try: () => assembleReleasePlan([...changesets], packages, config, preState),
       catch: () => VersionIntentMalformed.make({ path: RelativePathSchema.make(CHANGESET_DIR) }),
     })
-    const plan = {
-      ...planned,
-      releases: planned.releases.filter((release) => {
-        const pkg = HashMap.get(byName, release.name)
-        return Option.isNone(pkg) || pkg.value.packageJson.private !== true
-      }),
-    }
     return { packages, config, plan }
   })
 
